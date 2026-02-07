@@ -1,0 +1,112 @@
+// Datasource and generator
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model ImportSession {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  sourceBank  String
+  format      String
+  fileChecksum String?
+  rowCount    Int?
+  overlapKey  String?
+
+  rawTransactions RawTransaction[]
+  normalizedTransactions NormalizedTransaction[]
+}
+
+model RawTransaction {
+  id              String   @id @default(cuid())
+  createdAt       DateTime @default(now())
+  importSessionId String
+  data            String
+  bookingDate     DateTime?
+  amount          Decimal?
+  currency        String?
+
+  importSession   ImportSession @relation(fields: [importSessionId], references: [id])
+  normalized      NormalizedTransaction?
+}
+
+model NormalizedTransaction {
+  id              String   @id @default(cuid())
+  createdAt       DateTime @default(now())
+  rawTransactionId String? @unique
+  importSessionId String
+  accountId       String
+  bookingDate     DateTime?
+  transactionDate DateTime?
+  amount          Decimal
+  currency        String
+  counterpartyName String?
+  description     String?
+  transactionGroupId String?
+
+  rawTransaction  RawTransaction? @relation(fields: [rawTransactionId], references: [id])
+  importSession   ImportSession   @relation(fields: [importSessionId], references: [id])
+  account         Account         @relation(fields: [accountId], references: [id])
+  transactionGroup TransactionGroup? @relation(fields: [transactionGroupId], references: [id])
+
+  transferFromLinks TransferLink[] @relation("TransferFrom")
+  transferToLinks   TransferLink[] @relation("TransferTo")
+}
+
+model TransactionGroup {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  canonicalTransactionId String?
+
+  transactions NormalizedTransaction[]
+}
+
+model TransferLink {
+  id                String   @id @default(cuid())
+  createdAt         DateTime @default(now())
+  fromTransactionId String
+  toTransactionId   String
+  confidence        Int
+
+  fromTransaction NormalizedTransaction @relation("TransferFrom", fields: [fromTransactionId], references: [id])
+  toTransaction   NormalizedTransaction @relation("TransferTo", fields: [toTransactionId], references: [id])
+}
+
+model Account {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  name      String
+  iban      String?
+  type      String
+
+  transactions NormalizedTransaction[]
+  balanceSnapshots BalanceSnapshot[]
+  balanceAdjustments BalanceAdjustment[]
+}
+
+model BalanceSnapshot {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  accountId String
+  date      DateTime
+  balance   Decimal
+  currency  String
+
+  account Account @relation(fields: [accountId], references: [id])
+}
+
+model BalanceAdjustment {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  accountId String
+  date      DateTime
+  amount    Decimal
+  reason    String?
+
+  account Account @relation(fields: [accountId], references: [id])
+}
