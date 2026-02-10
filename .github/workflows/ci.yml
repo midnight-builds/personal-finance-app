@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (API + Web)
+        run: npm run build
+
+      - name: Test (API)
+        run: npm run test --workspace apps/api
+
+      - name: Lint (Web)
+        run: npm run lint --workspace apps/web
