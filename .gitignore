@@ -44,3 +44,6 @@ apps/*/dist/
 
 # build artifacts
 apps/api/dist
+
+# local real bank exports
+testdata/
