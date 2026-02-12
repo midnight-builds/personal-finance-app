@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { db } from "../src/db.js";
+
+process.env.DB_PATH = ":memory:";
+
+import { initDb, db } from "../src/db.js";
 import { createBalanceAdjustment, getAdjustmentSumForAccountAtOrBeforeDate } from "../src/balanceAdjustments.js";
+
+initDb();
 
 test("balance adjustments sum applies up to date", () => {
   db.exec("PRAGMA foreign_keys=OFF;");
