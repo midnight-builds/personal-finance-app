@@ -41,3 +41,6 @@ home/
 
 # build outputs
 apps/*/dist/
+
+# build artifacts
+apps/api/dist
