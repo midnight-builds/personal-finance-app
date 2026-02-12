@@ -38,3 +38,12 @@ examples/
 
 # local home mirrors
 home/
+
+# build outputs
+apps/*/dist/
+
+# build artifacts
+apps/api/dist
+
+# local real bank exports
+testdata/
