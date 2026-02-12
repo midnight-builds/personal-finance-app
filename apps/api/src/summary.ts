@@ -1,4 +1,5 @@
-import { db } from './db.js';
+import { db } from "./db.js";
+import { getAdjustmentSumForAccountAtOrBeforeDate } from "./balanceAdjustments.js";
 
 export function getSummary() {
   const latestBalances = db
@@ -17,7 +18,17 @@ export function getSummary() {
     )
     .all() as Array<any>;
 
-  const totalBalance = latestBalances.reduce((sum, b) => sum + (Number(b.balance) || 0), 0);
+  const accountsWithAdjustments = latestBalances.map((b) => {
+    const baseBalance = Number(b.balance) || 0;
+    const adj = getAdjustmentSumForAccountAtOrBeforeDate(String(b.accountId), String(b.date));
+    return {
+      ...b,
+      adjustedBalance: baseBalance + adj,
+      adjustmentSum: adj,
+    };
+  });
+
+  const totalBalance = accountsWithAdjustments.reduce((sum, b) => sum + (Number(b.adjustedBalance) || 0), 0);
 
   const monthlyNetRow = db
     .prepare(
@@ -48,12 +59,14 @@ export function getSummary() {
     monthlyNet,
     monthlyNetWithTransfers: Number(monthlyNetAll.net || 0),
     runwayMonths,
-    accounts: latestBalances.map((b) => ({
+    accounts: accountsWithAdjustments.map((b) => ({
       id: b.accountId,
       name: b.accountName,
-      balance: Number(b.balance),
+      balance: Number(b.adjustedBalance),
       currency: b.currency,
       date: b.date,
+      // Optional debug info (harmless):
+      adjustmentSum: Number(b.adjustmentSum || 0),
     })),
   };
 }
