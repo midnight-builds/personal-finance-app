@@ -1,5 +1,5 @@
 import { OpenAI } from 'openai';
-import { listCategories } from './rules.js';
+import { chooseCategoryFor, listCategories } from './rules.js';
 import { logEvent } from './logger.js';
 import { getOpenAIApiKey } from './settings.js';
 
@@ -63,6 +63,25 @@ export function validateAiResult(
   return { mode: 'none' };
 }
 
+function fallbackCategorize(
+  input: {
+    counterparty?: string | null;
+    description?: string | null;
+    amount: number;
+    currency: string;
+  },
+  cats: Array<{ id: string; name: string }>
+): AiResult {
+  const categoryId = chooseCategoryFor({
+    counterparty: input.counterparty || '',
+    description: input.description || '',
+    amount: input.amount,
+  });
+
+  if (!categoryId) return { mode: 'none' };
+  const cat = cats.find((c) => c.id === categoryId);
+  return { mode: 'existing', categoryId, categoryName: cat?.name || categoryId };
+}
 
 function extractJsonBlock(text: string): string {
   const trimmed = text.trim();
@@ -78,13 +97,16 @@ export async function aiCategorize(input: {
   currency: string;
 }): Promise<AiResult> {
   const apiKey = getOpenAIApiKey();
+  const cats = listCategories();
+
   if (!apiKey) {
     logEvent({ type: 'ai.error', scope: 'categorize', message: 'OPENAI_API_KEY puuttuu', payload: { input } });
-    return { mode: 'none' };
+    const fallback = fallbackCategorize(input, cats);
+    logEvent({ type: 'ai.fallback', scope: fallback.mode, message: 'AI fallback (no api key)', payload: { input, output: fallback } });
+    return fallback;
   }
   const openai = new OpenAI({ apiKey });
 
-  const cats = listCategories();
   const system = `You are a Finnish personal finance assistant. Choose a category for a bank transaction.
 Respond ONLY as JSON matching this TypeScript type:
 type Response =
@@ -122,6 +144,10 @@ ${categoriesText}`;
           message: 'AI invalid output',
           payload: { input, raw },
         });
+
+        const fallback = fallbackCategorize(input, cats);
+        logEvent({ type: 'ai.fallback', scope: fallback.mode, message: 'AI fallback (invalid output)', payload: { input, raw, output: fallback } });
+        return fallback;
       }
       logEvent({ type: 'ai.categorize', scope: json.mode, message: 'AI categorize ok', payload: { input, output: json } });
       return json as AiResult;
@@ -132,7 +158,9 @@ ${categoriesText}`;
         message: 'AI parse failed',
         payload: { input, error: String(err), raw: resp.output_text, cleaned },
       });
-      return { mode: 'none' };
+      const fallback = fallbackCategorize(input, cats);
+      logEvent({ type: 'ai.fallback', scope: fallback.mode, message: 'AI fallback (parse failed)', payload: { input, output: fallback } });
+      return fallback;
     }
   } catch (err) {
     logEvent({
@@ -141,6 +169,8 @@ ${categoriesText}`;
       message: 'AI call failed',
       payload: { input, error: String(err) },
     });
-    return { mode: 'none' };
+    const fallback = fallbackCategorize(input, cats);
+    logEvent({ type: 'ai.fallback', scope: fallback.mode, message: 'AI fallback (call failed)', payload: { input, output: fallback } });
+    return fallback;
   }
 }
