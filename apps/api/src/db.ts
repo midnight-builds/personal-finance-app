@@ -151,6 +151,7 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_normalized_booking_date ON normalized_transactions(booking_date);
     CREATE INDEX IF NOT EXISTS idx_normalized_account_date ON normalized_transactions(account_id, booking_date);
     CREATE INDEX IF NOT EXISTS idx_normalized_group ON normalized_transactions(transaction_group_id);
+    CREATE INDEX IF NOT EXISTS idx_transaction_groups_canonical ON transaction_groups(canonical_transaction_id);
     CREATE INDEX IF NOT EXISTS idx_normalized_counterparty_iban ON normalized_transactions(counterparty_iban);
     CREATE INDEX IF NOT EXISTS idx_catdec_tx ON categorization_decisions(transaction_id);
     CREATE INDEX IF NOT EXISTS idx_event_log_created_at ON event_log(created_at DESC);

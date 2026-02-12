@@ -1,5 +1,5 @@
 import { OpenAI } from 'openai';
-import { listCategories } from './rules.js';
+import { chooseCategoryFor, listCategories } from './rules.js';
 import { logEvent } from './logger.js';
 import { getOpenAIApiKey } from './settings.js';
 
@@ -11,6 +11,77 @@ type AiResult =
       options: Array<{ categoryId: string; categoryName: string; reason: string }>;
     }
   | { mode: 'none' };
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
+}
+
+export function validateAiResult(
+  raw: unknown,
+  cats: Array<{ id: string; name: string }>
+): AiResult {
+  const catById = new Map(cats.map((c) => [c.id, c]));
+
+  if (!isRecord(raw)) return { mode: 'none' };
+  const mode = raw.mode;
+
+  if (mode === 'existing') {
+    const categoryId = raw.categoryId;
+    const categoryName = raw.categoryName;
+    if (typeof categoryId !== 'string' || !catById.has(categoryId)) return { mode: 'none' };
+    if (typeof categoryName !== 'string' || !categoryName.trim()) {
+      const cat = catById.get(categoryId)!;
+      return { mode: 'existing', categoryId, categoryName: cat.name };
+    }
+    return { mode: 'existing', categoryId, categoryName };
+  }
+
+  if (mode === 'new') {
+    const categoryName = raw.categoryName;
+    if (typeof categoryName !== 'string' || !categoryName.trim()) return { mode: 'none' };
+    return { mode: 'new', categoryName: categoryName.trim() };
+  }
+
+  if (mode === 'options') {
+    const options = raw.options;
+    if (!Array.isArray(options)) return { mode: 'none' };
+    const cleaned: Array<{ categoryId: string; categoryName: string; reason: string }> = [];
+    for (const opt of options) {
+      if (!isRecord(opt)) continue;
+      const categoryId = opt.categoryId;
+      if (typeof categoryId !== 'string' || !catById.has(categoryId)) continue;
+      const cat = catById.get(categoryId)!;
+      const categoryName =
+        typeof opt.categoryName === 'string' && opt.categoryName.trim() ? opt.categoryName : cat.name;
+      const reason = typeof opt.reason === 'string' ? opt.reason : '';
+      cleaned.push({ categoryId, categoryName, reason });
+    }
+    if (cleaned.length === 0) return { mode: 'none' };
+    return { mode: 'options', options: cleaned.slice(0, 3) };
+  }
+
+  return { mode: 'none' };
+}
+
+function fallbackCategorize(
+  input: {
+    counterparty?: string | null;
+    description?: string | null;
+    amount: number;
+    currency: string;
+  },
+  cats: Array<{ id: string; name: string }>
+): AiResult {
+  const categoryId = chooseCategoryFor({
+    counterparty: input.counterparty || '',
+    description: input.description || '',
+    amount: input.amount,
+  });
+
+  if (!categoryId) return { mode: 'none' };
+  const cat = cats.find((c) => c.id === categoryId);
+  return { mode: 'existing', categoryId, categoryName: cat?.name || categoryId };
+}
 
 function extractJsonBlock(text: string): string {
   const trimmed = text.trim();
@@ -26,13 +97,16 @@ export async function aiCategorize(input: {
   currency: string;
 }): Promise<AiResult> {
   const apiKey = getOpenAIApiKey();
+  const cats = listCategories();
+
   if (!apiKey) {
     logEvent({ type: 'ai.error', scope: 'categorize', message: 'OPENAI_API_KEY puuttuu', payload: { input } });
-    return { mode: 'none' };
+    const fallback = fallbackCategorize(input, cats);
+    logEvent({ type: 'ai.fallback', scope: fallback.mode, message: 'AI fallback (no api key)', payload: { input, output: fallback } });
+    return fallback;
   }
   const openai = new OpenAI({ apiKey });
 
-  const cats = listCategories();
   const system = `You are a Finnish personal finance assistant. Choose a category for a bank transaction.
 Respond ONLY as JSON matching this TypeScript type:
 type Response =
@@ -61,7 +135,20 @@ ${categoriesText}`;
     });
     const cleaned = extractJsonBlock(resp.output_text);
     try {
-      const json = JSON.parse(cleaned) as any;
+      const raw = JSON.parse(cleaned) as unknown;
+      const json = validateAiResult(raw, cats);
+      if (json.mode === 'none') {
+        logEvent({
+          type: 'ai.error',
+          scope: 'categorize',
+          message: 'AI invalid output',
+          payload: { input, raw },
+        });
+
+        const fallback = fallbackCategorize(input, cats);
+        logEvent({ type: 'ai.fallback', scope: fallback.mode, message: 'AI fallback (invalid output)', payload: { input, raw, output: fallback } });
+        return fallback;
+      }
       logEvent({ type: 'ai.categorize', scope: json.mode, message: 'AI categorize ok', payload: { input, output: json } });
       return json as AiResult;
     } catch (err) {
@@ -71,7 +158,9 @@ ${categoriesText}`;
         message: 'AI parse failed',
         payload: { input, error: String(err), raw: resp.output_text, cleaned },
       });
-      return { mode: 'none' };
+      const fallback = fallbackCategorize(input, cats);
+      logEvent({ type: 'ai.fallback', scope: fallback.mode, message: 'AI fallback (parse failed)', payload: { input, output: fallback } });
+      return fallback;
     }
   } catch (err) {
     logEvent({
@@ -80,6 +169,8 @@ ${categoriesText}`;
       message: 'AI call failed',
       payload: { input, error: String(err) },
     });
-    return { mode: 'none' };
+    const fallback = fallbackCategorize(input, cats);
+    logEvent({ type: 'ai.fallback', scope: fallback.mode, message: 'AI fallback (call failed)', payload: { input, output: fallback } });
+    return fallback;
   }
 }
