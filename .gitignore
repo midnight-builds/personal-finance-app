@@ -38,4 +38,6 @@ examples/
 
 # local home mirrors
 home/
-apps/api/dist/
+
+# build outputs
+apps/*/dist/
