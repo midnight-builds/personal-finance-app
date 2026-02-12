@@ -6,7 +6,7 @@
     "dev": "NODE_OPTIONS=--experimental-sqlite tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "NODE_OPTIONS=--experimental-sqlite node dist/index.js",
-    "test": "NODE_OPTIONS=--experimental-sqlite tsx --test \"tests/**/*.ts\""
+    "test": "NODE_OPTIONS=--experimental-sqlite tsx --test --test-concurrency=1 \"tests/**/*.ts\""
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
