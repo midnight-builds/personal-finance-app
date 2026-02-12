@@ -14,6 +14,7 @@ function clearDb() {
     DELETE FROM balance_snapshots;
     DELETE FROM balance_adjustments;
     DELETE FROM transfer_links;
+    DELETE FROM transaction_groups;
     DELETE FROM normalized_transactions;
     DELETE FROM raw_transactions;
     DELETE FROM import_sessions;
@@ -93,6 +94,28 @@ test('deduplicates overlapping imports and assigns transaction groups', () => {
     .prepare('SELECT COUNT(*) as c FROM normalized_transactions WHERE transaction_group_id IS NOT NULL')
     .get() as any;
   assert.equal(grouped, 2);
+
+  const groups = db
+    .prepare('SELECT DISTINCT transaction_group_id as id FROM normalized_transactions WHERE transaction_group_id IS NOT NULL')
+    .all() as Array<{ id: string }>;
+  assert.equal(groups.length, 1);
+
+  const { c: groupRows } = db
+    .prepare('SELECT COUNT(*) as c FROM transaction_groups WHERE id = ?')
+    .get(groups[0].id) as any;
+  assert.equal(groupRows, 1);
+
+  const expected = db
+    .prepare(
+      'SELECT id FROM normalized_transactions WHERE transaction_group_id = ? ORDER BY created_at ASC, id ASC LIMIT 1'
+    )
+    .get(groups[0].id) as any;
+
+  const canonical = db
+    .prepare('SELECT canonical_transaction_id as id FROM transaction_groups WHERE id = ?')
+    .get(groups[0].id) as any;
+
+  assert.equal(canonical.id, expected.id);
 });
 
 test('links transfers across accounts with opposite amounts', () => {
