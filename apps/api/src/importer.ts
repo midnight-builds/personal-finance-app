@@ -197,6 +197,25 @@ function assignDuplicateGroup(txId: string, candidateId: string) {
 
   db.prepare('UPDATE normalized_transactions SET transaction_group_id = ? WHERE id IN (?, ?)')
     .run(groupId, txId, candidateId);
+
+  // Ensure a corresponding transaction_groups row exists and choose canonical deterministically.
+  const now = new Date().toISOString();
+  db.prepare(
+    'INSERT OR IGNORE INTO transaction_groups (id, created_at, canonical_transaction_id) VALUES (?, ?, NULL)'
+  ).run(groupId, now);
+
+  const canonical = db
+    .prepare(
+      'SELECT id FROM normalized_transactions WHERE transaction_group_id = ? ORDER BY created_at ASC, id ASC LIMIT 1'
+    )
+    .get(groupId) as { id: string } | undefined;
+
+  if (canonical?.id) {
+    db.prepare('UPDATE transaction_groups SET canonical_transaction_id = ? WHERE id = ?').run(
+      canonical.id,
+      groupId
+    );
+  }
 }
 
 function dedupeInserted(ids: string[]) {
