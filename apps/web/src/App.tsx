@@ -10,6 +10,15 @@ type Summary = {
   accounts: Account[];
 };
 
+type BalanceAdjustment = {
+  id: string;
+  created_at: string;
+  account_id: string;
+  date: string;
+  amount: number;
+  reason: string | null;
+};
+
 type Transaction = {
   id: string;
   bookingDate: string | null;
@@ -40,14 +49,7 @@ type RawRow = {
   format: string;
 };
 type Settings = { payday: number; paydayFlexDays: number; openaiConfigured: boolean };
-type LogRow = {
-  id: string;
-  created_at: string;
-  type: string;
-  scope?: string | null;
-  message: string;
-  payload?: unknown;
-};
+type LogRow = { id: string; created_at: string; type: string; scope?: string | null; message: string; payload?: unknown };
 
 const API = 'http://localhost:3001';
 
@@ -77,6 +79,11 @@ function App() {
   const [rawRows, setRawRows] = useState<RawRow[]>([]);
   const [settings, setSettings] = useState<Settings>({ payday: 15, paydayFlexDays: 2, openaiConfigured: false });
   const [logs, setLogs] = useState<LogRow[]>([]);
+  const [balanceAdjustments, setBalanceAdjustments] = useState<BalanceAdjustment[]>([]);
+  const [adjAccountId, setAdjAccountId] = useState<string>("");
+  const [adjDate, setAdjDate] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [adjAmount, setAdjAmount] = useState<string>("");
+  const [adjReason, setAdjReason] = useState<string>("");
   const [savingSettings, setSavingSettings] = useState(false);
   const [openaiKey, setOpenaiKey] = useState('');
   const [aiLoading, setAiLoading] = useState<string | null>(null);
@@ -110,6 +117,12 @@ function App() {
     const res = await fetch(`${API}/accounts`);
     if (!res.ok) return;
     setAccounts(await res.json());
+  };
+
+  const loadBalanceAdjustments = async () => {
+    const res = await fetch(`${API}/balance-adjustments`);
+    if (!res.ok) return;
+    setBalanceAdjustments(await res.json());
   };
 
   const loadInsights = async () => {
@@ -153,14 +166,21 @@ function App() {
       loadSettings(),
       loadLogs(),
       loadAccounts(),
+      loadBalanceAdjustments(),
     ]);
   };
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     refreshAll();
     const interval = setInterval(loadLogs, 5000);
     return () => clearInterval(interval);
   }, []);
+  /* eslint-enable react-hooks/exhaustive-deps */
+
+  useEffect(() => {
+    if (!adjAccountId && accounts.length) setAdjAccountId(accounts[0].id);
+  }, [accounts, adjAccountId]);
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -200,6 +220,50 @@ function App() {
     await fetch(`${API}/debug/clear-imports`, { method: 'POST' });
     setStatus('Import-data tyhjennetty (kategoriat säilyivät).');
     await refreshAll();
+  };
+
+  const createBalanceAdjustmentApi = async () => {
+    const amountNum = Number(adjAmount);
+    if (!adjAccountId) {
+      setToast('Valitse tili');
+      return;
+    }
+    if (!adjDate) {
+      setToast('Päivä puuttuu');
+      return;
+    }
+    if (!Number.isFinite(amountNum)) {
+      setToast('Summa ei ole numero');
+      return;
+    }
+    const res = await fetch(`${API}/balance-adjustments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId: adjAccountId,
+        date: adjDate,
+        amount: amountNum,
+        reason: adjReason?.trim() ? adjReason.trim() : null,
+      }),
+    });
+    if (!res.ok) {
+      setToast('Saldo-oikaisun lisäys epäonnistui');
+      return;
+    }
+    setAdjAmount('');
+    setAdjReason('');
+    setToast('Saldo-oikaisu lisätty');
+    await Promise.all([loadBalanceAdjustments(), loadSummary(), loadAccounts()]);
+  };
+
+  const deleteBalanceAdjustmentApi = async (id: string) => {
+    const res = await fetch(`${API}/balance-adjustments/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setToast('Saldo-oikaisun poisto epäonnistui');
+      return;
+    }
+    setToast('Saldo-oikaisu poistettu');
+    await Promise.all([loadBalanceAdjustments(), loadSummary(), loadAccounts()]);
   };
 
   const changeCategory = async (id: string, categoryId: string) => {
@@ -715,6 +779,77 @@ function App() {
                   <span>{a.balance != null ? formatAmount(a.balance, a.currency ?? 'EUR') : '—'}</span>
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="balance-adjustments">
+            <div className="card-head inner">
+              <div>
+                <p className="eyebrow">Saldo</p>
+                <h3>Saldo-oikaisut</h3>
+              </div>
+            </div>
+
+            <div className="settings-grid">
+              <label>
+                Tili
+                <select value={adjAccountId} onChange={(e) => setAdjAccountId(e.target.value)}>
+                  <option value="">–</option>
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Päivä
+                <input type="date" value={adjDate} onChange={(e) => setAdjDate(e.target.value)} />
+              </label>
+              <label>
+                Summa ({accounts.find((a) => a.id === adjAccountId)?.currency ?? 'EUR'})
+                <input type="number" step="0.01" value={adjAmount} onChange={(e) => setAdjAmount(e.target.value)} />
+              </label>
+              <label>
+                Syy (optional)
+                <input type="text" value={adjReason} onChange={(e) => setAdjReason(e.target.value)} />
+              </label>
+            </div>
+            <div className="settings-actions">
+              <button type="button" onClick={createBalanceAdjustmentApi}>Lisää saldo-oikaisu</button>
+            </div>
+
+            <div className="table mini">
+              <div className="row mini header">
+                <span>Päivä</span>
+                <span>Tili</span>
+                <span>Summa</span>
+                <span>Syy</span>
+                <span></span>
+              </div>
+              {balanceAdjustments.length === 0 && (
+                <div className="row mini">
+                  <span className="muted">Ei oikaisuja.</span>
+                  <span></span><span></span><span></span><span></span>
+                </div>
+              )}
+              {balanceAdjustments.map((ba) => {
+                const acc = accounts.find((a) => a.id === ba.account_id);
+                const cur = acc?.currency ?? 'EUR';
+                return (
+                  <div className="row mini" key={ba.id}>
+                    <span>{ba.date}</span>
+                    <span>{acc?.name ?? ba.account_id}</span>
+                    <span className={ba.amount < 0 ? 'neg' : 'pos'}>{formatAmount(ba.amount, cur)}</span>
+                    <span>{ba.reason ?? '–'}</span>
+                    <span className="actions-row">
+                      <button className="ghost mini" type="button" onClick={() => deleteBalanceAdjustmentApi(ba.id)}>
+                        Poista
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
