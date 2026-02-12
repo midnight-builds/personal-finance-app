@@ -49,14 +49,7 @@ type RawRow = {
   format: string;
 };
 type Settings = { payday: number; paydayFlexDays: number; openaiConfigured: boolean };
-type LogRow = {
-  id: string;
-  created_at: string;
-  type: string;
-  scope?: string | null;
-  message: string;
-  payload?: unknown;
-};
+type LogRow = { id: string; created_at: string; type: string; scope?: string | null; message: string; payload?: unknown };
 
 const API = 'http://localhost:3001';
 
@@ -177,11 +170,13 @@ function App() {
     ]);
   };
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     refreshAll();
     const interval = setInterval(loadLogs, 5000);
     return () => clearInterval(interval);
   }, []);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
     if (!adjAccountId && accounts.length) setAdjAccountId(accounts[0].id);
