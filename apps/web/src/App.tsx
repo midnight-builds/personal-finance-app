@@ -37,7 +37,7 @@ type Transaction = {
 
 type MonthlyRow = { month: string; income: number; expense: number; net: number; direction: string };
 type Category = { id: string; name: string };
-type Insight = { id: string; title: string; description: string; severity: string };
+type Insight = { id: string; title: string; description: string; severity: "info" | "warn"; transactionIds: string[] };
 type RawRow = {
   id: string;
   createdAt: string;
@@ -75,6 +75,7 @@ function App() {
   const [showTransfers, setShowTransfers] = useState(false);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [insights, setInsights] = useState<Insight[]>([]);
+  const [txFilterIds, setTxFilterIds] = useState<string[] | null>(null);
   const [monthly, setMonthly] = useState<MonthlyRow[]>([]);
   const [rawRows, setRawRows] = useState<RawRow[]>([]);
   const [settings, setSettings] = useState<Settings>({ payday: 15, paydayFlexDays: 2, openaiConfigured: false });
@@ -488,6 +489,23 @@ function App() {
                 {ins.title}
               </div>
               <div className="insight-desc">{ins.description}</div>
+              {ins.transactionIds && ins.transactionIds.length > 0 && (
+                <div className="insight-actions">
+                  <button
+                    className="mini"
+                    type="button"
+                    onClick={() => {
+                      setTxFilterIds(ins.transactionIds);
+                      setToast("Suodatettu insightin tapahtumiin");
+                    }}
+                  >
+                    Näytä tapahtumat
+                  </button>
+                  <button className="mini" type="button" onClick={() => setTxFilterIds(null)}>
+                    Poista suodatus
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -504,6 +522,12 @@ function App() {
             Näytä tilisiirrot
           </label>
         </div>
+        {txFilterIds && (
+          <div className="filter-banner">
+            <span>Suodatus päällä: {txFilterIds.length} tapahtumaa</span>
+            <button className="mini" type="button" onClick={() => setTxFilterIds(null)}>Poista</button>
+          </div>
+        )}
         <div className="table">
           <div className="row header">
             <span>Päivä</span>
@@ -515,6 +539,7 @@ function App() {
           </div>
           {transactions
             .filter((tx) => showTransfers || !tx.isTransfer)
+            .filter((tx) => !txFilterIds || txFilterIds.includes(tx.id))
             .map((tx) => (
               <div className="row" key={tx.id}>
                 <span>{formatDate(tx.bookingDate)}</span>
