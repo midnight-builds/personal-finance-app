@@ -408,6 +408,12 @@ select {
   color: #cbd5e1;
 }
 
+.insight-rec {
+  margin-top: 4px;
+  color: rgba(203, 213, 225, 0.9);
+  font-style: italic;
+}
+
 .status {
   margin-left: 6px;
   color: #cbd5e1;
