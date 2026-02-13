@@ -32,6 +32,8 @@ type Transaction = {
   groupSize?: number | null;
   transfer?: { direction: 'in' | 'out'; otherId: string | null } | null;
   isTransfer?: boolean;
+  recurringDaily?: boolean;
+  recurringWeekly?: boolean;
   recurringMonthly?: boolean;
 };
 
@@ -567,7 +569,13 @@ function App() {
                     </span>
                   )}
                   {tx.groupSize && tx.groupSize > 1 && <span className="chip chip-dupe">Dupl {tx.groupSize}x</span>}
-                  {tx.recurringMonthly && <span className="chip chip-recurring">Toistuva (kk)</span>}
+                  {tx.recurringDaily ? (
+                    <span className="chip chip-recurring">Toistuva (pv)</span>
+                  ) : tx.recurringWeekly ? (
+                    <span className="chip chip-recurring">Toistuva (vko)</span>
+                  ) : tx.recurringMonthly ? (
+                    <span className="chip chip-recurring">Toistuva (kk)</span>
+                  ) : null}
                 </span>
               </div>
             ))}
