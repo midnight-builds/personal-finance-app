@@ -39,11 +39,11 @@ examples/
 # local home mirrors
 home/
 
-# build outputs
-apps/*/dist/
+# build outputs (workspaces)
+apps/**/dist/
 
 # build artifacts
 apps/api/dist
 
-# local real bank exports
+# local fixtures (never commit)
 testdata/
