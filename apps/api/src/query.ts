@@ -1,18 +1,37 @@
-import { db } from './db.js';
-import { getSettings } from './settings.js';
+import { db } from "./db.js";
+import { getSettings } from "./settings.js";
 
 export function listTransactions() {
   const { payday, paydayFlexDays } = getSettings();
   const rows = db
     .prepare(
-      `WITH recurring AS (
-         SELECT counterparty_name, amount
+      `WITH tx AS (
+         SELECT counterparty_name,
+                amount,
+                date(booking_date) AS d
          FROM normalized_transactions
          WHERE booking_date IS NOT NULL
            AND counterparty_name IS NOT NULL
            AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+       ),
+       diffs AS (
+         SELECT counterparty_name,
+                amount,
+                d,
+                (julianday(d) - julianday(LAG(d) OVER (PARTITION BY counterparty_name, amount ORDER BY d))) AS dd
+         FROM tx
+       ),
+       recurring AS (
+         SELECT counterparty_name,
+                amount,
+                COUNT(*) AS n,
+                COUNT(DISTINCT strftime(%Y-%m, d)) AS monthCnt,
+                AVG(dd) AS avgDiff,
+                SUM(CASE WHEN dd BETWEEN 0.5 AND 1.5 THEN 1 ELSE 0 END) AS dailySteps,
+                SUM(CASE WHEN dd BETWEEN 6.0 AND 8.0 THEN 1 ELSE 0 END) AS weeklySteps
+         FROM diffs
          GROUP BY counterparty_name, amount
-         HAVING COUNT(DISTINCT strftime('%Y-%m', booking_date)) >= 3
+         HAVING n >= 3
        )
        SELECT nt.id,
               ? AS payday,
@@ -26,7 +45,18 @@ export function listTransactions() {
               (SELECT COUNT(*) FROM normalized_transactions ng WHERE ng.transaction_group_id = nt.transaction_group_id) AS groupSize,
               tl.from_transaction_id AS tlFrom,
               tl.to_transaction_id   AS tlTo,
-              CASE WHEN rec.counterparty_name IS NOT NULL THEN 1 ELSE 0 END AS recurringMonthly,
+              CASE
+                WHEN rec.n >= 6 AND rec.avgDiff BETWEEN 0.8 AND 1.2 AND rec.dailySteps >= (rec.n - 1) * 0.6 THEN 1
+                ELSE 0
+              END AS recurringDaily,
+              CASE
+                WHEN rec.n >= 5 AND rec.avgDiff BETWEEN 5.0 AND 9.0 AND rec.weeklySteps >= (rec.n - 1) * 0.6 THEN 1
+                ELSE 0
+              END AS recurringWeekly,
+              CASE
+                WHEN rec.monthCnt >= 3 THEN 1
+                ELSE 0
+              END AS recurringMonthly,
               cd.category_id AS categoryId,
               c.name AS categoryName,
               a.id AS accountId,
@@ -57,14 +87,17 @@ export function listTransactions() {
     description: row.description,
     transactionGroupId: row.transactionGroupId,
     groupSize: row.transactionGroupId ? Number(row.groupSize) : null,
-    transfer: row.tlFrom || row.tlTo
-      ? {
-          direction: row.tlFrom === row.id ? 'out' : 'in',
-          otherId: row.tlFrom === row.id ? row.tlTo : row.tlFrom,
-        }
-      : null,
+    transfer:
+      row.tlFrom || row.tlTo
+        ? {
+            direction: row.tlFrom === row.id ? "out" : "in",
+            otherId: row.tlFrom === row.id ? row.tlTo : row.tlFrom,
+          }
+        : null,
     categoryId: row.categoryId,
     categoryName: row.categoryName,
+    recurringDaily: Boolean(row.recurringDaily),
+    recurringWeekly: Boolean(row.recurringWeekly),
     recurringMonthly: Boolean(row.recurringMonthly),
     isTransfer: Boolean(row.tlFrom || row.tlTo),
     payday,
