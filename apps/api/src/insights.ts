@@ -79,6 +79,54 @@ function risingCategory(): Insight[] {
   }));
 }
 
+function newRecurringMerchant(): Insight[] {
+  // Detect a new recurring merchant that appears recently (e.g. new subscription) but wasn't present earlier.
+  const rows = db
+    .prepare(
+      `WITH recent AS (
+         SELECT counterparty_name AS name,
+                COUNT(*) as cnt,
+                SUM(amount) as total,
+                group_concat(id) as ids
+         FROM normalized_transactions
+         WHERE booking_date >= datetime('now', '-45 days')
+           AND amount < 0
+           AND counterparty_name IS NOT NULL
+           AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+         GROUP BY counterparty_name
+         HAVING cnt >= 3
+       ),
+       prev AS (
+         SELECT counterparty_name AS name,
+                COUNT(*) as cnt
+         FROM normalized_transactions
+         WHERE booking_date < datetime('now', '-45 days')
+           AND booking_date >= datetime('now', '-365 days')
+           AND amount < 0
+           AND counterparty_name IS NOT NULL
+           AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+         GROUP BY counterparty_name
+       )
+       SELECT r.name as name, r.cnt as recentCnt, r.total as recentTotal, r.ids as ids, COALESCE(p.cnt, 0) as prevCnt
+       FROM recent r
+       LEFT JOIN prev p ON p.name = r.name
+       WHERE COALESCE(p.cnt, 0) <= 1
+       ORDER BY r.cnt DESC, ABS(r.total) DESC
+       LIMIT 5`
+    )
+    .all() as Array<any>;
+
+  return rows.map((r, idx) => ({
+    id: `new-recurring-${idx}-${r.name}`,
+    title: `Uusi toistuva maksu: ${r.name}`,
+    description: `${r.recentCnt} ostosta 45 päivässä, yhteensä ${Math.abs(r.recentTotal).toFixed(
+      2
+    )} EUR (aiemmin ${r.prevCnt} krt / 12 kk)`,
+    severity: 'warn',
+    transactionIds: String(r.ids).split(','),
+  }));
+}
+
 function monthlySpike(): Insight[] {
   // Compare last full month vs the 3 full months before it.
   const rows = db
@@ -138,5 +186,5 @@ function monthlySpike(): Insight[] {
 }
 
 export function getInsights(): Insight[] {
-  return [...repeatedSmallPurchases(), ...risingCategory(), ...monthlySpike()];
+  return [...repeatedSmallPurchases(), ...risingCategory(), ...newRecurringMerchant(), ...monthlySpike()];
 }
