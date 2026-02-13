@@ -68,6 +68,25 @@ function risingCategory(): Insight[] {
     )
     .all() as Array<any>;
 
+  const topTransactionIdsForCategory = (cat: string): string[] => {
+    const idsRows = db
+      .prepare(
+        `SELECT nt.id as id
+         FROM normalized_transactions nt
+         JOIN categorization_decisions cd ON cd.transaction_id = nt.id
+         JOIN categories c ON c.id = cd.category_id
+         WHERE nt.booking_date >= datetime('now', '-90 days')
+           AND nt.amount < 0
+           AND c.name = ?
+           AND nt.id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+         ORDER BY ABS(nt.amount) DESC
+         LIMIT 10`
+      )
+      .all(cat) as Array<any>;
+
+    return idsRows.map((r) => String(r.id));
+  };
+
   return rows.map((r, idx) => ({
     id: `trend-${idx}-${r.cat}`,
     title: `Kategoria kasvaa: ${r.cat}`,
@@ -75,7 +94,7 @@ function risingCategory(): Insight[] {
       r.prevSum || 0
     ).toFixed(2)} EUR`,
     severity: 'warn',
-    transactionIds: [],
+    transactionIds: topTransactionIdsForCategory(String(r.cat)),
   }));
 }
 
