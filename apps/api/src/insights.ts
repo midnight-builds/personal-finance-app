@@ -153,15 +153,43 @@ function newRecurringMerchant(): Insight[] {
 }
 
 function monthlySpike(): Insight[] {
-  // Compare last full month vs the 3 full months before it.
+  // Compare last full month vs the 3 full months before it, excluding known recurring monthly payments.
   const rows = db
     .prepare(
-      `SELECT strftime('%Y-%m', booking_date) as ym, SUM(amount) as s
-       FROM normalized_transactions
-       WHERE amount < 0
-         AND booking_date < date('now', 'start of month')
-         AND booking_date >= date('now', 'start of month', '-4 months')
-         AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+      `WITH tx AS (
+         SELECT id,
+                counterparty_name AS name,
+                amount,
+                date(booking_date) AS d,
+                booking_date
+         FROM normalized_transactions
+         WHERE booking_date IS NOT NULL
+           AND counterparty_name IS NOT NULL
+           AND amount < 0
+           AND booking_date < date('now', 'start of month')
+           AND booking_date >= date('now', 'start of month', '-4 months')
+           AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+       ),
+       diffs AS (
+         SELECT name,
+                amount,
+                d,
+                (julianday(d) - julianday(LAG(d) OVER (PARTITION BY name, amount ORDER BY d))) AS dd
+         FROM tx
+       ),
+       recurring AS (
+         SELECT name,
+                amount,
+                COUNT(*) AS n,
+                COUNT(DISTINCT strftime('%Y-%m', d)) AS monthCnt
+         FROM diffs
+         GROUP BY name, amount
+         HAVING n >= 3
+       )
+       SELECT strftime('%Y-%m', tx.booking_date) as ym, SUM(tx.amount) as s
+       FROM tx
+       LEFT JOIN recurring rec ON rec.name = tx.name AND rec.amount = tx.amount
+       WHERE COALESCE(rec.monthCnt, 0) < 3
        GROUP BY ym
        ORDER BY ym ASC`
     )
@@ -184,13 +212,41 @@ function monthlySpike(): Insight[] {
 
   const idsRows = db
     .prepare(
-      `SELECT id
-       FROM normalized_transactions
-       WHERE amount < 0
-         AND booking_date >= date('now', 'start of month', '-1 month')
-         AND booking_date < date('now', 'start of month')
-         AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-       ORDER BY ABS(amount) DESC
+      `WITH tx AS (
+         SELECT id,
+                counterparty_name AS name,
+                amount,
+                date(booking_date) AS d,
+                booking_date
+         FROM normalized_transactions
+         WHERE booking_date IS NOT NULL
+           AND counterparty_name IS NOT NULL
+           AND amount < 0
+           AND booking_date >= date('now', 'start of month', '-1 month')
+           AND booking_date < date('now', 'start of month')
+           AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+       ),
+       diffs AS (
+         SELECT name,
+                amount,
+                d,
+                (julianday(d) - julianday(LAG(d) OVER (PARTITION BY name, amount ORDER BY d))) AS dd
+         FROM tx
+       ),
+       recurring AS (
+         SELECT name,
+                amount,
+                COUNT(*) AS n,
+                COUNT(DISTINCT strftime('%Y-%m', d)) AS monthCnt
+         FROM diffs
+         GROUP BY name, amount
+         HAVING n >= 3
+       )
+       SELECT tx.id as id
+       FROM tx
+       LEFT JOIN recurring rec ON rec.name = tx.name AND rec.amount = tx.amount
+       WHERE COALESCE(rec.monthCnt, 0) < 3
+       ORDER BY ABS(tx.amount) DESC
        LIMIT 10`
     )
     .all() as Array<any>;
@@ -200,14 +256,14 @@ function monthlySpike(): Insight[] {
   return [
     {
       id: `monthly-spike-${last.ym}`,
-      title: `Kuukausipiikki: ${last.ym}`,
+      title: `Kuukausipiikki (ei toistuvat): ${last.ym}`,
       description: `Kulut ${last.ym}: ${lastAbs.toFixed(2)} EUR (edellisten 3 kk keskiarvo ${prevAvgAbs.toFixed(
         2
       )} EUR)`,
       severity: 'warn',
       transactionIds,
       recommendation:
-        'Katso tämän kuukauden top-kulut: usein piikin selittää yksi kertaerä (matka, vakuutus, iso hankinta) tai uusi toistuva maksu.',
+        'Tämä piikki ei näytä selittyvän tunnetuilla kuukausittaisilla toistuvuuksilla. Katso top-kulut: usein taustalla on kertaerä (matka, vakuutus, iso hankinta) tai uusi palvelu.',
     },
   ];
 }
