@@ -175,6 +175,7 @@ function App() {
     refreshAll();
     const interval = setInterval(loadLogs, 5000);
     return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   /* eslint-enable react-hooks/exhaustive-deps */
 
@@ -733,7 +734,7 @@ function App() {
               <button
                 type="button"
                 onClick={() => {
-                  const el = document.querySelector<HTMLInputElement>('.category-editor input[type="text"]');
+                  const el = document.querySelector<HTMLInputElement>('.category-editor input[type=text]');
                   const name = el?.value ?? '';
                   if (name.trim()) {
                     createCategory(name);
