@@ -268,6 +268,38 @@ function monthlySpike(): Insight[] {
   ];
 }
 
+function largeSingleExpense(): Insight[] {
+  const rows = db
+    .prepare(
+      `SELECT id, counterparty_name AS name, amount
+       FROM normalized_transactions
+       WHERE booking_date >= datetime('now', '-30 days')
+         AND booking_date IS NOT NULL
+         AND amount < 0
+         AND ABS(amount) >= 200
+         AND counterparty_name IS NOT NULL
+         AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+       ORDER BY ABS(amount) DESC
+       LIMIT 5`
+    )
+    .all() as Array<any>;
+
+  return rows.map((r, idx) => {
+    const absAmt = Math.abs(Number(r.amount || 0));
+    const severity: Insight['severity'] = absAmt >= 500 ? 'warn' : 'info';
+
+    return {
+      id: `large-expense-${idx}-${r.name}`,
+      title: `Iso yksittäinen meno: ${r.name}`,
+      description: `${absAmt.toFixed(2)} EUR (30 pv)`,
+      severity,
+      transactionIds: [String(r.id)],
+      recommendation:
+        'Avaa tapahtuma ja varmista kategoria. Jos tämä oli kertaluontoinen, kuukausipiikit ja trendit selittyvät usein tällä.',
+    };
+  });
+}
+
 function uncategorizedSpending(): Insight[] {
   const row = db
     .prepare(
@@ -323,6 +355,7 @@ export function getInsights(): Insight[] {
     ...risingCategory(),
     ...newRecurringMerchant(),
     ...monthlySpike(),
+    ...largeSingleExpense(),
     ...uncategorizedSpending(),
   ];
 }
