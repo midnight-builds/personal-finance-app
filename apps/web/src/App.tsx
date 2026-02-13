@@ -39,7 +39,14 @@ type Transaction = {
 
 type MonthlyRow = { month: string; income: number; expense: number; net: number; direction: string };
 type Category = { id: string; name: string };
-type Insight = { id: string; title: string; description: string; severity: "info" | "warn"; transactionIds: string[] };
+type Insight = {
+  id: string;
+  title: string;
+  description: string;
+  severity: "info" | "warn";
+  transactionIds: string[];
+  recommendation?: string;
+};
 type RawRow = {
   id: string;
   createdAt: string;
@@ -491,6 +498,7 @@ function App() {
                 {ins.title}
               </div>
               <div className="insight-desc">{ins.description}</div>
+              {ins.recommendation && <div className="insight-rec">{ins.recommendation}</div>}
               {ins.transactionIds && ins.transactionIds.length > 0 && (
                 <div className="insight-actions">
                   <button
