@@ -6,6 +6,7 @@ export type Insight = {
   description: string;
   severity: 'info' | 'warn';
   transactionIds: string[];
+  recommendation?: string;
 };
 
 function repeatedSmallPurchases(): Insight[] {
@@ -34,6 +35,8 @@ function repeatedSmallPurchases(): Insight[] {
     description: `${r.cnt} ostosta 30 päivässä, yhteensä ${Math.abs(r.total).toFixed(2)} EUR`,
     severity: 'info',
     transactionIds: (r.ids as string).split(','),
+    recommendation:
+      'Tarkista onko nämä tarpeellisia: voit niputtaa ne yhteen kategoriaan tai asettaa itsellesi kuukausirajan.',
   }));
 }
 
@@ -95,6 +98,8 @@ function risingCategory(): Insight[] {
     ).toFixed(2)} EUR`,
     severity: 'warn',
     transactionIds: topTransactionIdsForCategory(String(r.cat)),
+    recommendation:
+      'Avaa suurimmat tapahtumat ja varmista kategorisointi. Jos kasvu on ok, harkitse budjetin/puskurin nostoa tälle kategorialle.',
   }));
 }
 
@@ -143,6 +148,7 @@ function newRecurringMerchant(): Insight[] {
     )} EUR (aiemmin ${r.prevCnt} krt / 12 kk)`,
     severity: 'warn',
     transactionIds: String(r.ids).split(','),
+    recommendation: 'Onko tämä uusi tilaus/palvelu? Jos et käytä sitä, peruuta tai etsi halvempi vaihtoehto.',
   }));
 }
 
@@ -200,6 +206,8 @@ function monthlySpike(): Insight[] {
       )} EUR)`,
       severity: 'warn',
       transactionIds,
+      recommendation:
+        'Katso tämän kuukauden top-kulut: usein piikin selittää yksi kertaerä (matka, vakuutus, iso hankinta) tai uusi toistuva maksu.',
     },
   ];
 }
