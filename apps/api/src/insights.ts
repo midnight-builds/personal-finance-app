@@ -212,6 +212,61 @@ function monthlySpike(): Insight[] {
   ];
 }
 
+function uncategorizedSpending(): Insight[] {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as cnt, SUM(nt.amount) as total
+       FROM normalized_transactions nt
+       LEFT JOIN categorization_decisions cd ON cd.transaction_id = nt.id
+       WHERE nt.booking_date >= datetime('now', '-30 days')
+         AND nt.amount < 0
+         AND cd.transaction_id IS NULL
+         AND nt.id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)`
+    )
+    .get() as any;
+
+  const cnt = Number(row?.cnt || 0);
+  const total = Number(row?.total || 0);
+  const totalAbs = Math.abs(total);
+
+  // Keep it quiet unless it looks actionable.
+  if (cnt < 10 && totalAbs < 150) return [];
+
+  const idsRows = db
+    .prepare(
+      `SELECT nt.id as id
+       FROM normalized_transactions nt
+       LEFT JOIN categorization_decisions cd ON cd.transaction_id = nt.id
+       WHERE nt.booking_date >= datetime('now', '-30 days')
+         AND nt.amount < 0
+         AND cd.transaction_id IS NULL
+         AND nt.id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+       ORDER BY ABS(nt.amount) DESC
+       LIMIT 15`
+    )
+    .all() as Array<any>;
+
+  const transactionIds = idsRows.map((r) => String(r.id));
+
+  return [
+    {
+      id: `uncategorized-30d`,
+      title: 'Kategorisoimattomia menoja (30 pv)',
+      description: `${cnt} tapahtumaa ilman kategoriaa, yhteensä ${totalAbs.toFixed(2)} EUR`,
+      severity: totalAbs >= 300 ? 'warn' : 'info',
+      transactionIds,
+      recommendation:
+        'Avaa top-tapahtumat ja aseta kategoriat. Tämä parantaa kuukausikatsausta ja trendi-insightteja (ja samalla syntyy sääntöjä).',
+    },
+  ];
+}
+
 export function getInsights(): Insight[] {
-  return [...repeatedSmallPurchases(), ...risingCategory(), ...newRecurringMerchant(), ...monthlySpike()];
+  return [
+    ...repeatedSmallPurchases(),
+    ...risingCategory(),
+    ...newRecurringMerchant(),
+    ...monthlySpike(),
+    ...uncategorizedSpending(),
+  ];
 }
