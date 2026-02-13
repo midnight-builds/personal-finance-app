@@ -79,6 +79,64 @@ function risingCategory(): Insight[] {
   }));
 }
 
+function monthlySpike(): Insight[] {
+  // Compare last full month vs the 3 full months before it.
+  const rows = db
+    .prepare(
+      `SELECT strftime('%Y-%m', booking_date) as ym, SUM(amount) as s
+       FROM normalized_transactions
+       WHERE amount < 0
+         AND booking_date < date('now', 'start of month')
+         AND booking_date >= date('now', 'start of month', '-4 months')
+         AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+       GROUP BY ym
+       ORDER BY ym ASC`
+    )
+    .all() as Array<any>;
+
+  if (rows.length < 4) return [];
+
+  const last = rows[rows.length - 1];
+  const prev3 = rows.slice(-4, -1);
+  const lastAbs = Math.abs(Number(last.s || 0));
+  const prevAvgAbs = prev3.reduce((acc, r) => acc + Math.abs(Number(r.s || 0)), 0) / 3;
+
+  if (!Number.isFinite(lastAbs) || !Number.isFinite(prevAvgAbs) || prevAvgAbs <= 0) return [];
+
+  const ratio = lastAbs / prevAvgAbs;
+  const delta = lastAbs - prevAvgAbs;
+
+  // Gate to avoid noise: must be meaningfully larger and over an absolute threshold.
+  if (ratio < 1.3 || delta < 150) return [];
+
+  const idsRows = db
+    .prepare(
+      `SELECT id
+       FROM normalized_transactions
+       WHERE amount < 0
+         AND booking_date >= date('now', 'start of month', '-1 month')
+         AND booking_date < date('now', 'start of month')
+         AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+       ORDER BY ABS(amount) DESC
+       LIMIT 10`
+    )
+    .all() as Array<any>;
+
+  const transactionIds = idsRows.map((r) => String(r.id));
+
+  return [
+    {
+      id: `monthly-spike-${last.ym}`,
+      title: `Kuukausipiikki: ${last.ym}`,
+      description: `Kulut ${last.ym}: ${lastAbs.toFixed(2)} EUR (edellisten 3 kk keskiarvo ${prevAvgAbs.toFixed(
+        2
+      )} EUR)`,
+      severity: 'warn',
+      transactionIds,
+    },
+  ];
+}
+
 export function getInsights(): Insight[] {
-  return [...repeatedSmallPurchases(), ...risingCategory()];
+  return [...repeatedSmallPurchases(), ...risingCategory(), ...monthlySpike()];
 }
