@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import './App.css';
 
 type Account = { id: string; name: string; balance: number; currency: string; date: string };
@@ -60,7 +60,16 @@ type RawRow = {
 type Settings = { payday: number; paydayFlexDays: number; openaiConfigured: boolean };
 type LogRow = { id: string; created_at: string; type: string; scope?: string | null; message: string; payload?: unknown };
 
-const API = 'http://localhost:3001';
+const API = '/api';
+
+
+async function safeFetch(input: RequestInfo | URL, init?: RequestInit) {
+  try {
+    return await fetch(input, init);
+  } catch (err: unknown) {
+    throw new Error(`Network error: ${String(err)}`, { cause: err });
+  }
+}
 
 function formatDate(value: string | null) {
   if (!value) return '-';
@@ -98,6 +107,54 @@ function App() {
   const [openaiKey, setOpenaiKey] = useState('');
   const [aiLoading, setAiLoading] = useState<string | null>(null);
 
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([
+      (async () => {
+        const res = await safeFetch(`${API}/transactions`);
+        if (!res.ok) return;
+        setTransactions(await res.json());
+      })(),
+      (async () => {
+        const res = await safeFetch(`${API}/categories`);
+        if (!res.ok) return;
+        setCategories(await res.json());
+      })(),
+      (async () => {
+        const res = await safeFetch(`${API}/summary`);
+        if (!res.ok) return;
+        setSummary(await res.json());
+      })(),
+      (async () => {
+        const res = await safeFetch(`${API}/insights`);
+        if (!res.ok) return;
+        setInsights(await res.json());
+      })(),
+      (async () => {
+        const res = await safeFetch(`${API}/monthly`);
+        if (!res.ok) return;
+        setMonthly(await res.json());
+      })(),
+      loadRaw(),
+      (async () => {
+        const res = await safeFetch(`${API}/settings`);
+        if (!res.ok) return;
+        setSettings(await res.json());
+      })(),
+      loadLogs(),
+      (async () => {
+        const res = await safeFetch(`${API}/accounts`);
+        if (!res.ok) return;
+        setAccounts(await res.json());
+      })(),
+      (async () => {
+        const res = await safeFetch(`${API}/balance-adjustments`);
+        if (!res.ok) return;
+        setBalanceAdjustments(await res.json());
+      })(),
+    ]);
+  }, []);
+
   const heroMood = useMemo(() => {
     const net = summary?.monthlyNet ?? 0;
     if (net > 200) return 'positive';
@@ -106,86 +163,71 @@ function App() {
   }, [summary]);
 
   const loadTransactions = async () => {
-    const res = await fetch(`${API}/transactions`);
+    const res = await safeFetch(`${API}/transactions`);
     if (!res.ok) return;
     setTransactions(await res.json());
   };
 
   const loadCategories = async () => {
-    const res = await fetch(`${API}/categories`);
+    const res = await safeFetch(`${API}/categories`);
     if (!res.ok) return;
     setCategories(await res.json());
   };
 
   const loadSummary = async () => {
-    const res = await fetch(`${API}/summary`);
+    const res = await safeFetch(`${API}/summary`);
     if (!res.ok) return;
     setSummary(await res.json());
   };
 
   const loadAccounts = async () => {
-    const res = await fetch(`${API}/accounts`);
+    const res = await safeFetch(`${API}/accounts`);
     if (!res.ok) return;
     setAccounts(await res.json());
   };
 
   const loadBalanceAdjustments = async () => {
-    const res = await fetch(`${API}/balance-adjustments`);
+    const res = await safeFetch(`${API}/balance-adjustments`);
     if (!res.ok) return;
     setBalanceAdjustments(await res.json());
   };
 
   const loadInsights = async () => {
-    const res = await fetch(`${API}/insights`);
+    const res = await safeFetch(`${API}/insights`);
     if (!res.ok) return;
     setInsights(await res.json());
   };
 
   const loadMonthly = async () => {
-    const res = await fetch(`${API}/monthly`);
+    const res = await safeFetch(`${API}/monthly`);
     if (!res.ok) return;
     setMonthly(await res.json());
   };
 
   const loadRaw = async () => {
-    const res = await fetch(`${API}/raw`);
+    const res = await safeFetch(`${API}/raw`);
     if (!res.ok) return;
     setRawRows(await res.json());
   };
 
   const loadSettings = async () => {
-    const res = await fetch(`${API}/settings`);
+    const res = await safeFetch(`${API}/settings`);
     if (!res.ok) return;
     setSettings(await res.json());
   };
 
   const loadLogs = async () => {
-    const res = await fetch(`${API}/log`);
+    const res = await safeFetch(`${API}/log`);
     if (!res.ok) return;
     setLogs(await res.json());
   };
 
 
   useEffect(() => {
-    const run = async () => {
-      await Promise.all([
-        loadTransactions(),
-        loadCategories(),
-        loadSummary(),
-        loadInsights(),
-        loadMonthly(),
-        loadRaw(),
-        loadSettings(),
-        loadLogs(),
-        loadAccounts(),
-        loadBalanceAdjustments(),
-      ]);
-    };
-
-    run();
+    refreshAll();
     const interval = setInterval(loadLogs, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [refreshAll]);
 
   useEffect(() => {
     if (!adjAccountId && accounts.length) setAdjAccountId(accounts[0].id);
@@ -201,7 +243,7 @@ function App() {
     const form = new FormData();
     form.append('file', file);
     const endpoint = file.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : 'csv';
-    const res = await fetch(`${API}/imports/nordea/${endpoint}`, { method: 'POST', body: form });
+    const res = await safeFetch(`${API}/imports/nordea/${endpoint}`, { method: 'POST', body: form });
     if (!res.ok) {
       setStatus('Import epäonnistui.');
       setToast('Import epäonnistui');
@@ -220,13 +262,13 @@ function App() {
   };
 
   const clearAll = async () => {
-    await fetch(`${API}/debug/clear`, { method: 'POST' });
+    await safeFetch(`${API}/debug/clear`, { method: 'POST' });
     setStatus('Data tyhjennetty.');
     await refreshAll();
   };
 
   const clearImports = async () => {
-    await fetch(`${API}/debug/clear-imports`, { method: 'POST' });
+    await safeFetch(`${API}/debug/clear-imports`, { method: 'POST' });
     setStatus('Import-data tyhjennetty (kategoriat säilyivät).');
     await refreshAll();
   };
