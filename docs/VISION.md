@@ -1,41 +1,42 @@
 # Vision
 
-Finance-app is a **single-user, no-auth** personal finance tracker that you run locally (or on your home server).
+Finance-app is a **single-user, no-auth** personal finance tracker you run locally (or on your home server).
 
-Core idea: **easy import → automatic categorization → clear reports**, plus an **Analysis Copilot** that can answer questions and propose actions using strong, well-scoped tools over your data.
+Core promise: **easy import → automatic categorization → clear reports**, powered by an **Analysis Copilot**.
 
-## Product goals (what “done” looks like)
+## AI is core
+
+The **Analysis Copilot (AI)** is a *requirement* and the differentiator of this app.
+Without AI, the app still starts and lets you browse/edit data, but it is intentionally limited to **static browsing + manual edits**.
+
+## Product goals
 
 ### 1) Easy import
-- User can import a CSV/XLSX export with one click.
-- Import is **idempotent**: importing the same file again doesn’t corrupt results.
-- App shows a clear import result (rows imported/skipped, overlap detected).
+- One-click CSV/XLSX import (start with Nordea).
+- Import is **idempotent** and explainable (overlap detection, logs).
 
-### 2) Automatic categorization
-- Deterministic baseline first: default categories + rules/heuristics.
-- AI is an optional helper: suggests categories + reasons, but user stays in control.
-- User edits are remembered and turned into rules (so the same thing isn’t asked again).
+### 2) Automatic categorization (AI-first, rule-backed)
+- AI suggests categories with reasons, using your existing taxonomy.
+- Deterministic rules/heuristics provide baseline + fallback.
+- User decisions are remembered and turned into rules.
 
 ### 3) Clear reports
-- Simple dashboard: balances, net flow, runway, monthly overview.
-- Reports exclude transfers by default (but can be shown).
-- Insights highlight “what changed” and “why”, and link to the underlying transactions.
+- Dashboard: balances, net flow, runway, monthly overview.
+- Transfers excluded by default; always drill-down to evidence.
 
-### 4) Analysis Copilot (agent)
-The Copilot is not a chatbot wrapper. It is a **data analysis assistant** with explicit tools:
-- Query transactions/aggregates
-- Explain deltas/spikes with drill-down
-- Suggest rules and cleanup steps (requires user confirmation)
-- Run “what-if” simulations (budgeting/runway)
+### 4) Analysis Copilot tools
+Copilot must have explicit tools for:
+- querying transactions and aggregates
+- explaining spikes/deltas with evidence
+- proposing category rules and data cleanup steps (user confirms)
+- running small simulations (runway / what-if)
 
-The Copilot should always be:
-- Safe by default (no silent destructive changes)
-- Grounded in data (show evidence / linked transactions)
-- Deterministic where possible; AI only where it adds value
+## Model strategy
+- Prefer **newest/highest-quality models** for user-facing reasoning and Copilot analysis.
+- Use smaller/faster models for lightweight tasks (classification, formatting) when quality is sufficient.
 
-## Non-goals (for now)
-- Multi-user / auth
-- Mobile-first UI
+## Non-goals (now)
+- Multi-user/auth
 - Multi-currency
-- Bank sync via APIs (import files first)
+- Bank API sync (file import first)
 
