@@ -77,6 +77,12 @@ function formatDate(value: string | null) {
   return d.toLocaleDateString('fi-FI');
 }
 
+
+function showToast(setToast: (v: string) => void, msg: string, ms = 2400) {
+  setToast(msg);
+  window.setTimeout(() => setToast(''), ms);
+}
+
 function formatAmount(amount: number | null | undefined, currency = 'EUR') {
   if (amount === null || amount === undefined) return '—';
   return `${amount.toFixed(2)} ${currency}`;
@@ -303,7 +309,7 @@ function App() {
     }
     setAdjAmount('');
     setAdjReason('');
-    setToast('Saldo-oikaisu lisätty');
+    showToast(setToast, 'Saldo-oikaisu lisätty');
     await Promise.all([loadBalanceAdjustments(), loadSummary(), loadAccounts()]);
   };
 
@@ -313,7 +319,7 @@ function App() {
       setToast('Saldo-oikaisun poisto epäonnistui');
       return;
     }
-    setToast('Saldo-oikaisu poistettu');
+    showToast(setToast, 'Saldo-oikaisu poistettu');
     await Promise.all([loadBalanceAdjustments(), loadSummary(), loadAccounts()]);
   };
 
@@ -341,7 +347,7 @@ function App() {
         }),
       });
       if (!res.ok) {
-        setToast('AI-ehdotus epäonnistui');
+        showToast(setToast, 'AI-ehdotus epäonnistui', 4000);
         return;
       }
       const data = await res.json();
@@ -371,10 +377,10 @@ function App() {
     });
     setSavingSettings(false);
     if (!res.ok) {
-      setToast('Asetusten tallennus epäonnistui');
+      showToast(setToast, 'Asetusten tallennus epäonnistui', 4000);
       return;
     }
-    setToast('Asetukset tallennettu');
+    showToast(setToast, 'Asetukset tallennettu');
     setOpenaiKey('');
     await Promise.all([loadMonthly(), loadTransactions(), loadSettings()]);
   };
@@ -387,9 +393,9 @@ function App() {
     });
     if (res.ok) {
       await loadCategories();
-      setToast('Kategoria lisätty');
+      showToast(setToast, 'Kategoria lisätty');
     } else {
-      setToast('Kategorian lisäys epäonnistui');
+      showToast(setToast, 'Kategorian lisäys epäonnistui', 4000);
     }
   };
 
@@ -401,9 +407,9 @@ function App() {
     });
     if (res.ok) {
       await loadCategories();
-      setToast('Kategoria nimettiin');
+      showToast(setToast, 'Kategoria nimettiin');
     } else {
-      setToast('Kategorian nimeäminen epäonnistui');
+      showToast(setToast, 'Kategorian nimeäminen epäonnistui', 4000);
     }
   };
 
@@ -416,9 +422,9 @@ function App() {
     } else {
       const data = await res.json().catch(() => ({}));
       if (data.error === 'cannot_delete_misc') {
-        setToast('Muut ja epäselvät -kategoriaa ei voi poistaa');
+        showToast(setToast, 'Muut ja epäselvät -kategoriaa ei voi poistaa', 4000);
       } else {
-        setToast('Kategorian poisto epäonnistui');
+        showToast(setToast, 'Kategorian poisto epäonnistui', 4000);
       }
     }
   };
