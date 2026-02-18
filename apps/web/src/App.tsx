@@ -165,23 +165,24 @@ function App() {
     setLogs(await res.json());
   };
 
-  const refreshAll = async () => {
-    await Promise.all([
-      loadTransactions(),
-      loadCategories(),
-      loadSummary(),
-      loadInsights(),
-      loadMonthly(),
-      loadRaw(),
-      loadSettings(),
-      loadLogs(),
-      loadAccounts(),
-      loadBalanceAdjustments(),
-    ]);
-  };
 
   useEffect(() => {
-    refreshAll();
+    const run = async () => {
+      await Promise.all([
+        loadTransactions(),
+        loadCategories(),
+        loadSummary(),
+        loadInsights(),
+        loadMonthly(),
+        loadRaw(),
+        loadSettings(),
+        loadLogs(),
+        loadAccounts(),
+        loadBalanceAdjustments(),
+      ]);
+    };
+
+    run();
     const interval = setInterval(loadLogs, 5000);
     return () => clearInterval(interval);
   }, []);
