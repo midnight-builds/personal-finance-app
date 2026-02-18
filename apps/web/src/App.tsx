@@ -180,14 +180,11 @@ function App() {
     ]);
   };
 
-  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     refreshAll();
     const interval = setInterval(loadLogs, 5000);
     return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  /* eslint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
     if (!adjAccountId && accounts.length) setAdjAccountId(accounts[0].id);
