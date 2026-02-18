@@ -1,63 +1,38 @@
-DATA_MODEL.md
-# Datamalli
+# Data model
 
-Tässä kuvataan keskeiset käsitteet. Tarkat kentät päätetään toteutusvaiheessa, mutta rajapintojen tarkoitus lukitaan tässä.
+Single-user, no-auth. Data is stored locally in SQLite.
 
 ## ImportSession
-
-ImportSession vastaa yhtä käyttäjän tekemää importia.
-Se sisältää lähdebankin nimen, formaatin, tiedoston checksumit ja rivimäärät.
-ImportSession sisältää myös overlap-avaimen (esim. checksum + tilin IBAN + rivimäärä + aikaväli),
-jonka avulla tunnistetaan identtiset tai selkeästi päällekkäiset importit.
+Represents one import action.
 
 ## RawTransaction
-
-RawTransaction vastaa yhtä riviä CSV:stä tai XLSX:stä.
-Se säilyttää alkuperäiset kentät JSON blobina.
-Se sisältää myös kevyet indeksikentät, kuten summa ja päivämäärä jos saatavilla.
+Original row preserved as JSON for auditability.
 
 ## NormalizedTransaction
-
-NormalizedTransaction on sovelluksen sisäinen yhtenäinen tapahtumamalli.
-Se sisältää tapahtumapäivän, kirjauspäivän jos erikseen, summan EUR valuutassa, vastapuolen nimen, kuvauksen, tilin tunnisteen ja viitteen lähteeseen.
-Se sisältää linkin RawTransactioniin auditointia varten.
-Summan etumerkki määrittää suunnan: negatiivinen = meno, positiivinen = tulo.
+Canonical transaction record:
+- booking_date
+- amount (+/-)
+- counterparty
+- description
+- account
+- link to RawTransaction
 
 ## TransactionGroup
-
-TransactionGroup kokoaa yhteen päällekkäiset tapahtumat (deduplikointi).
-Yksi group edustaa samaa tapahtumaa useissa importeissa, eikä sisällä siirtolinkitystä.
-Raportointi käyttää groupin "kanonista" tapahtumaa tai groupin aggregoitua näkymää.
+Groups duplicates across overlapping imports.
 
 ## TransferLink
+Links two transactions that are the two sides of an account-to-account transfer.
 
-TransferLink yhdistää kahden tilin välisen siirron.
-Se sisältää linkit molempiin NormalizedTransaction riveihin sekä varmuusluokan.
-TransferLink ei ole TransactionGroupin alityyppi, vaan erillinen linkki kahden tapahtuman välillä.
+## Account
+Bank/checking/savings/credit. (No multi-user ownership model for now.)
 
-## Account ja HouseholdMember
-
-Account kuvaa tiliä ja sen tyyppiä, kuten käyttötili, säästötili, luottokortti. Käyttäjä voi nimetä tilin uudelleen UI:ssa.
-HouseholdMember kuvaa omistajaa.
-
-## Category ja CategorizationDecision
-
-Category on käyttäjän luoma tai oletuskategoria.
-CategorizationDecision tallentaa tapahtumalle valitun kategorian ja lähteen, joka voi olla sääntö, AI ehdotus tai käyttäjän päätös.
+## Category / CategorizationDecision
+Decision history for category assignments.
 
 ## CategoryRule
+Learned rule: pattern → category.
 
-CategoryRule on oppiva sääntö, joka syntyy AI- tai käyttäjäpäätöksestä (pattern counterparty/description -> kategoria, match_field, priority).
+## BalanceSnapshot / BalanceAdjustment
+- Snapshot: imported daily balance.
+- Adjustment: user correction that affects reporting balances forward from a date.
 
-## ClarificationTicket
-
-ClarificationTicket on sisäinen tiketöinti epäselville tapahtumille tai ryhmille.
-Ticket sisältää kysymyksen, AI ehdotukset, käyttäjän vastauksen ja vaikutuksen sääntöihin,
-sekä tilan (avoin, ratkaistu, ohitettu).
-
-## BalanceSnapshot ja BalanceAdjustment
-
-BalanceSnapshot tallentaa exportista löydetyn saldon; yksi rivi per tili per päivä (uusin korvaa vanhan).
-BalanceAdjustment on käyttäjän tekemä saldokorjaus, jos data on puutteellinen tai saldo ei täsmää.
-BalanceAdjustment on tarkoituksella yksinkertainen: se on "nollausmerkintä", joka korjaa erotuksen
-siitä päivästä eteenpäin ilman että yksittäisiä tapahtumia muutetaan.

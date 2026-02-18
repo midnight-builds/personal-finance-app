@@ -1,28 +1,31 @@
-UI.md
-# Web käyttöliittymä
+# UI
 
-UI:n ensimmäinen versio toimii työpöydällä.
+Desktop-first UI is enough.
 
-## Päänäkymät
+## Core screens
 
-Import näkymä, jossa valitaan pankkiadapteri ja tuodaan CSV tai XLSX.
+### Dashboard (default)
+- Import CTA + last import result
+- Balance cards + net (30d) + runway
+- Monthly overview (last N periods)
+- Insights list
 
-Tapahtumanäkymä, jossa on suodatus tileittäin, kuukausittain ja kategorioittain. Siirrot voi näyttää tai piilottaa raportoinnissa.
+### Transactions
+- Transaction list with:
+  - category dropdown
+  - AI suggest button (optional)
+  - transfer chips
+  - duplicate/group chips
+- Toggle: show/hide transfers (default: hide)
 
-Tapahtumariveillä on kategoriapudotus ja AI-nappi, joka ehdottaa kategoriaa valmiista listasta. Toistuvat tapahtumat merkitään chipillä.
+### Categories
+- Edit default categories
+- Bulk edit / assign categories
+- Rules view (what rule matched + ability to edit priority)
 
-Saldo- ja kuukausiyhteenveto kortteina: kokonaissaldo, nettot 30 pv (siirroilla ja ilman), runway sekä 6 kk tulo/meno/netto.
+### Copilot (later)
+- A panel that can run analysis actions:
+  - “Explain why my net changed last month”
+  - “Suggest top 5 category rules I should create”
+  - “Show recurring expenses I can cut”
 
-Tililista kortissa: tilin nimi on muokattavissa suoraan.
-
-Kategorianäkymä (pohjana): kategoriat ja käyttö; AI luo sääntöjä käyttäjän valinnoista.
-
-Selvennysnäkymä, jossa käsitellään ClarificationTicketit.
-
-Insight näkymä, jossa havaintoja voi avata ja nähdä taustatapahtumat.
-
-Ennustenäkymä, jossa näkyy trendi, kausipiikit ja arvioitu kehityssuunta.
-
-## Minimivaade ensimmäiselle toimitukselle
-
-Import toimii yhdelle pankille ja tapahtumat näkyvät listassa.

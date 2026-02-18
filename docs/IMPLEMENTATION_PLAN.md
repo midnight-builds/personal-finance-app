@@ -1,26 +1,40 @@
-IMPLEMENTATION_PLAN.md
-# Toteutussuunnitelma vaiheittain
+# Implementation plan (roadmap)
 
-**Valmis:** Vaihe 1  
-- Repo, Fastify+TS backend, React+Vite frontend, SQLite tietokanta.  
-- Yksi pankki (Nordea) CSV/XLSX import, Raw/Normalized talteen.  
-- UI: import ja tapahtumalista.
+This is a hobby project: ship iteratively, keep CI green, avoid heavy process.
 
-**Valmis:** Vaihe 2  
-- Deduplikointi (päivä+summa+vastapuoli), TransactionGroup.  
-- Tilisiirtolinkitys, siirtosuodatus UI:ssa, siirrot pois netto/insights-laskennasta.
+## Milestones
 
-**Valmis:** Vaihe 3 (perus)  
-- Kategoriat, oletuslista, sääntömoottori + heuristiikat.  
-- AI-kategoriasuositus (gpt-4o-mini), käyttäjän päätökset luovat CategoryRulen.  
-- Kategoriavalinta UI:ssa + AI-nappi, debug-tyhjennykset, tilien uudelleennimeäminen.
+### M0: Foundations
+- Repo hygiene + docs/runbook
+- One-command dev start
+- Minimal CI
 
-**Käynnissä:** Vaihe 4 (osa toteutettu)  
-- Insightit: toistuvat pienet ostot, nousevat kulukategoriat.  
-- Saldo- ja kuukausiyhteenvedot, siirrot pois netto-luvuista.  
-- Toistuvuuden tunnistus (kuukausittaiset vastapuoli+summa) merkitty riveille.
-- Seuraavaksi: tarkempi toistuvuus (päivittäinen vs. kuukausi), ennusteen perusrakenne (runway+kausipiikit).
+### M1: Import + data model
+- Import pipeline (raw → normalized)
+- Idempotency + grouping + transfer linking
+- Balance snapshots + adjustments
 
-**Tulossa:** Vaihe 5  
-- Export/backup, asetukset (API-avaimet, valuutta-asetukset).  
-- ClarificationTicket UI, insightien laajennus, ennusteen kausikomponentti ja visualisointi.
+### M2: Categorization
+- Default categories + UI editing
+- Rules + decisions → rules
+- Optional AI suggestions (validated)
+
+### M3: Insights v1
+- A small set of genuinely useful insights
+- Drill-down to the underlying transactions
+- Correctness tests for the insight logic
+
+### M4: Reporting + export
+- Monthly summary / reporting views
+- CSV export
+
+### M5: Hardening
+- Backups/restore story
+- Secrets/env handling
+- Performance and UX polish
+
+## Working principles
+- Deterministic first; AI as an assist.
+- “Explainable by default” (reports/insights link to data).
+- Single-user, no-auth.
+
