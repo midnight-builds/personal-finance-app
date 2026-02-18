@@ -2,6 +2,9 @@
 
 This project is **single-user** and runs without authentication.
 
+## Core promise
+Easy import → automatic categorization → clear reports, powered by an **AI Analysis Copilot**.
+
 ## Functional
 
 ### Import
@@ -10,11 +13,13 @@ This project is **single-user** and runs without authentication.
 - Normalize into a canonical transaction schema.
 - Detect overlapping imports and dedupe/group without deleting data.
 
-### Categorization
-- Default categories (seed list).
+### Categorization (AI-required)
+- Default categories (seed list) exist.
 - User can change a transaction category.
-- Rule engine: counterparty/description/amount match → category.
-- Optional AI category suggestion using existing categories (validated output).
+- AI can suggest categories + reasons using existing categories.
+- Rule engine stores user decisions as rules so future categorization improves.
+
+**Fallback behavior:** If AI is unavailable (missing key / API down), the app still runs but categorization becomes mostly manual + rules.
 
 ### Transfers / duplicates
 - Detect account-to-account transfers.
@@ -25,16 +30,18 @@ This project is **single-user** and runs without authentication.
 - Dashboard: balances, net (30d), runway, monthly overview.
 - Insights: recurring/spikes/uncategorized + recommendations.
 
-### Copilot
-- Provide analysis workflows (tools) that the Copilot can call.
-- Copilot output must be explainable: evidence + links back to transactions.
+### Copilot (AI-required)
+- Copilot can answer questions about your finances using explicit tools (queries/aggregations).
+- Copilot outputs must be explainable: evidence + links back to transactions.
+
+**Fallback behavior:** Without AI, Copilot UI becomes read-only/help text (no analysis runs).
 
 ## Non-functional
 - Desktop web UI is sufficient.
-- Local-first: everything local except optional OpenAI calls.
+- Local-first: everything local except OpenAI calls.
 - Scales to years of transactions (SQLite ok).
 
 ## Privacy
-- If AI is used, send only the minimum required fields.
+- If AI is used, send only minimum required fields.
 - Never send raw full exports by default.
 

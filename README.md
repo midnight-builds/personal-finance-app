@@ -2,7 +2,7 @@
 
 Single-user, no-auth personal finance tracker.
 
-Goal: **easy import → automatic categorization → clear reports**, plus an **Analysis Copilot** that can analyze your data using strong tools (not just chat).
+Goal: **easy import → automatic categorization → clear reports**, powered by an **AI Analysis Copilot**.
 
 - Product vision: `docs/VISION.md`
 - Roadmap: `docs/IMPLEMENTATION_PLAN.md`
@@ -17,21 +17,15 @@ npm run dev
 - Web UI: http://localhost:5173/
 - API: http://localhost:3001/
 
-## What you can do (today)
-- Import Nordea CSV/XLSX
-- See transactions + transfers (transfers hidden by default)
-- Basic monthly/net/runway summary
-- Balance snapshots + balance adjustments
-- Insights v1 (incremental)
+## AI requirement
+This project assumes AI is available (via `OPENAI_API_KEY`).
+
+Fallback behavior: if AI is unavailable, the app still starts and acts as a mostly static browser/manual editor, but Copilot and AI suggestions are disabled.
 
 ## Notes
 
 ### Data / DB
 - Default SQLite path: `apps/api/data/finance.db` (configurable via `DB_PATH`).
-
-### Optional AI features
-- AI features require `OPENAI_API_KEY`.
-- If `OPENAI_API_KEY` is missing, the app still runs; AI calls return a clear error.
 
 ### Running on your-server and using the UI locally
 If you run the dev server on your-server, use port-forwarding:
