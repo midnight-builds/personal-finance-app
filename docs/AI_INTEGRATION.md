@@ -1,21 +1,19 @@
-AI_INTEGRATION.md
-# OpenAI integraatio
+# AI integration
 
-OpenAI API:ta käytetään analyysin tukena, ei peruslaskennan korvaajana.
+AI is optional. The app must remain useful without it.
 
-## Käyttökohteet
+## Primary use (now)
+- Category suggestion when rules/heuristics are unsure.
 
-Tapahtuman kategorian ehdotus silloin kun sääntömoottori tai heuristiikka ei ole varma (gpt-4o-mini).
-AI käyttää olemassa olevaa kategorialistaa ja voi ehdottaa uutta kategoriaa; UI valitsee automaattisesti parhaimman vaihtoehdon.
-Muut AI-käytöt (selvennykset, insight-tekstit, vapaa kysely) ovat backlogissa.
+Contract:
+- Input: minimal fields (counterparty, description, amount, currency) + existing categories.
+- Output: validated JSON with mode + existing category ids only (or options).
 
-## Rajoitukset
+## Copilot (later)
+- The Copilot calls deterministic tools (queries/aggregations) and uses AI for:
+  - summarization
+  - prioritization
+  - rule proposals
 
-Muu laskenta tehdään paikallisesti.
-OpenAI:lle lähetetään vastapuoli, kuvaus, summa ja valuutta. Käytetään Responses API:a (gpt-4o-mini) ja parsitaan JSON output_text.
-Ulostulo tarkistetaan: mode = existing/new/options/none; categoryId hyväksytään vain nykyisestä listasta.
+Copilot must always link answers back to data (transaction ids / drill-down).
 
-## Selvennysten tallennus
-
-Käyttäjän valinnat tallennetaan CategorizationDecisioniin ja luovat CategoryRulen (pattern counterparty/description -> kategoria),
-joten tulevat tapahtumat ohjautuvat tämän perusteella ilman että samaa kysytään uudelleen.

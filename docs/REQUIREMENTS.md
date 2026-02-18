@@ -1,25 +1,40 @@
-REQUIREMENTS.md
-# Vaatimukset
+# Requirements
 
-## Toiminnalliset vaatimukset
+This project is **single-user** and runs without authentication.
 
-Sovellus tukee CSV ja XLSX importteja.
-Sovellus tukee useita tilejä ja tileihin liitettävät omistajat, kuten puoliso ja luottokortit.
-Sovellus tunnistaa tilien väliset siirrot ja esittää ne järkevästi.
-Sovellus tunnistaa päällekkäiset importit ja deduplikoi tapahtumat loogisesti ilman datan hävittämistä.
-Sovellus kategorisoi tapahtumat, ja käyttäjä voi korjata kategorian.
-Sovellus tallentaa käyttäjän selvennykset ja käyttää niitä tulevassa luokittelussa.
-Sovellus tuottaa kuukausinäkymät, trendit, poikkeamat, toistuvuudet ja kausivaihtelut.
-Sovellus tuottaa ennusteen ja “kehityssuunta” näkymän.
-Sovellus tukee saldoa jos se on exportissa, ja mahdollistaa saldokorjaukset.
+## Functional
 
-## Ei toiminnalliset vaatimukset
+### Import
+- Support CSV and XLSX imports (start with Nordea).
+- Store raw rows for auditability.
+- Normalize into a canonical transaction schema.
+- Detect overlapping imports and dedupe/group without deleting data.
 
-Sovellus toimii työpöydän selaimella.
-Sovellus toimii kokonaan paikallisesti, pois lukien OpenAI API kutsut.
-Sovelluksen tulee kestää kasvava datamäärä vuosien tapahtumiin asti.
+### Categorization
+- Default categories (seed list).
+- User can change a transaction category.
+- Rule engine: counterparty/description/amount match → category.
+- Optional AI category suggestion using existing categories (validated output).
 
-## Data ja yksityisyys
+### Transfers / duplicates
+- Detect account-to-account transfers.
+- Transfers do not affect net/insights by default; user can show them.
+- Duplicate imports are grouped (TransactionGroup) and presented clearly.
 
-OpenAI:lle lähetetään tapahtumista vain tarpeelliset kentät analyysin ja luokittelun kannalta.
-Sovellus säilyttää raakadatan auditointia varten.
+### Reporting
+- Dashboard: balances, net (30d), runway, monthly overview.
+- Insights: recurring/spikes/uncategorized + recommendations.
+
+### Copilot
+- Provide analysis workflows (tools) that the Copilot can call.
+- Copilot output must be explainable: evidence + links back to transactions.
+
+## Non-functional
+- Desktop web UI is sufficient.
+- Local-first: everything local except optional OpenAI calls.
+- Scales to years of transactions (SQLite ok).
+
+## Privacy
+- If AI is used, send only the minimum required fields.
+- Never send raw full exports by default.
+
