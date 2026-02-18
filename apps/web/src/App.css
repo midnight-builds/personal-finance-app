@@ -472,7 +472,8 @@ select {
 
 .settings-grid input[type="number"],
 .settings-grid input[type="password"] {
-  max-width: 180px;
+  width: 100%;
+  max-width: none;
 }
 
 .settings-actions {
@@ -519,4 +520,9 @@ label {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.12);
+}
+
+
+.settings-grid label {
+  min-width: 0;
 }
