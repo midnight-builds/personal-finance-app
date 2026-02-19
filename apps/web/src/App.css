@@ -338,6 +338,13 @@ h2 {
   color: #cbd5e1;
 }
 
+.tx-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 select,
 input[type="number"] {
   width: 100%;

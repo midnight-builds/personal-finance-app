@@ -429,6 +429,62 @@ function App() {
     }
   };
 
+
+  const visibleTransactions = useMemo(() => {
+    return transactions
+      .filter((tx) => showTransfers || !tx.isTransfer)
+      .filter((tx) => !txFilterIds || txFilterIds.includes(tx.id));
+  }, [transactions, showTransfers, txFilterIds]);
+  function csvEscape(value: unknown) {
+    const s = value === null || value === undefined ? "" : String(value);
+    if (/["\n\r,;]/.test(s)) return "\"" + s.replace(/"/g, "\"\"") + "\"";
+    return s;
+  }
+
+  const downloadTransactionsCsv = () => {
+    const headers = [
+      "Päivä",
+      "Summa",
+      "Valuutta",
+      "Vastapuoli",
+      "Kuvaus",
+      "Kategoria",
+      "Tili",
+      "Onko tilisiirto",
+      "Tilisiirron suunta",
+    ];
+
+    const lines = [headers.join(",")];
+    for (const tx of visibleTransactions) {
+      lines.push(
+        [
+          csvEscape(tx.bookingDate ?? ""),
+          csvEscape(tx.amount),
+          csvEscape(tx.currency),
+          csvEscape(tx.counterpartyName ?? ""),
+          csvEscape(tx.description ?? ""),
+          csvEscape(tx.categoryName ?? ""),
+          csvEscape(tx.account?.name ?? ""),
+          csvEscape(tx.isTransfer ? "kyllä" : "ei"),
+          csvEscape(tx.transfer?.direction ?? ""),
+        ].join(",")
+      );
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "tapahtumat-" + today + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast(setToast, "CSV ladattu (" + visibleTransactions.length + " riviä)");
+  };
+
+
   const analyticsView = (
     <>
       <section className={`hero hero-${heroMood}`}>
@@ -573,10 +629,13 @@ function App() {
             <p className="eyebrow">Tapahtumat</p>
             <h2>Listaus</h2>
           </div>
-          <label className="toggle">
-            <input type="checkbox" checked={showTransfers} onChange={(e) => setShowTransfers(e.target.checked)} />
-            Näytä tilisiirrot
-          </label>
+          <div className="tx-actions">
+            <button className="mini" type="button" onClick={downloadTransactionsCsv}>Lataa CSV</button>
+            <label className="toggle">
+              <input type="checkbox" checked={showTransfers} onChange={(e) => setShowTransfers(e.target.checked)} />
+              Näytä tilisiirrot
+            </label>
+          </div>
         </div>
         {txFilterIds && (
           <div className="filter-banner">
@@ -593,10 +652,7 @@ function App() {
             <span>Kategoria</span>
             <span>Tili</span>
           </div>
-          {transactions
-            .filter((tx) => showTransfers || !tx.isTransfer)
-            .filter((tx) => !txFilterIds || txFilterIds.includes(tx.id))
-            .map((tx) => (
+          {visibleTransactions.map((tx) => (
               <div className="row" key={tx.id}>
                 <span>{formatDate(tx.bookingDate)}</span>
                 <span className={tx.amount < 0 ? 'neg' : 'pos'}>{formatAmount(tx.amount, tx.currency)}</span>
