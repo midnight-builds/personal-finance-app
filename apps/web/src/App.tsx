@@ -93,6 +93,9 @@ function App() {
   const [status, setStatus] = useState('');
   const [toast, setToast] = useState('');
   const [tab, setTab] = useState<'analytics' | 'raw' | 'settings'>('analytics');
+  useEffect(() => {
+    setToast('');
+  }, [tab]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -252,7 +255,7 @@ function App() {
     const res = await safeFetch(`${API}/imports/nordea/${endpoint}`, { method: 'POST', body: form });
     if (!res.ok) {
       setStatus('Import epäonnistui.');
-      setToast('Import epäonnistui');
+      showToast(setToast, 'Import epäonnistui', 4000);
       return;
     }
     const payload = await res.json();
@@ -262,8 +265,7 @@ function App() {
     const skippedNote = payload.skippedCount ? `, ${payload.skippedCount} riviä ohitettiin` : '';
     const msg = `Import ok (${endpoint.toUpperCase()}): ${payload.normalizedCount} riviä${overlapNote}${skippedNote}`;
     setStatus(msg);
-    setToast(msg);
-    setTimeout(() => setToast(''), 2400);
+    showToast(setToast, msg);
     await refreshAll();
   };
 
@@ -282,15 +284,15 @@ function App() {
   const createBalanceAdjustmentApi = async () => {
     const amountNum = Number(adjAmount);
     if (!adjAccountId) {
-      setToast('Valitse tili');
+      showToast(setToast, 'Valitse tili');
       return;
     }
     if (!adjDate) {
-      setToast('Päivä puuttuu');
+      showToast(setToast, 'Päivä puuttuu');
       return;
     }
     if (!Number.isFinite(amountNum)) {
-      setToast('Summa ei ole numero');
+      showToast(setToast, 'Summa ei ole numero');
       return;
     }
     const res = await fetch(`${API}/balance-adjustments`, {
@@ -304,7 +306,7 @@ function App() {
       }),
     });
     if (!res.ok) {
-      setToast('Saldo-oikaisun lisäys epäonnistui');
+      showToast(setToast, 'Saldo-oikaisun lisäys epäonnistui', 4000);
       return;
     }
     setAdjAmount('');
@@ -316,7 +318,7 @@ function App() {
   const deleteBalanceAdjustmentApi = async (id: string) => {
     const res = await fetch(`${API}/balance-adjustments/${id}`, { method: 'DELETE' });
     if (!res.ok) {
-      setToast('Saldo-oikaisun poisto epäonnistui');
+      showToast(setToast, 'Saldo-oikaisun poisto epäonnistui', 4000);
       return;
     }
     showToast(setToast, 'Saldo-oikaisu poistettu');
@@ -353,16 +355,16 @@ function App() {
       const data = await res.json();
       if (data.mode === 'existing' && data.categoryId) {
         await changeCategory(tx.id, data.categoryId);
-        setToast(`AI valitsi: ${data.categoryName}`);
+        showToast(setToast, `AI valitsi: ${data.categoryName}`);
         return;
       }
       if (data.mode === 'options' && data.options?.length) {
         const best = data.options[0];
         await changeCategory(tx.id, best.categoryId);
-        setToast(`AI ehdotti: ${best.categoryName}`);
+        showToast(setToast, `AI ehdotti: ${best.categoryName}`);
         return;
       }
-      setToast('AI ei löytänyt selkeää kategoriaa');
+      showToast(setToast, 'AI ei löytänyt selkeää kategoriaa');
     } finally {
       setAiLoading(null);
     }
@@ -418,7 +420,7 @@ function App() {
     if (res.ok) {
       await loadCategories();
       await loadTransactions();
-      setToast('Kategoria poistettu ja rivit siirretty');
+      showToast(setToast, 'Kategoria poistettu ja rivit siirretty');
     } else {
       const data = await res.json().catch(() => ({}));
       if (data.error === 'cannot_delete_misc') {
@@ -608,7 +610,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setTxFilterIds(ins.transactionIds);
-                      setToast("Suodatettu insightin tapahtumiin");
+                      showToast(setToast, "Suodatettu insightin tapahtumiin");
                     }}
                   >
                     Näytä tapahtumat
@@ -785,7 +787,7 @@ function App() {
                   body: JSON.stringify({ ...settings, openaiApiKey: '' }),
                 });
                 setSavingSettings(false);
-                setToast('AI-avain tyhjennetty');
+                showToast(setToast, 'AI-avain tyhjennetty');
                 await loadSettings();
               }}
             >
