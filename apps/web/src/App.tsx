@@ -833,7 +833,7 @@ function App() {
                 <h3>Lisää, nimeä, poista</h3>
               </div>
             </div>
-            <div className="table mini">
+            <div className="table mini two-col">
               <div className="row mini header">
                 <span>Nimi</span>
                 <span>Toiminnot</span>
@@ -898,7 +898,7 @@ function App() {
                 <h3>Nimeä tilit uudelleen</h3>
               </div>
             </div>
-            <div className="table mini">
+            <div className="table mini two-col">
               <div className="row mini header">
                 <span>Tili</span>
                 <span>Saldo</span>

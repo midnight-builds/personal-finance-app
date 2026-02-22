@@ -324,6 +324,10 @@ h2 {
   grid-template-columns: 1fr 140px 140px 140px 80px;
 }
 
+.table.mini.two-col .row {
+  grid-template-columns: 1fr 140px;
+}
+
 .row.mini {
   background: transparent;
   padding: 6px 0;
@@ -499,6 +503,9 @@ label {
 
 @media (max-width: 960px) {
   .hero {
+    grid-template-columns: 1fr;
+  }
+  .settings-layout {
     grid-template-columns: 1fr;
   }
   .row {
