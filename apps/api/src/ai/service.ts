@@ -122,7 +122,10 @@ export async function suggestCategory(options: {
   }
 
   if (!provider) {
-    const out = { suggestion: fallbackRules(req), meta: { provider: 'rules', warning: 'no_provider' } };
+    const out: AiCategorySuggestionResponse = {
+      suggestion: fallbackRules(req),
+      meta: { provider: 'rules', warning: 'no_provider' },
+    };
     if (cache && key) cache.set(key, out);
     return out;
   }
