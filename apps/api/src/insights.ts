@@ -212,7 +212,7 @@ function monthlySpike(): Insight[] {
 
   const idsRows = db
     .prepare(
-      `WITH tx AS (
+      `WITH tx_all AS (
          SELECT id,
                 counterparty_name AS name,
                 amount,
@@ -222,8 +222,8 @@ function monthlySpike(): Insight[] {
          WHERE booking_date IS NOT NULL
            AND counterparty_name IS NOT NULL
            AND amount < 0
-           AND booking_date >= date('now', 'start of month', '-1 month')
            AND booking_date < date('now', 'start of month')
+           AND booking_date >= date('now', 'start of month', '-13 months')
            AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
        ),
        diffs AS (
@@ -231,22 +231,29 @@ function monthlySpike(): Insight[] {
                 amount,
                 d,
                 (julianday(d) - julianday(LAG(d) OVER (PARTITION BY name, amount ORDER BY d))) AS dd
-         FROM tx
+         FROM tx_all
        ),
        recurring AS (
+         -- Recurring merchant heuristic: same merchant shows up in >=3 distinct months.
+         -- (We intentionally join by name only here; amount equality can be brittle with floats and price changes.)
          SELECT name,
-                amount,
                 COUNT(*) AS n,
                 COUNT(DISTINCT substr(d, 1, 7)) AS monthCnt
          FROM diffs
-         GROUP BY name, amount
+         GROUP BY name
          HAVING n >= 3
+       ),
+       tx_last_month AS (
+         SELECT *
+         FROM tx_all
+         WHERE booking_date >= date('now', 'start of month', '-1 month')
+           AND booking_date < date('now', 'start of month')
        )
-       SELECT tx.id as id
-       FROM tx
-       LEFT JOIN recurring rec ON rec.name = tx.name AND rec.amount = tx.amount
+       SELECT tx_last_month.id as id
+       FROM tx_last_month
+       LEFT JOIN recurring rec ON rec.name = tx_last_month.name
        WHERE COALESCE(rec.monthCnt, 0) < 3
-       ORDER BY ABS(tx.amount) DESC
+       ORDER BY ABS(tx_last_month.amount) DESC
        LIMIT 10`
     )
     .all() as Array<any>;
