@@ -1,7 +1,5 @@
 import { test, expect } from '@playwright/test';
 
-type RouteFulfill = Parameters<Parameters<typeof test>[0]>;
-
 function json(body: unknown) {
   return { status: 200, contentType: 'application/json', body: JSON.stringify(body) };
 }
