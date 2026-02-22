@@ -25,7 +25,7 @@ export function listTransactions() {
          SELECT counterparty_name,
                 amount,
                 COUNT(*) AS n,
-                COUNT(DISTINCT strftime('%Y-%m', d)) AS monthCnt,
+                COUNT(DISTINCT substr(d, 1, 7)) AS monthCnt,
                 AVG(dd) AS avgDiff,
                 SUM(CASE WHEN dd BETWEEN 0.5 AND 1.5 THEN 1 ELSE 0 END) AS dailySteps,
                 SUM(CASE WHEN dd BETWEEN 6.0 AND 8.0 THEN 1 ELSE 0 END) AS weeklySteps

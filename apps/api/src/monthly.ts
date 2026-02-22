@@ -40,7 +40,7 @@ export function getMonthlyOverview(limit = 6) {
          GROUP BY w.n
        )
        SELECT
-         strftime('%Y-%m', date('now', printf('-%d months', n))) AS label,
+         substr(date('now', printf('-%d months', n)), 1, 7) AS label,
          income,
          expense,
          net

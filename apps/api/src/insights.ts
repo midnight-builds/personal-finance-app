@@ -181,12 +181,12 @@ function monthlySpike(): Insight[] {
          SELECT name,
                 amount,
                 COUNT(*) AS n,
-                COUNT(DISTINCT strftime('%Y-%m', d)) AS monthCnt
+                COUNT(DISTINCT substr(d, 1, 7)) AS monthCnt
          FROM diffs
          GROUP BY name, amount
          HAVING n >= 3
        )
-       SELECT strftime('%Y-%m', tx.booking_date) as ym, SUM(tx.amount) as s
+       SELECT substr(date(tx.booking_date), 1, 7) as ym, SUM(tx.amount) as s
        FROM tx
        LEFT JOIN recurring rec ON rec.name = tx.name AND rec.amount = tx.amount
        WHERE COALESCE(rec.monthCnt, 0) < 3
@@ -237,7 +237,7 @@ function monthlySpike(): Insight[] {
          SELECT name,
                 amount,
                 COUNT(*) AS n,
-                COUNT(DISTINCT strftime('%Y-%m', d)) AS monthCnt
+                COUNT(DISTINCT substr(d, 1, 7)) AS monthCnt
          FROM diffs
          GROUP BY name, amount
          HAVING n >= 3
