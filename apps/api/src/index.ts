@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
@@ -95,7 +96,7 @@ server.get('/settings', async () => getSettings());
 server.get('/accounts', async () => listAccounts());
 server.post('/settings', async (request, reply) => {
   const body = request.body as any;
-  const { payday, paydayFlexDays, openaiApiKey } = body ?? {};
+  const { payday, paydayFlexDays } = body ?? {};
   const paydayNum = Number(payday);
   const flexNum = Number(paydayFlexDays);
   if (!Number.isInteger(paydayNum) || paydayNum < 1 || paydayNum > 28) {
@@ -103,11 +104,7 @@ server.post('/settings', async (request, reply) => {
   }
   if (!Number.isInteger(flexNum) || flexNum < 0 || flexNum > 7) {
     return reply.code(400).send({ error: 'flex_invalid' });
-  }
-  if (openaiApiKey !== undefined && typeof openaiApiKey !== 'string') {
-    return reply.code(400).send({ error: 'openai_invalid' });
-  }
-  updateSettings({ payday: paydayNum, paydayFlexDays: flexNum, openaiApiKey });
+  }  updateSettings({ payday: paydayNum, paydayFlexDays: flexNum });
   return reply.send({ ok: true });
 });
 

@@ -11,6 +11,8 @@ Goal: **easy import → automatic categorization → clear reports**, powered by
 
 ```bash
 npm ci
+cp .env.example .env
+# edit .env and set OPENAI_API_KEY
 npm run dev
 ```
 
@@ -18,7 +20,7 @@ npm run dev
 - API: http://localhost:3001/
 
 ## AI requirement
-This project assumes AI is available (via `OPENAI_API_KEY`).
+This project assumes AI is available (via `OPENAI_API_KEY`, loaded from the environment or a local `.env`).
 
 Fallback behavior: if AI is unavailable, the app still starts and acts as a mostly static browser/manual editor, but Copilot and AI suggestions are disabled.
 

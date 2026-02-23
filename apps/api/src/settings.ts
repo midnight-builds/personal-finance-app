@@ -27,16 +27,14 @@ function getRaw(): Record<string, any> {
 
 export function getSettings(): AppSettings {
   const raw = getRaw();
-  const envKey = process.env.OPENAI_API_KEY;
-  const storedKey = raw.openaiApiKey as string | undefined;
   return {
     payday: Number(raw.payday ?? defaults.payday),
     paydayFlexDays: Number(raw.paydayFlexDays ?? defaults.paydayFlexDays),
-    openaiConfigured: Boolean(storedKey && storedKey.length > 0) || Boolean(envKey),
+    openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
   };
 }
 
-export function updateSettings(input: Partial<AppSettings> & { openaiApiKey?: string }) {
+export function updateSettings(input: Pick<AppSettings, 'payday' | 'paydayFlexDays'>) {
   const current = getSettings();
   const next = { ...current, ...input } as AppSettings;
   const now = new Date().toISOString();
@@ -46,26 +44,9 @@ export function updateSettings(input: Partial<AppSettings> & { openaiApiKey?: st
   );
   stmt.run('payday', JSON.stringify(next.payday), now);
   stmt.run('paydayFlexDays', JSON.stringify(next.paydayFlexDays), now);
-  if (input.openaiApiKey !== undefined) {
-    const val = input.openaiApiKey;
-    if (val === null || val === '') {
-      db.prepare('DELETE FROM app_settings WHERE key = ?').run('openaiApiKey');
-    } else {
-      stmt.run('openaiApiKey', JSON.stringify(val), now);
-    }
-  }
   return next;
 }
 
 export function getOpenAIApiKey(): string | null {
-  const raw = getRaw();
-  if (raw.openaiApiKey) {
-    try {
-      return JSON.parse(raw.openaiApiKey as string);
-    } catch {
-      return String(raw.openaiApiKey);
-    }
-  }
-  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
-  return null;
+  return process.env.OPENAI_API_KEY || null;
 }

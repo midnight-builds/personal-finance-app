@@ -132,11 +132,14 @@ export function initDb() {
       FOREIGN KEY(account_id) REFERENCES accounts(id)
     );
 
+    
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    -- Secrets are not stored in DB; keep API keys in env only
+    DELETE FROM app_settings WHERE key = 'openaiApiKey';
 
     CREATE TABLE IF NOT EXISTS event_log (
       id TEXT PRIMARY KEY,
