@@ -28,6 +28,7 @@ Fallback behavior: if AI is unavailable, the app still starts and acts as a most
 
 ### Data / DB
 - Default SQLite path: `apps/api/data/finance.db` (configurable via `DB_PATH`).
+- Backup/restore: see `docs/BACKUP_RESTORE.md`
 
 ### Running on codexsrv and using the UI locally
 If you run the dev server on codexsrv, use port-forwarding:
