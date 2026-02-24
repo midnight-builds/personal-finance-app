@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
@@ -33,6 +36,28 @@ await server.register(multipart, {
 
 server.get('/health', async () => {
   return { status: 'ok' };
+});
+
+server.get('/backup', async (_request, reply) => {
+  const ts = new Date().toISOString().slice(0, 10);
+  const tmpPath = path.join(
+    os.tmpdir(),
+    'finance-backup-' + ts + '-' + Math.random().toString(16).slice(2) + '.db'
+  );
+  try {
+    db.exec(`VACUUM INTO '${tmpPath.replace(/'/g, "''")}';`);
+    const buf = fs.readFileSync(tmpPath);
+    reply
+      .header('content-type', 'application/x-sqlite3')
+      .header('content-disposition', 'attachment; filename=finance-backup-' + ts + '.db')
+      .send(buf);
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      // best-effort cleanup
+    }
+  }
 });
 
 async function readUpload(request: any) {

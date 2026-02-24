@@ -487,6 +487,30 @@ function App() {
   };
 
 
+
+  const downloadBackup = async () => {
+    const res = await safeFetch(`${API}/backup`);
+    if (!res.ok) {
+      showToast(setToast, 'Varmuuskopion lataus epäonnistui', 4000);
+      return;
+    }
+
+    const blob = await res.blob();
+    const cd = res.headers.get('content-disposition') || '';
+    const m = cd.match(/filename=([^;]+)/i);
+    const filename = (m?.[1] || 'finance-backup.db').replace(/"/g, '').trim();
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast(setToast, 'Varmuuskopio ladattu');
+  };
+
   const analyticsView = (
     <>
       <section className={`hero hero-${heroMood}`}>
@@ -774,6 +798,9 @@ function App() {
           <div className="settings-actions">
             <button type="button" onClick={saveSettings} disabled={savingSettings}>
               Tallenna asetukset
+            </button>
+            <button type="button" className="ghost" onClick={downloadBackup}>
+              Lataa varmuuskopio
             </button>
             <button
               type="button"
