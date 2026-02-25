@@ -488,27 +488,14 @@ function App() {
 
 
 
-  const downloadBackup = async () => {
-    const res = await safeFetch(`${API}/backup`);
-    if (!res.ok) {
-      showToast(setToast, 'Varmuuskopion lataus epäonnistui', 4000);
-      return;
-    }
-
-    const blob = await res.blob();
-    const cd = res.headers.get('content-disposition') || '';
-    const m = cd.match(/filename=([^;]+)/i);
-    const filename = (m?.[1] || 'finance-backup.db').replace(/"/g, '').trim();
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
+  const downloadBackup = () => {
+    // Let the browser handle Content-Disposition downloads (less memory vs fetching DB into JS).
+    const a = document.createElement("a");
+    a.href = API + "/backup";
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
-    showToast(setToast, 'Varmuuskopio ladattu');
+    showToast(setToast, "Varmuuskopion lataus käynnistetty");
   };
 
   const analyticsView = (
