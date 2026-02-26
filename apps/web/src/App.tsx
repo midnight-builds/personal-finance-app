@@ -495,7 +495,7 @@ function App() {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    showToast(setToast, "Varmuuskopion lataus käynnistetty");
+    showToast(setToast, "Varmuuskopion (.sqlite) lataus käynnistetty");
   };
 
   const analyticsView = (
@@ -787,7 +787,7 @@ function App() {
               Tallenna asetukset
             </button>
             <button type="button" className="ghost" onClick={downloadBackup}>
-              Lataa varmuuskopio
+              Lataa varmuuskopio (.sqlite)
             </button>
             <button
               type="button"

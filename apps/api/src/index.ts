@@ -42,14 +42,14 @@ server.get('/backup', async (_request, reply) => {
   const ts = new Date().toISOString().slice(0, 10);
   const tmpPath = path.join(
     os.tmpdir(),
-    'finance-backup-' + ts + '-' + Math.random().toString(16).slice(2) + '.db'
+    'finance-backup-' + ts + '-' + Math.random().toString(16).slice(2) + '.sqlite'
   );
   try {
     db.exec(`VACUUM INTO '${tmpPath.replace(/'/g, "''")}';`);
     const buf = fs.readFileSync(tmpPath);
     reply
       .header('content-type', 'application/x-sqlite3')
-      .header('content-disposition', 'attachment; filename=finance-backup-' + ts + '.db')
+      .header('content-disposition', 'attachment; filename=finance-backup-' + ts + '.sqlite')
       .send(buf);
   } finally {
     try {
