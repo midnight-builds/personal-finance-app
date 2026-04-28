@@ -39,7 +39,7 @@ export function updateAccount(
   if (patch.savings_goal !== undefined)    { sets.push('savings_goal = ?');    values.push(patch.savings_goal); }
   if (patch.name !== undefined)            { sets.push('name = ?');            values.push(patch.name); }
 
-  if (sets.length === 0) return;
+  if (sets.length === 0) return undefined;
   values.push(id);
-  db.prepare(`UPDATE accounts SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  return db.prepare(`UPDATE accounts SET ${sets.join(', ')} WHERE id = ?`).run(...values) as { changes: number };
 }

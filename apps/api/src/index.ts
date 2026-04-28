@@ -221,12 +221,21 @@ server.post<{
 server.patch('/accounts/:id', async (request, reply) => {
   const { id } = request.params as { id: string };
   const body = request.body as Record<string, unknown>;
+
+  const subtype = (body as any).account_subtype;
+  if (subtype !== undefined && !['checking', 'savings', 'credit_card'].includes(subtype as string)) {
+    return reply.code(400).send({ error: 'invalid_account_subtype' });
+  }
+
   const allowed = ['account_subtype', 'owner_label', 'credit_limit', 'savings_goal', 'name'];
   const patch: Record<string, unknown> = {};
   for (const key of allowed) {
     if (key in body) patch[key] = body[key];
   }
-  updateAccount(id, patch as any);
+  const result = updateAccount(id, patch as any);
+  if (result !== undefined && result.changes === 0) {
+    return reply.code(404).send({ error: 'not_found' });
+  }
   return { ok: true };
 });
 
