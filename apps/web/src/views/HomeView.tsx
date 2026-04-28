@@ -4,6 +4,7 @@ import { getHouseholdSummary, importCsv, importXlsx } from '../api/client';
 import type { HouseholdSummary } from '../api/client';
 import CfoStatePanel from '../components/CfoStatePanel';
 import ImportPrompt from '../components/ImportPrompt';
+import BriefingPanel from '../components/BriefingPanel';
 
 type Account = { id: string; name: string; balance: number; currency: string; date: string };
 type Summary = {
@@ -238,6 +239,10 @@ export default function HomeView({
       {householdSummary && (
         <CfoStatePanel summary={householdSummary} />
       )}
+      <BriefingPanel
+        setToast={setToast}
+        onFilterTransactions={(ids) => setTxFilterIds(ids)}
+      />
       <section className={`hero hero-${heroMood}`}>
         <div>
           <p className="eyebrow">Palkkapäivä {settings.payday}. ±{settings.paydayFlexDays} pv</p>
