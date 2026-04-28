@@ -1,0 +1,74 @@
+{
+  "planPath": "docs/superpowers/plans/2026-04-28-proactive-cfo.md",
+  "tasks": [
+    {
+      "id": 9,
+      "subject": "Task 1: DB Schema Migrations + Account PATCH",
+      "status": "pending",
+      "description": "**Goal:** Add new columns to `accounts` and three new tables, expose PATCH endpoint.\n\n**Files:**\n- Modify: `apps/api/src/db.ts`\n- Modify: `apps/api/src/accounts.ts`\n- Modify: `apps/api/src/index.ts`\n\n**Acceptance Criteria:**\n- [ ] initDb() idempotent\n- [ ] account columns added\n- [ ] new tables created\n- [ ] PATCH /accounts/:id works\n- [ ] all tests pass\n\n**Verify:** `npm test`\n\n```json:metadata\n{\"files\":[\"apps/api/src/db.ts\",\"apps/api/src/accounts.ts\",\"apps/api/src/index.ts\"],\"verifyCommand\":\"npm test\",\"acceptanceCriteria\":[\"initDb idempotent\",\"account columns added\",\"new tables created\",\"PATCH /accounts/:id works\",\"all tests pass\"]}\n```"
+    },
+    {
+      "id": 10,
+      "subject": "Task 2: Recurring & Subscription Pattern Detection",
+      "status": "pending",
+      "blockedBy": [9],
+      "description": "**Goal:** Implement `detectPatterns(accountId)` in `patterns.ts`.\n\n**Files:**\n- Create: `apps/api/src/patterns.ts`\n- Create: `apps/api/tests/patterns.test.ts`\n\n**Verify:** `NODE_OPTIONS=--experimental-sqlite tsx --test apps/api/tests/patterns.test.ts`\n\n```json:metadata\n{\"files\":[\"apps/api/src/patterns.ts\",\"apps/api/tests/patterns.test.ts\"],\"verifyCommand\":\"NODE_OPTIONS=--experimental-sqlite tsx --test apps/api/tests/patterns.test.ts\",\"acceptanceCriteria\":[\"recurring detection\",\"subscription classification\",\"upsert idempotent\",\"transfers excluded\"]}\n```"
+    },
+    {
+      "id": 11,
+      "subject": "Task 3: BriefingEngine with All Six Generators",
+      "status": "pending",
+      "blockedBy": [9, 10],
+      "description": "**Goal:** Implement `runBriefing(importSessionId)` in `briefing.ts`.\n\n**Files:**\n- Create: `apps/api/src/briefing.ts`\n- Create: `apps/api/tests/briefing.test.ts`\n\n**Verify:** `NODE_OPTIONS=--experimental-sqlite tsx --test apps/api/tests/briefing.test.ts`\n\n```json:metadata\n{\"files\":[\"apps/api/src/briefing.ts\",\"apps/api/tests/briefing.test.ts\"],\"verifyCommand\":\"NODE_OPTIONS=--experimental-sqlite tsx --test apps/api/tests/briefing.test.ts\",\"acceptanceCriteria\":[\"briefing_session created\",\"all 6 generators run\",\"exception isolation\",\"findings sorted by severity\"]}\n```"
+    },
+    {
+      "id": 12,
+      "subject": "Task 4: Hook Patterns + Briefing into Import Pipeline",
+      "status": "pending",
+      "blockedBy": [11],
+      "description": "**Goal:** Call detectPatterns() + runBriefing() after every successful import.\n\n**Files:**\n- Modify: `apps/api/src/importer.ts`\n- Modify: `apps/api/src/index.ts`\n\n**Verify:** `npm test`\n\n```json:metadata\n{\"files\":[\"apps/api/src/importer.ts\",\"apps/api/src/index.ts\"],\"verifyCommand\":\"npm test\",\"acceptanceCriteria\":[\"ImportResult.briefingSessionId exists\",\"patterns detected after import\",\"briefing session created\",\"import failure safe\"]}\n```"
+    },
+    {
+      "id": 13,
+      "subject": "Task 5: Household Summary + New API Endpoints",
+      "status": "pending",
+      "blockedBy": [9, 10],
+      "description": "**Goal:** Add getHouseholdSummary() and expose 6 new endpoints.\n\n**Files:**\n- Modify: `apps/api/src/summary.ts`\n- Modify: `apps/api/src/index.ts`\n- Create: `apps/api/tests/household-summary.test.ts`\n\n**Verify:** `NODE_OPTIONS=--experimental-sqlite tsx --test apps/api/tests/household-summary.test.ts`\n\n```json:metadata\n{\"files\":[\"apps/api/src/summary.ts\",\"apps/api/src/index.ts\",\"apps/api/tests/household-summary.test.ts\"],\"verifyCommand\":\"NODE_OPTIONS=--experimental-sqlite tsx --test apps/api/tests/household-summary.test.ts\",\"acceptanceCriteria\":[\"household summary correct\",\"account trends computed\",\"briefing endpoints work\",\"dismiss works\"]}\n```"
+    },
+    {
+      "id": 14,
+      "subject": "Task 6: Frontend Typed API Client",
+      "status": "pending",
+      "blockedBy": [13],
+      "description": "**Goal:** Create apps/web/src/api/client.ts with all typed fetch functions.\n\n**Files:**\n- Create: `apps/web/src/api/client.ts`\n\n**Verify:** `npm run build --workspace apps/web`\n\n```json:metadata\n{\"files\":[\"apps/web/src/api/client.ts\"],\"verifyCommand\":\"npm run build --workspace apps/web\",\"acceptanceCriteria\":[\"all endpoints typed\",\"build succeeds\"]}\n```"
+    },
+    {
+      "id": 15,
+      "subject": "Task 7: App.tsx Refactor — Extract Views",
+      "status": "pending",
+      "description": "**Goal:** Reduce App.tsx to ~120 lines routing shell.\n\n**Files:**\n- Modify: `apps/web/src/App.tsx`\n- Create: `apps/web/src/views/HomeView.tsx`\n- Create: `apps/web/src/views/ExplorerView.tsx`\n- Create: `apps/web/src/views/SettingsView.tsx`\n\n**Verify:** `npm run build --workspace apps/web`\n\n```json:metadata\n{\"files\":[\"apps/web/src/App.tsx\",\"apps/web/src/views/HomeView.tsx\",\"apps/web/src/views/ExplorerView.tsx\",\"apps/web/src/views/SettingsView.tsx\"],\"verifyCommand\":\"npm run build --workspace apps/web\",\"acceptanceCriteria\":[\"App.tsx under 200 lines\",\"all tabs work\",\"build succeeds\"]}\n```"
+    },
+    {
+      "id": 16,
+      "subject": "Task 8: CfoStatePanel + ImportPrompt (HomeView)",
+      "status": "pending",
+      "blockedBy": [14, 15],
+      "description": "**Goal:** Full HomeView with CfoStatePanel, AccountCard, ImportPrompt.\n\n**Files:**\n- Create: `apps/web/src/components/CfoStatePanel.tsx`\n- Create: `apps/web/src/components/AccountCard.tsx`\n- Create: `apps/web/src/components/ImportPrompt.tsx`\n- Modify: `apps/web/src/views/HomeView.tsx`\n\n**Verify:** `npm run build --workspace apps/web`\n\n```json:metadata\n{\"files\":[\"apps/web/src/components/CfoStatePanel.tsx\",\"apps/web/src/components/AccountCard.tsx\",\"apps/web/src/components/ImportPrompt.tsx\",\"apps/web/src/views/HomeView.tsx\"],\"verifyCommand\":\"npm run build --workspace apps/web\",\"acceptanceCriteria\":[\"CfoStatePanel metrics\",\"AccountCard subtype badge\",\"ImportPrompt staleness banner\",\"import upload works\"]}\n```"
+    },
+    {
+      "id": 17,
+      "subject": "Task 9: BriefingPanel + FindingCard",
+      "status": "pending",
+      "blockedBy": [14, 15],
+      "description": "**Goal:** Render ordered insight findings with dismiss support.\n\n**Files:**\n- Create: `apps/web/src/components/BriefingPanel.tsx`\n- Create: `apps/web/src/components/FindingCard.tsx`\n\n**Verify:** `npm run build --workspace apps/web`\n\n```json:metadata\n{\"files\":[\"apps/web/src/components/BriefingPanel.tsx\",\"apps/web/src/components/FindingCard.tsx\"],\"verifyCommand\":\"npm run build --workspace apps/web\",\"acceptanceCriteria\":[\"severity-colored cards\",\"dismiss removes card\",\"empty state message\",\"build succeeds\"]}\n```"
+    },
+    {
+      "id": 18,
+      "subject": "Task 10: Recharts Charts + Account Settings UI",
+      "status": "pending",
+      "blockedBy": [14, 15],
+      "description": "**Goal:** Add Recharts and 3 chart components; account subtype editor in SettingsView.\n\n**Files:**\n- Modify: `apps/web/package.json`\n- Create: `apps/web/src/charts/BalanceChart.tsx`\n- Create: `apps/web/src/charts/MonthlyNetChart.tsx`\n- Create: `apps/web/src/charts/SubscriptionChart.tsx`\n- Modify: `apps/web/src/views/ExplorerView.tsx`\n- Modify: `apps/web/src/views/SettingsView.tsx`\n\n**Verify:** `npm run build --workspace apps/web`\n\n```json:metadata\n{\"files\":[\"apps/web/package.json\",\"apps/web/src/charts/BalanceChart.tsx\",\"apps/web/src/charts/MonthlyNetChart.tsx\",\"apps/web/src/charts/SubscriptionChart.tsx\"],\"verifyCommand\":\"npm run build --workspace apps/web\",\"acceptanceCriteria\":[\"recharts installed\",\"3 chart components build\",\"account editor in settings\",\"build succeeds\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-04-28T00:00:00.000Z"
+}
