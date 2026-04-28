@@ -144,3 +144,58 @@ test('generator exception does not abort briefing — briefing_session still cre
   const row = db.prepare('SELECT * FROM briefing_sessions WHERE import_session_id = ?').get(sess) as any;
   assert.ok(row, 'briefing session should be created even if some generators fail');
 });
+
+test('creditHealth generator fires when credit card balance is growing', () => {
+  const acct = mkAccount('credit_card');
+  const sess = mkSession();
+  // Simulate growing credit card debt (balances more negative over time)
+  // snapshots[0] = newest (ORDER BY date DESC), so list oldest first when inserting
+  mkBalance(acct, -800, 90);
+  mkBalance(acct, -1000, 60);
+  mkBalance(acct, -1200, 30);
+
+  const briefingId = runBriefing(sess);
+
+  const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'credit_health'").all(briefingId) as any[];
+  assert.ok(findings.length >= 1, 'should fire credit_health finding for growing credit card debt');
+  assert.equal(findings[0].severity, 'warn');
+});
+
+test('spendingAnomaly generator fires when category spend doubles vs baseline', () => {
+  const acct = mkAccount();
+  const sess = mkSession();
+
+  // Get a category id from seeded categories
+  const cat = db.prepare("SELECT id FROM categories WHERE name = 'Ruoka ja päivittäistavarat' LIMIT 1").get() as any;
+  if (!cat) return; // skip if category not seeded
+
+  const now = new Date().toISOString();
+
+  // Insert baseline transactions 60–90 days ago: 3 months × ~40€ = 40€/mo avg
+  for (let m = 2; m <= 4; m++) {
+    const txId = mkTx(acct, sess, 'Kauppa', -40, m * 30);
+    db.prepare('INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source) VALUES (?, ?, ?, ?, ?)')
+      .run(crypto.randomUUID(), now, txId, cat.id, 'rule');
+  }
+
+  // This month: 150€ — well above 2× baseline (80€ threshold)
+  const recentTx = mkTx(acct, sess, 'Kauppa', -150, 5);
+  db.prepare('INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source) VALUES (?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), now, recentTx, cat.id, 'rule');
+
+  const briefingId = runBriefing(sess);
+
+  const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'spending_anomaly'").all(briefingId) as any[];
+  assert.ok(findings.length >= 1, 'should fire spending_anomaly when category spend is > 2× baseline');
+});
+
+test('savingsProgress generator does not fire for savings account with only 1 balance snapshot', () => {
+  const acct = mkAccount('savings');
+  const sess = mkSession();
+  mkBalance(acct, 5000, 30); // only 1 snapshot
+
+  const briefingId = runBriefing(sess);
+
+  const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'savings_progress'").all(briefingId) as any[];
+  assert.equal(findings.length, 0, 'should not fire with fewer than 2 balance snapshots');
+});
