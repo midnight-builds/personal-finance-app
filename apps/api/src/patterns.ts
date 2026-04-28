@@ -24,6 +24,8 @@ export function detectPatterns(accountId: string): void {
       AND booking_date >= ?
       AND amount < 0
       AND counterparty_name IS NOT NULL
+      -- Exclude counterparties where ANY transaction is transfer-linked — prevents
+      -- intra-account transfer counterparties (e.g. "Siirto") from appearing as recurring spend.
       AND counterparty_name NOT IN (
         SELECT DISTINCT counterparty_name
         FROM normalized_transactions
@@ -61,6 +63,7 @@ export function detectPatterns(accountId: string): void {
     if (avgInterval < 25 || avgInterval > 35) continue;
 
     // Check amount consistency (±20%)
+    // typical_amount is stored as a positive absolute value (e.g. 15.99, not -15.99)
     const amounts = sorted.map((o) => Math.abs(o.amount));
     const avgAmount = amounts.reduce((s, v) => s + v, 0) / amounts.length;
     const consistent = amounts.every((a) => Math.abs(a - avgAmount) / avgAmount <= 0.2);

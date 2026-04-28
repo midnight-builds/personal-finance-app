@@ -118,5 +118,5 @@ test('excludes transfer-linked transactions', () => {
   detectPatterns(acct);
 
   const rows = db.prepare('SELECT * FROM recurring_patterns WHERE account_id = ?').all(acct);
-  assert.equal(rows.length, 0, 'transfer-linked transactions should not generate patterns');
+  assert.equal(rows.length, 0, 'counterparty with any transfer-linked tx is excluded entirely, not just the individual linked occurrences');
 });
