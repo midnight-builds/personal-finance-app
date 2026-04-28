@@ -150,6 +150,46 @@ export function initDb() {
       payload TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS briefing_sessions (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      import_session_id TEXT,
+      finding_count INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY(import_session_id) REFERENCES import_sessions(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS insight_findings (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      briefing_session_id TEXT,
+      finding_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'info',
+      impact_eur REAL,
+      transaction_ids TEXT,
+      metadata TEXT,
+      dismissed_at TEXT,
+      FOREIGN KEY(briefing_session_id) REFERENCES briefing_sessions(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS recurring_patterns (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      counterparty_name TEXT,
+      pattern_type TEXT NOT NULL,
+      interval_days INTEGER,
+      typical_amount REAL,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      first_seen TEXT NOT NULL,
+      last_seen TEXT NOT NULL,
+      occurrence_count INTEGER NOT NULL DEFAULT 1,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      FOREIGN KEY(account_id) REFERENCES accounts(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_import_sessions_overlap ON import_sessions(overlap_key);
     CREATE INDEX IF NOT EXISTS idx_normalized_booking_date ON normalized_transactions(booking_date);
     CREATE INDEX IF NOT EXISTS idx_normalized_account_date ON normalized_transactions(account_id, booking_date);
@@ -158,11 +198,24 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_normalized_counterparty_iban ON normalized_transactions(counterparty_iban);
     CREATE INDEX IF NOT EXISTS idx_catdec_tx ON categorization_decisions(transaction_id);
     CREATE INDEX IF NOT EXISTS idx_event_log_created_at ON event_log(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_recurring_account ON recurring_patterns(account_id);
+    CREATE INDEX IF NOT EXISTS idx_findings_briefing ON insight_findings(briefing_session_id);
+    CREATE INDEX IF NOT EXISTS idx_findings_type ON insight_findings(finding_type);
     DELETE FROM balance_snapshots WHERE rowid NOT IN (
       SELECT MIN(rowid) FROM balance_snapshots GROUP BY account_id, date
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_balance_snapshots_account_date ON balance_snapshots(account_id, date);
   `);
+
+  // Idempotent column migrations for existing tables
+  function safeExec(sql: string) {
+    try { db.exec(sql); } catch { /* column already exists — safe to ignore */ }
+  }
+
+  safeExec(`ALTER TABLE accounts ADD COLUMN account_subtype TEXT NOT NULL DEFAULT 'checking'`);
+  safeExec(`ALTER TABLE accounts ADD COLUMN owner_label TEXT`);
+  safeExec(`ALTER TABLE accounts ADD COLUMN credit_limit REAL`);
+  safeExec(`ALTER TABLE accounts ADD COLUMN savings_goal REAL`);
 }
 
 export function seedDefaultCategories() {

@@ -28,6 +28,9 @@ function createTx(id: string) {
 beforeEach(() => {
   db.exec('PRAGMA foreign_keys=OFF;');
   db.exec(`
+    DELETE FROM insight_findings;
+    DELETE FROM briefing_sessions;
+    DELETE FROM recurring_patterns;
     DELETE FROM categorization_decisions;
     DELETE FROM category_rules;
     DELETE FROM categories WHERE built_in = 0;

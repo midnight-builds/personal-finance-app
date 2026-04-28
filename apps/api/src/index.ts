@@ -16,7 +16,7 @@ import { getMonthlyOverview } from './monthly.js';
 import { listRaw } from './raw.js';
 import { getSettings, updateSettings } from './settings.js';
 import { listLog } from './logger.js';
-import { listAccounts } from './accounts.js';
+import { listAccounts, updateAccount } from './accounts.js';
 import { listBalanceAdjustments, createBalanceAdjustment, deleteBalanceAdjustment } from './balanceAdjustments.js';
 
 initDb();
@@ -218,19 +218,17 @@ server.post<{
   return reply.send(result);
 });
 
-server.patch<{ Params: { id: string }; Body: { name: string } }>(
-  '/accounts/:id',
-  async (request, reply) => {
-    const { id } = request.params;
-    const { name } = request.body || {};
-    if (!name || !name.trim()) return reply.code(400).send({ error: 'name_required' });
-    const updated = db
-      .prepare('UPDATE accounts SET name = ? WHERE id = ?')
-      .run(name.trim(), id);
-    if (updated.changes === 0) return reply.code(404).send({ error: 'not_found' });
-    return reply.send({ ok: true });
+server.patch('/accounts/:id', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const body = request.body as Record<string, unknown>;
+  const allowed = ['account_subtype', 'owner_label', 'credit_limit', 'savings_goal', 'name'];
+  const patch: Record<string, unknown> = {};
+  for (const key of allowed) {
+    if (key in body) patch[key] = body[key];
   }
-);
+  updateAccount(id, patch as any);
+  return { ok: true };
+});
 
 server.post('/categories', async (request, reply) => {
   const body = request.body as any;
