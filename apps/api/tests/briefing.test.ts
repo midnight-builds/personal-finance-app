@@ -150,6 +150,7 @@ test('creditHealth generator fires when credit card balance is growing', () => {
   const sess = mkSession();
   // Simulate growing credit card debt (balances more negative over time)
   // snapshots[0] = newest (ORDER BY date DESC), so list oldest first when inserting
+  mkBalance(acct, -600, 120);
   mkBalance(acct, -800, 90);
   mkBalance(acct, -1000, 60);
   mkBalance(acct, -1200, 30);

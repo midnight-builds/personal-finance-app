@@ -52,11 +52,11 @@ function subscriptionCreep(): FindingInput[] {
 }
 
 function newRecurring(): FindingInput[] {
-  const cutoff = new Date(Date.now() - 60 * 86400_000).toISOString().slice(0, 10);
+  const cutoff = new Date(Date.now() - 60 * 86400_000).toISOString();
   const patterns = db.prepare(`
     SELECT counterparty_name, pattern_type, typical_amount, interval_days
     FROM recurring_patterns
-    WHERE is_active = 1 AND first_seen >= ?
+    WHERE is_active = 1 AND created_at >= ?
     ORDER BY typical_amount DESC
   `).all(cutoff) as Array<{ counterparty_name: string; pattern_type: string; typical_amount: number; interval_days: number }>;
 
@@ -102,85 +102,93 @@ function oneOffImpact(): FindingInput[] {
     finding_type: 'one_off_impact',
     title: `Kertaluonteinen hankinta: ${tx.counterparty_name ?? 'Tuntematon'} ${fmt(tx.amount)}`,
     description: `Ostit ${tx.counterparty_name ?? 'tuntematon kauppias'} ${fmt(tx.amount)} (${tx.booking_date}). Tämä on yli 2× tyypillinen yksittäinen kulusi.`,
-    severity: Math.abs(tx.amount) > threshold * 2 ? 'warn' : 'info' as any,
+    severity: (Math.abs(tx.amount) > threshold * 2 ? 'warn' : 'info') as 'warn' | 'info',
     impact_eur: Math.abs(tx.amount),
     transaction_ids: [tx.id],
   }));
 }
 
 function savingsProgress(): FindingInput[] {
-  const savings = db.prepare(`
-    SELECT a.id, a.name
+  // Single query: get the last 4 balance snapshots for all savings accounts
+  const rows = db.prepare(`
+    SELECT a.id AS accountId, a.name AS accountName, bs.balance, bs.date
     FROM accounts a
+    JOIN balance_snapshots bs ON bs.account_id = a.id
     WHERE a.account_subtype = 'savings'
-  `).all() as Array<{ id: string; name: string }>;
+      AND bs.date IN (
+        SELECT date FROM balance_snapshots
+        WHERE account_id = a.id
+        ORDER BY date DESC LIMIT 4
+      )
+    ORDER BY a.id, bs.date DESC
+  `).all() as Array<{ accountId: string; accountName: string; balance: number; date: string }>;
+
+  // Group by account
+  const byAccount = new Map<string, { name: string; snapshots: Array<{ balance: number; date: string }> }>();
+  for (const r of rows) {
+    if (!byAccount.has(r.accountId)) byAccount.set(r.accountId, { name: r.accountName, snapshots: [] });
+    byAccount.get(r.accountId)!.snapshots.push({ balance: r.balance, date: r.date });
+  }
 
   const findings: FindingInput[] = [];
-
-  for (const acct of savings) {
-    const snapshots = db.prepare(`
-      SELECT balance, date FROM balance_snapshots
-      WHERE account_id = ?
-      ORDER BY date DESC LIMIT 4
-    `).all(acct.id) as Array<{ balance: number; date: string }>;
-
+  for (const [, { name, snapshots }] of byAccount) {
     if (snapshots.length < 2) continue;
-
     const latest = snapshots[0].balance;
     const prev = snapshots[snapshots.length - 1].balance;
     const delta = latest - prev;
-
     const trend = delta > 0 ? 'kasvanut' : delta < 0 ? 'laskenut' : 'pysynyt samana';
     const severity: 'info' | 'warn' = delta < 0 ? 'warn' : 'info';
-
     findings.push({
       finding_type: 'savings_progress',
-      title: `Säästötili ${acct.name}: ${delta >= 0 ? '+' : ''}${fmt(delta)}`,
-      description: `Säästötilisi ${acct.name} saldo on ${trend} ${fmt(Math.abs(delta))} seurantajaksolla. Nykyinen saldo: ${fmt(latest)}.`,
+      title: `Säästötili ${name}: ${delta >= 0 ? '+' : ''}${fmt(delta)}`,
+      description: `Säästötilisi ${name} saldo on ${trend} ${fmt(Math.abs(delta))} seurantajaksolla. Nykyinen saldo: ${fmt(latest)}.`,
       severity,
       impact_eur: Math.abs(delta),
-      metadata: { accountId: acct.id, currentBalance: latest, delta },
+      metadata: { currentBalance: latest, delta },
     });
   }
-
   return findings;
 }
 
 function creditHealth(): FindingInput[] {
-  const creditAccts = db.prepare(`
-    SELECT a.id, a.name FROM accounts a WHERE a.account_subtype = 'credit_card'
-  `).all() as Array<{ id: string; name: string }>;
+  const rows = db.prepare(`
+    SELECT a.id AS accountId, a.name AS accountName, bs.balance, bs.date
+    FROM accounts a
+    JOIN balance_snapshots bs ON bs.account_id = a.id
+    WHERE a.account_subtype = 'credit_card'
+      AND bs.date IN (
+        SELECT date FROM balance_snapshots
+        WHERE account_id = a.id
+        ORDER BY date DESC LIMIT 4
+      )
+    ORDER BY a.id, bs.date DESC
+  `).all() as Array<{ accountId: string; accountName: string; balance: number; date: string }>;
 
-  const findings: FindingInput[] = [];
-
-  for (const acct of creditAccts) {
-    const snapshots = db.prepare(`
-      SELECT balance, date FROM balance_snapshots
-      WHERE account_id = ? ORDER BY date DESC LIMIT 4
-    `).all(acct.id) as Array<{ balance: number; date: string }>;
-
-    if (snapshots.length < 3) continue;
-
-    // Credit card: balance going more negative = more debt
-    // snapshots[0] is newest. Growing debt = each snapshot is MORE negative than next
-    const growingDebt = snapshots.slice(0, -1).every((s, i) => s.balance < snapshots[i + 1].balance);
-
-    if (growingDebt) {
-      const latest = Math.abs(snapshots[0].balance);
-      const oldest = Math.abs(snapshots[snapshots.length - 1].balance);
-      const delta = latest - oldest;
-
-      findings.push({
-        finding_type: 'credit_health',
-        title: `Luottokorttivelka kasvaa: ${acct.name}`,
-        description: `Luottokorttisi ${acct.name} velka on kasvanut ${snapshots.length} kuukautta peräkkäin. Nykyinen velka: ${fmt(latest)}.`,
-        severity: 'warn',
-        impact_eur: delta,
-        metadata: { accountId: acct.id, currentDebt: latest },
-      });
-    }
+  const byAccount = new Map<string, { name: string; snapshots: number[] }>();
+  for (const r of rows) {
+    if (!byAccount.has(r.accountId)) byAccount.set(r.accountId, { name: r.accountName, snapshots: [] });
+    byAccount.get(r.accountId)!.snapshots.push(r.balance);
   }
 
+  const findings: FindingInput[] = [];
+  for (const [, { name, snapshots }] of byAccount) {
+    // Need at least 4 snapshots for 3 consecutive months of comparison
+    if (snapshots.length < 4) continue;
+    // snapshots[0] = newest; growing debt = each newer snapshot is MORE negative (lower)
+    const growingDebt = snapshots.slice(0, -1).every((s, i) => s < snapshots[i + 1]);
+    if (!growingDebt) continue;
+    const latest = Math.abs(snapshots[0]);
+    const oldest = Math.abs(snapshots[snapshots.length - 1]);
+    const delta = latest - oldest;
+    findings.push({
+      finding_type: 'credit_health',
+      title: `Luottokorttivelka kasvaa: ${name}`,
+      description: `Luottokorttisi ${name} velka on kasvanut 3 kuukautta peräkkäin. Nykyinen velka: ${fmt(latest)}.`,
+      severity: 'warn',
+      impact_eur: delta,
+      metadata: { currentDebt: latest },
+    });
+  }
   return findings;
 }
 
@@ -238,15 +246,15 @@ const GENERATORS = [
 
 const SEVERITY_ORDER: Record<string, number> = { alert: 0, warn: 1, info: 2 };
 
-const stmtInsertFinding = db.prepare(`
-  INSERT INTO insight_findings
-    (id, created_at, briefing_session_id, finding_type, title, description, severity, impact_eur, transaction_ids, metadata)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`);
-
 export function runBriefing(importSessionId: string): string {
   const now = new Date().toISOString();
   const briefingId = crypto.randomUUID();
+
+  const stmtInsertFinding = db.prepare(`
+    INSERT INTO insight_findings
+      (id, created_at, briefing_session_id, finding_type, title, description, severity, impact_eur, transaction_ids, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
 
   db.prepare(
     'INSERT INTO briefing_sessions (id, created_at, import_session_id, finding_count) VALUES (?, ?, ?, 0)'
