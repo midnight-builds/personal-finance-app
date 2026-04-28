@@ -72,6 +72,7 @@ export default function HomeView({
   const [txFilterIds, setTxFilterIds] = useState<string[] | null>(null);
   const [aiLoading, setAiLoading] = useState<string | null>(null);
   const [householdSummary, setHouseholdSummary] = useState<HouseholdSummary | null>(null);
+  const [briefingRefreshKey, setBriefingRefreshKey] = useState(0);
 
   const loadHousehold = useCallback(async () => {
     const data = await getHouseholdSummary();
@@ -117,6 +118,7 @@ export default function HomeView({
       showToast(setToast, msg);
       await refreshAll();
       await loadHousehold();
+      setBriefingRefreshKey((k) => k + 1);
     } catch {
       setStatus('Import epäonnistui.');
       showToast(setToast, 'Import epäonnistui', 4000);
@@ -242,6 +244,7 @@ export default function HomeView({
       <BriefingPanel
         setToast={setToast}
         onFilterTransactions={(ids) => setTxFilterIds(ids)}
+        refreshKey={briefingRefreshKey}
       />
       <section className={`hero hero-${heroMood}`}>
         <div>

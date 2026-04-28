@@ -66,6 +66,7 @@ export function detectPatterns(accountId: string): void {
     // typical_amount is stored as a positive absolute value (e.g. 15.99, not -15.99)
     const amounts = sorted.map((o) => Math.abs(o.amount));
     const avgAmount = amounts.reduce((s, v) => s + v, 0) / amounts.length;
+    if (avgAmount === 0) continue;
     const consistent = amounts.every((a) => Math.abs(a - avgAmount) / avgAmount <= 0.2);
     if (!consistent) continue;
 

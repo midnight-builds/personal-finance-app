@@ -6,9 +6,10 @@ import FindingCard from './FindingCard';
 type BriefingPanelProps = {
   setToast: (v: string) => void;
   onFilterTransactions?: (ids: string[]) => void;
+  refreshKey?: string | number;
 };
 
-export default function BriefingPanel({ setToast, onFilterTransactions }: BriefingPanelProps) {
+export default function BriefingPanel({ setToast, onFilterTransactions, refreshKey }: BriefingPanelProps) {
   const [briefing, setBriefing] = useState<BriefingSession | null>(null);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
@@ -17,13 +18,13 @@ export default function BriefingPanel({ setToast, onFilterTransactions }: Briefi
       try {
         const data = await getLatestBriefing();
         setBriefing(data);
+        setDismissed(new Set());
       } catch {
-        // If getLatestBriefing throws (404 or other error), just set briefing to null
         setBriefing(null);
       }
     };
     loadBriefing();
-  }, []);
+  }, [refreshKey]);
 
   const handleDismiss = async (findingId: string) => {
     try {

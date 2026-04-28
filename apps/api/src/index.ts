@@ -183,6 +183,9 @@ server.post('/debug/clear', async () => {
     DELETE FROM transfer_links;
     DELETE FROM normalized_transactions;
     DELETE FROM raw_transactions;
+    DELETE FROM insight_findings;
+    DELETE FROM briefing_sessions;
+    DELETE FROM recurring_patterns;
     DELETE FROM import_sessions;
     DELETE FROM accounts;
   `);
@@ -200,6 +203,9 @@ server.post('/debug/clear-imports', async () => {
     DELETE FROM categorization_decisions;
     DELETE FROM normalized_transactions;
     DELETE FROM raw_transactions;
+    DELETE FROM insight_findings;
+    DELETE FROM briefing_sessions;
+    DELETE FROM recurring_patterns;
     DELETE FROM import_sessions;
   `);
   db.exec('PRAGMA foreign_keys=ON;');

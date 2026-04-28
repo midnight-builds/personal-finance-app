@@ -413,22 +413,16 @@ export async function importXlsx(file: File): Promise<ImportResult> {
 // AI
 // ============================================================================
 
-export async function aiCategorize(
-  transactionId: string,
-  openaiKey: string
-): Promise<{ categoryId: string } | null> {
-  // Note: The endpoint payload is counterparty, description, amount, currency
-  // This function signature includes transactionId for caller context,
-  // but the actual API call needs transaction data to be fetched separately
-  // or passed separately. For now, we provide the raw endpoint wrapper.
-  // Callers should fetch transaction data and call the endpoint directly if needed.
+export async function aiCategorize(params: {
+  counterparty: string | null;
+  description: string | null;
+  amount: number;
+  currency: string;
+}): Promise<{ mode: string; categoryId?: string; categoryName?: string; options?: Array<{ categoryId: string; categoryName: string }> } | null> {
   const res = await safeFetch(`${API}/ai/categorize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      transactionId,
-      openaiKey,
-    }),
+    body: JSON.stringify(params),
   });
   if (!res.ok) return null;
   return res.json();
