@@ -9,7 +9,7 @@ import { initDb, seedDefaultCategories, db } from './db.js';
 import { checksum, parseCsv, parseXlsx, processImport } from './importer.js';
 import { listTransactions } from './query.js';
 import { listCategories, upsertDecision, createCategory, renameCategory, deleteCategory } from './rules.js';
-import { getSummary } from './summary.js';
+import { getSummary, getHouseholdSummary } from './summary.js';
 import { getInsights } from './insights.js';
 import { aiCategorize } from './ai.js';
 import { getMonthlyOverview } from './monthly.js';
@@ -275,6 +275,110 @@ server.delete<{ Params: { id: string } }>('/categories/:id', async (request, rep
     const status = msg === 'cannot_delete_misc' ? 400 : 404;
     return reply.code(status).send({ error: msg });
   }
+});
+
+// Household summary
+server.get('/household/summary', async () => getHouseholdSummary());
+
+// Briefing endpoints
+server.get('/briefing/latest', async (_request, reply) => {
+  const session = db
+    .prepare(`SELECT * FROM briefing_sessions ORDER BY created_at DESC LIMIT 1`)
+    .get() as any;
+  if (!session) return reply.code(404).send({ error: 'not_found' });
+
+  const findings = db
+    .prepare(
+      `SELECT id, finding_type, title, description, severity, impact_eur, transaction_ids, metadata, created_at
+       FROM insight_findings
+       WHERE briefing_session_id = ? AND dismissed_at IS NULL
+       ORDER BY
+         CASE severity WHEN 'alert' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END ASC,
+         impact_eur DESC`
+    )
+    .all(session.id) as any[];
+
+  return {
+    id: session.id,
+    createdAt: session.created_at,
+    importSessionId: session.import_session_id,
+    findingCount: session.finding_count,
+    findings: findings.map((f: any) => ({
+      id: f.id,
+      findingType: f.finding_type,
+      title: f.title,
+      description: f.description,
+      severity: f.severity,
+      impactEur: f.impact_eur ?? null,
+      transactionIds: f.transaction_ids ? JSON.parse(f.transaction_ids) : [],
+      metadata: f.metadata ? JSON.parse(f.metadata) : {},
+      createdAt: f.created_at,
+    })),
+  };
+});
+
+server.get<{ Params: { id: string } }>('/briefing/:id', async (request, reply) => {
+  const { id } = request.params;
+  const session = db
+    .prepare(`SELECT * FROM briefing_sessions WHERE id = ?`)
+    .get(id) as any;
+  if (!session) return reply.code(404).send({ error: 'not_found' });
+
+  const findings = db
+    .prepare(
+      `SELECT id, finding_type, title, description, severity, impact_eur, transaction_ids, metadata, created_at
+       FROM insight_findings
+       WHERE briefing_session_id = ? AND dismissed_at IS NULL
+       ORDER BY
+         CASE severity WHEN 'alert' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END ASC,
+         impact_eur DESC`
+    )
+    .all(id) as any[];
+
+  return {
+    id: session.id,
+    createdAt: session.created_at,
+    importSessionId: session.import_session_id,
+    findingCount: session.finding_count,
+    findings: findings.map((f: any) => ({
+      id: f.id,
+      findingType: f.finding_type,
+      title: f.title,
+      description: f.description,
+      severity: f.severity,
+      impactEur: f.impact_eur ?? null,
+      transactionIds: f.transaction_ids ? JSON.parse(f.transaction_ids) : [],
+      metadata: f.metadata ? JSON.parse(f.metadata) : {},
+      createdAt: f.created_at,
+    })),
+  };
+});
+
+server.post<{ Params: { findingId: string } }>('/briefing/:findingId/dismiss', async (request, reply) => {
+  const { findingId } = request.params;
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(`UPDATE insight_findings SET dismissed_at = ? WHERE id = ?`)
+    .run(now, findingId) as { changes: number };
+  if (result.changes === 0) return reply.code(404).send({ error: 'not_found' });
+  return { ok: true };
+});
+
+// Subscriptions and recurring patterns
+server.get('/subscriptions', async () => {
+  return db
+    .prepare(
+      `SELECT * FROM recurring_patterns WHERE pattern_type = 'subscription' AND is_active = 1 ORDER BY typical_amount DESC`
+    )
+    .all();
+});
+
+server.get('/recurring', async () => {
+  return db
+    .prepare(
+      `SELECT * FROM recurring_patterns WHERE is_active = 1 ORDER BY last_seen DESC`
+    )
+    .all();
 });
 
 const port = Number(process.env.PORT ?? 3001);
