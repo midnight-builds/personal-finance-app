@@ -6,6 +6,7 @@ import {
   getAccounts,
   getTransactions,
   getCategories,
+  patchAccount,
   type Settings,
   type LogRow,
   type BalanceAdjustment,
@@ -86,6 +87,11 @@ export default function SettingsView({
     if (ba) setBalanceAdjustments(ba);
     if (ac) setAccounts(ac);
     if (cat) setCategories(cat);
+  };
+
+  const loadAccounts = async () => {
+    const ac = await getAccounts().catch(() => null);
+    if (ac) setAccounts(ac);
   };
 
   const clearAll = async () => {
@@ -387,9 +393,11 @@ export default function SettingsView({
                 <h3>Nimeä tilit uudelleen</h3>
               </div>
             </div>
-            <div className="table mini two-col">
+            <div className="table mini">
               <div className="row mini header">
                 <span>Tili</span>
+                <span>Tyyppi</span>
+                <span>Omistaja</span>
                 <span>Saldo</span>
               </div>
               {accounts.map((a) => (
@@ -401,15 +409,34 @@ export default function SettingsView({
                       onBlur={async (e) => {
                         const name = e.target.value;
                         if (name !== a.name) {
-                          await fetch(`${API}/accounts/${a.id}`, {
-                            method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name }),
-                          });
-                          const [ac] = await Promise.all([getAccounts().catch(() => null)]);
-                          if (ac) setAccounts(ac);
+                          await patchAccount(a.id, { name });
+                          await loadAccounts();
                           await refreshAll();
                         }
+                      }}
+                    />
+                  </span>
+                  <span>
+                    <select
+                      value={a.account_subtype}
+                      onChange={async (e) => {
+                        await patchAccount(a.id, { account_subtype: e.target.value }).catch(() => {});
+                        await loadAccounts();
+                      }}
+                    >
+                      <option value="checking">Käyttö</option>
+                      <option value="savings">Säästö</option>
+                      <option value="credit_card">Luotto</option>
+                    </select>
+                  </span>
+                  <span>
+                    <input
+                      type="text"
+                      defaultValue={a.owner_label ?? ''}
+                      onBlur={async (e) => {
+                        const val = e.target.value;
+                        await patchAccount(a.id, { owner_label: val || null }).catch(() => {});
+                        await loadAccounts();
                       }}
                     />
                   </span>
