@@ -18,6 +18,7 @@ import { getSettings, updateSettings } from './settings.js';
 import { listLog } from './logger.js';
 import { listAccounts, updateAccount } from './accounts.js';
 import { listBalanceAdjustments, createBalanceAdjustment, deleteBalanceAdjustment } from './balanceAdjustments.js';
+import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
 
 initDb();
 seedDefaultCategories();
@@ -385,6 +386,10 @@ server.get('/recurring', async () => {
       `SELECT * FROM recurring_patterns WHERE is_active = 1 ORDER BY last_seen DESC`
     )
     .all();
+});
+
+server.get<{ Params: { accountId: string } }>('/balance-snapshots/:accountId', async (request) => {
+  return getBalanceSnapshotsForAccount(request.params.accountId);
 });
 
 const port = Number(process.env.PORT ?? 3001);

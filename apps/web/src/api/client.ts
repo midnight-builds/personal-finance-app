@@ -152,6 +152,12 @@ export type ImportResult = {
   briefingSessionId?: string;
 };
 
+export type BalanceSnapshot = {
+  date: string;
+  balance: number;
+  currency: string;
+};
+
 // ============================================================================
 // Helper
 // ============================================================================
@@ -425,5 +431,11 @@ export async function aiCategorize(params: {
     body: JSON.stringify(params),
   });
   if (!res.ok) return null;
+  return res.json();
+}
+
+export async function getBalanceSnapshots(accountId: string): Promise<BalanceSnapshot[]> {
+  const res = await safeFetch(`${API}/balance-snapshots/${encodeURIComponent(accountId)}`);
+  if (!res.ok) throw new Error(`getBalanceSnapshots failed: ${res.statusText}`);
   return res.json();
 }
