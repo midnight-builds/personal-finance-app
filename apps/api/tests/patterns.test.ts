@@ -120,3 +120,54 @@ test('excludes transfer-linked transactions', () => {
   const rows = db.prepare('SELECT * FROM recurring_patterns WHERE account_id = ?').all(acct);
   assert.equal(rows.length, 0, 'counterparty with any transfer-linked tx is excluded entirely, not just the individual linked occurrences');
 });
+
+test('detects weekly recurring pattern from 4 transactions ~7 days apart', () => {
+  const acct = mkAccount();
+  const sess = mkSession();
+  mkTx(acct, sess, 'Ruokakauppa', -45.00, 28);
+  mkTx(acct, sess, 'Ruokakauppa', -44.00, 21);
+  mkTx(acct, sess, 'Ruokakauppa', -46.00, 14);
+  mkTx(acct, sess, 'Ruokakauppa', -45.00, 7);
+
+  detectPatterns(acct);
+
+  const row = db.prepare(
+    "SELECT * FROM recurring_patterns WHERE account_id = ? AND counterparty_name = 'Ruokakauppa'"
+  ).get(acct) as any;
+  assert.ok(row, 'should create a pattern for weekly recurring');
+  assert.equal(row.pattern_type, 'recurring');
+  assert.ok(row.interval_days >= 6 && row.interval_days <= 8, `interval_days should be 6-8, got ${row.interval_days}`);
+});
+
+test('classifies weekly small-amount charge as subscription', () => {
+  const acct = mkAccount();
+  const sess = mkSession();
+  mkTx(acct, sess, 'MealKit', -9.50, 28);
+  mkTx(acct, sess, 'MealKit', -9.50, 21);
+  mkTx(acct, sess, 'MealKit', -9.50, 14);
+  mkTx(acct, sess, 'MealKit', -9.50, 7);
+
+  detectPatterns(acct);
+
+  const row = db.prepare(
+    "SELECT * FROM recurring_patterns WHERE account_id = ? AND counterparty_name = 'MealKit'"
+  ).get(acct) as any;
+  assert.ok(row);
+  assert.equal(row.pattern_type, 'subscription');
+});
+
+test('does not detect pattern for 4-day interval (too frequent for weekly window)', () => {
+  const acct = mkAccount();
+  const sess = mkSession();
+  mkTx(acct, sess, 'DailyFee', -5.00, 16);
+  mkTx(acct, sess, 'DailyFee', -5.00, 12);
+  mkTx(acct, sess, 'DailyFee', -5.00, 8);
+  mkTx(acct, sess, 'DailyFee', -5.00, 4);
+
+  detectPatterns(acct);
+
+  const rows = db.prepare(
+    "SELECT * FROM recurring_patterns WHERE account_id = ? AND counterparty_name = 'DailyFee'"
+  ).all(acct);
+  assert.equal(rows.length, 0);
+});

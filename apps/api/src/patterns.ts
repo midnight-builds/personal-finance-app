@@ -10,7 +10,7 @@ const SUBSCRIPTION_KEYWORDS = [
 function isSubscriptionLike(counterparty: string, amount: number): boolean {
   const lower = counterparty.toLowerCase();
   if (SUBSCRIPTION_KEYWORDS.some((k) => lower.includes(k))) return true;
-  return Math.abs(amount) < 50;
+  return Math.abs(amount) < 15;
 }
 
 export function detectPatterns(accountId: string): void {
@@ -59,8 +59,10 @@ export function detectPatterns(accountId: string): void {
     }
 
     const avgInterval = intervals.reduce((s, v) => s + v, 0) / intervals.length;
-    // Monthly: 25–35 day interval
-    if (avgInterval < 25 || avgInterval > 35) continue;
+    // Accept monthly (25–35 days) or weekly (6–8 days)
+    const isMonthly = avgInterval >= 25 && avgInterval <= 35;
+    const isWeekly = avgInterval >= 6 && avgInterval <= 8;
+    if (!isMonthly && !isWeekly) continue;
 
     // Check amount consistency (±20%)
     // typical_amount is stored as a positive absolute value (e.g. 15.99, not -15.99)
