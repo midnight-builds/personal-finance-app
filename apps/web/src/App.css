@@ -501,6 +501,213 @@ label {
   font-size: 0.95rem;
 }
 
+/* ── Import Prompt ───────────────────────────────────────────── */
+.import-prompt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.import-prompt label {
+  padding: 6px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.07);
+  color: #e7edf7;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.import-prompt label:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.import-prompt-stale {
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+  color: #fde68a;
+}
+
+.import-prompt-urgent {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: #fca5a5;
+}
+
+/* ── CFO State Panel ─────────────────────────────────────────── */
+.cfo-state-panel {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.cfo-header {
+  color: #94a3b8;
+  font-size: 0.82rem;
+  margin-bottom: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.cfo-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.cfo-metric {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.cfo-metric-label {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 4px;
+}
+
+.cfo-metric-value {
+  display: block;
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #e7edf7;
+}
+
+.cfo-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── Account Card ────────────────────────────────────────────── */
+.account-card {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+}
+
+.chip-subtype-checking {
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+}
+
+.chip-subtype-savings {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
+.chip-subtype-credit {
+  background: rgba(234, 88, 12, 0.16);
+  color: #fdba74;
+}
+
+.trend-up {
+  color: #4ade80;
+}
+
+.trend-down {
+  color: #f87171;
+}
+
+/* ── Severity Chips ──────────────────────────────────────────── */
+.chip-alert {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+}
+
+.chip-warn {
+  background: rgba(234, 179, 8, 0.18);
+  color: #fde68a;
+}
+
+.chip-info {
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+}
+
+/* ── Finding Cards ───────────────────────────────────────────── */
+.finding-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-left-width: 3px;
+  border-left-style: solid;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+
+.finding-card-alert {
+  border-left-color: #ef4444;
+}
+
+.finding-card-warn {
+  border-left-color: #eab308;
+}
+
+.finding-card-info {
+  border-left-color: #3b82f6;
+}
+
+.finding-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.finding-card-head h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 0.93rem;
+  font-weight: 600;
+  color: #e7edf7;
+}
+
+.finding-card-desc {
+  color: #94a3b8;
+  font-size: 0.88rem;
+  margin: 0 0 6px;
+  line-height: 1.55;
+}
+
+.finding-card-impact {
+  color: #64748b;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+/* ── Briefing Panel ──────────────────────────────────────────── */
+.briefing-panel {
+  margin-bottom: 24px;
+}
+
+.briefing-panel > h2 {
+  margin-top: 0;
+  margin-bottom: 14px;
+  font-size: 1.1rem;
+}
+
 @media (max-width: 960px) {
   .hero {
     grid-template-columns: 1fr;
