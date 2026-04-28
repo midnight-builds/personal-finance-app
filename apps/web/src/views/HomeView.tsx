@@ -1,5 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, useEffect } from 'react';
 import { API, formatDate, formatAmount, showToast } from '../utils';
+import { getHouseholdSummary, importCsv, importXlsx } from '../api/client';
+import type { HouseholdSummary } from '../api/client';
+import CfoStatePanel from '../components/CfoStatePanel';
+import ImportPrompt from '../components/ImportPrompt';
 
 type Account = { id: string; name: string; balance: number; currency: string; date: string };
 type Summary = {
@@ -66,6 +70,16 @@ export default function HomeView({
   const [showTransfers, setShowTransfers] = useState(false);
   const [txFilterIds, setTxFilterIds] = useState<string[] | null>(null);
   const [aiLoading, setAiLoading] = useState<string | null>(null);
+  const [householdSummary, setHouseholdSummary] = useState<HouseholdSummary | null>(null);
+
+  const loadHousehold = useCallback(async () => {
+    const data = await getHouseholdSummary();
+    setHouseholdSummary(data);
+  }, []);
+
+  useEffect(() => {
+    loadHousehold();
+  }, [loadHousehold]);
 
   const heroMood = useMemo(() => {
     const net = summary?.monthlyNet ?? 0;
@@ -86,31 +100,35 @@ export default function HomeView({
     return s;
   }
 
+  const handleImportFile = async (selectedFile: File) => {
+    setStatus('Ladataan...');
+    try {
+      const payload = selectedFile.name.toLowerCase().endsWith('.xlsx')
+        ? await importXlsx(selectedFile)
+        : await importCsv(selectedFile);
+      const overlapNote = payload.overlapDetected
+        ? ` (päällekkäinen importti havaittu, ${payload.alreadyImportedCount} riviä aiemmin)`
+        : '';
+      const skippedNote = payload.skippedCount ? `, ${payload.skippedCount} riviä ohitettiin` : '';
+      const format = selectedFile.name.toLowerCase().endsWith('.xlsx') ? 'XLSX' : 'CSV';
+      const msg = `Import ok (${format}): ${payload.normalizedCount} riviä${overlapNote}${skippedNote}`;
+      setStatus(msg);
+      showToast(setToast, msg);
+      await refreshAll();
+      await loadHousehold();
+    } catch {
+      setStatus('Import epäonnistui.');
+      showToast(setToast, 'Import epäonnistui', 4000);
+    }
+  };
+
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!file) {
       setStatus('Valitse CSV tai XLSX -tiedosto.');
       return;
     }
-    setStatus('Ladataan...');
-    const form = new FormData();
-    form.append('file', file);
-    const endpoint = file.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : 'csv';
-    const res = await fetch(`${API}/imports/nordea/${endpoint}`, { method: 'POST', body: form });
-    if (!res.ok) {
-      setStatus('Import epäonnistui.');
-      showToast(setToast, 'Import epäonnistui', 4000);
-      return;
-    }
-    const payload = await res.json();
-    const overlapNote = payload.overlapDetected
-      ? ` (päällekkäinen importti havaittu, ${payload.alreadyImportedCount} riviä aiemmin)`
-      : '';
-    const skippedNote = payload.skippedCount ? `, ${payload.skippedCount} riviä ohitettiin` : '';
-    const msg = `Import ok (${endpoint.toUpperCase()}): ${payload.normalizedCount} riviä${overlapNote}${skippedNote}`;
-    setStatus(msg);
-    showToast(setToast, msg);
-    await refreshAll();
+    await handleImportFile(file);
   };
 
   const changeCategory = async (id: string, categoryId: string) => {
@@ -210,6 +228,16 @@ export default function HomeView({
 
   return (
     <>
+      {householdSummary && householdSummary.dataAgeDays > 7 && (
+        <ImportPrompt
+          dataAgeDays={householdSummary.dataAgeDays}
+          onImport={handleImportFile}
+          status={status}
+        />
+      )}
+      {householdSummary && (
+        <CfoStatePanel summary={householdSummary} />
+      )}
       <section className={`hero hero-${heroMood}`}>
         <div>
           <p className="eyebrow">Palkkapäivä {settings.payday}. ±{settings.paydayFlexDays} pv</p>
