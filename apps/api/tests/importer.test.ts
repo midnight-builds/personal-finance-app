@@ -8,6 +8,9 @@ import { checksum, processImport } from '../src/importer.js';
 
 function clearDb() {
   db.exec(`
+    DELETE FROM insight_findings;
+    DELETE FROM briefing_sessions;
+    DELETE FROM recurring_patterns;
     DELETE FROM categorization_decisions;
     DELETE FROM category_rules;
     DELETE FROM categories WHERE built_in = 0;

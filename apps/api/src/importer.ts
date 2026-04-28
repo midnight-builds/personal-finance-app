@@ -4,6 +4,8 @@ import xlsx from 'xlsx';
 import { db } from './db.js';
 import { logEvent } from './logger.js';
 import { chooseCategoryFor, upsertDecision } from './rules.js';
+import { detectPatterns } from './patterns.js';
+import { runBriefing } from './briefing.js';
 
 export type ImportResult = {
   importSessionId: string;
@@ -13,6 +15,7 @@ export type ImportResult = {
   skippedCount: number;
   overlapDetected: boolean;
   alreadyImportedCount: number;
+  briefingSessionId?: string;
 };
 
 type RecordValue = string | number | null | undefined;
@@ -416,6 +419,15 @@ export function processImport(options: {
   dedupeInserted(insertedIds);
   linkTransfers(insertedIds);
 
+  // Hook patterns and briefing into import pipeline
+  let briefingSessionId: string | undefined;
+  try {
+    detectPatterns(accountId);
+    briefingSessionId = runBriefing(importSessionId);
+  } catch (err) {
+    logEvent({ type: 'import.warning', scope: importSessionId, message: 'Briefing failed', payload: { error: String(err) } });
+  }
+
   logEvent({
     type: 'import.done',
     scope: importSessionId,
@@ -431,6 +443,7 @@ export function processImport(options: {
     skippedCount,
     overlapDetected: Boolean(overlapRow),
     alreadyImportedCount: overlapRow?.row_count ?? 0,
+    briefingSessionId,
   };
 }
 

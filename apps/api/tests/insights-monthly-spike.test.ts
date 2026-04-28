@@ -12,6 +12,9 @@ initDb();
 beforeEach(() => {
   db.exec('PRAGMA foreign_keys=OFF;');
   db.exec(`
+    DELETE FROM insight_findings;
+    DELETE FROM briefing_sessions;
+    DELETE FROM recurring_patterns;
     DELETE FROM transfer_links;
     DELETE FROM normalized_transactions;
     DELETE FROM raw_transactions;
