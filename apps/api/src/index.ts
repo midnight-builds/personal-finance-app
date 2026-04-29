@@ -187,6 +187,7 @@ server.post('/debug/clear', async () => {
     DELETE FROM insight_findings;
     DELETE FROM briefing_sessions;
     DELETE FROM recurring_patterns;
+    DELETE FROM pattern_confirmations;
     DELETE FROM import_sessions;
     DELETE FROM accounts;
   `);
@@ -207,6 +208,7 @@ server.post('/debug/clear-imports', async () => {
     DELETE FROM insight_findings;
     DELETE FROM briefing_sessions;
     DELETE FROM recurring_patterns;
+    DELETE FROM pattern_confirmations;
     DELETE FROM import_sessions;
   `);
   db.exec('PRAGMA foreign_keys=ON;');
