@@ -85,7 +85,7 @@ server.post('/imports/nordea/csv', async (request, reply) => {
   if ('error' in upload) return reply.code(400).send({ error: upload.error });
 
   const records = parseCsv(upload.fileBuffer);
-  const result = processImport({
+  const result = await processImport({
     records,
     checksum: checksum(upload.fileBuffer),
     filename: upload.fileName,
@@ -101,7 +101,7 @@ server.post('/imports/nordea/xlsx', async (request, reply) => {
   if ('error' in upload) return reply.code(400).send({ error: upload.error });
 
   const records = parseXlsx(upload.fileBuffer);
-  const result = processImport({
+  const result = await processImport({
     records,
     checksum: checksum(upload.fileBuffer),
     filename: upload.fileName,

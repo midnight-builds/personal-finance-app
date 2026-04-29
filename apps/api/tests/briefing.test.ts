@@ -67,22 +67,22 @@ beforeEach(() => {
   seedDefaultCategories();
 });
 
-test('runBriefing creates a briefing_session row and returns its id', () => {
+test('runBriefing creates a briefing_session row and returns its id', async () => {
   const sess = mkSession();
-  const briefingId = runBriefing(sess);
+  const briefingId = await runBriefing(sess);
   assert.ok(typeof briefingId === 'string' && briefingId.length > 0);
   const row = db.prepare('SELECT * FROM briefing_sessions WHERE id = ?').get(briefingId) as any;
   assert.ok(row);
   assert.equal(row.import_session_id, sess);
 });
 
-test('subscriptionCreep generator fires when subscriptions exist', () => {
+test('subscriptionCreep generator fires when subscriptions exist', async () => {
   const acct = mkAccount();
   const sess = mkSession();
   mkPattern(acct, 'Netflix', 'subscription', 15.99, 5);
   mkPattern(acct, 'Spotify', 'subscription', 9.99, 3);
 
-  const briefingId = runBriefing(sess);
+  const briefingId = await runBriefing(sess);
 
   const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'subscription_creep'").all(briefingId) as any[];
   assert.ok(findings.length >= 1, 'should produce at least one subscription_creep finding');
@@ -91,19 +91,19 @@ test('subscriptionCreep generator fires when subscriptions exist', () => {
   assert.ok(f.description.includes('25.98') || f.description.includes('€'), 'should mention total amount');
 });
 
-test('newRecurring generator fires for recently created patterns', () => {
+test('newRecurring generator fires for recently created patterns', async () => {
   const acct = mkAccount();
   const sess = mkSession();
   mkPattern(acct, 'Fortum', 'recurring', 87.50, 10);
 
-  const briefingId = runBriefing(sess);
+  const briefingId = await runBriefing(sess);
 
   const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'new_recurring'").all(briefingId) as any[];
   assert.ok(findings.length >= 1);
   assert.ok(findings[0].description.includes('Fortum'));
 });
 
-test('oneOffImpact generator fires for large one-off transaction', () => {
+test('oneOffImpact generator fires for large one-off transaction', async () => {
   const acct = mkAccount();
   const sess = mkSession();
   // Establish baseline: normal monthly spend ~120€ (4 × 30€)
@@ -113,39 +113,39 @@ test('oneOffImpact generator fires for large one-off transaction', () => {
   // Large one-off purchase this month — well above 2× baseline avg
   mkTx(acct, sess, 'Verkkokauppa.com', -450, 5);
 
-  const briefingId = runBriefing(sess);
+  const briefingId = await runBriefing(sess);
 
   const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'one_off_impact'").all(briefingId) as any[];
   assert.ok(findings.length >= 1, 'should flag large one-off purchase');
   assert.ok(findings[0].description.includes('Verkkokauppa'));
 });
 
-test('savingsProgress generator fires for savings account with balance history', () => {
+test('savingsProgress generator fires for savings account with balance history', async () => {
   const acct = mkAccount('savings');
   const sess = mkSession();
   mkBalance(acct, 5000, 90);
   mkBalance(acct, 5200, 60);
   mkBalance(acct, 5500, 30);
 
-  const briefingId = runBriefing(sess);
+  const briefingId = await runBriefing(sess);
 
   const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'savings_progress'").all(briefingId) as any[];
   assert.ok(findings.length >= 1);
 });
 
-test('generator exception does not abort briefing — briefing_session still created', () => {
+test('generator exception does not abort briefing — briefing_session still created', async () => {
   const acct = mkAccount();
   const sess = mkSession();
   mkPattern(acct, 'Netflix', 'subscription', 15.99, 5);
 
-  // Should not throw even if some generators find nothing or have edge cases
-  assert.doesNotThrow(() => runBriefing(sess));
+  // Should not reject even if some generators find nothing or have edge cases
+  await assert.doesNotReject(async () => await runBriefing(sess));
 
   const row = db.prepare('SELECT * FROM briefing_sessions WHERE import_session_id = ?').get(sess) as any;
   assert.ok(row, 'briefing session should be created even if some generators fail');
 });
 
-test('creditHealth generator fires when credit card balance is growing', () => {
+test('creditHealth generator fires when credit card balance is growing', async () => {
   const acct = mkAccount('credit_card');
   const sess = mkSession();
   // Simulate growing credit card debt (balances more negative over time)
@@ -155,14 +155,14 @@ test('creditHealth generator fires when credit card balance is growing', () => {
   mkBalance(acct, -1000, 60);
   mkBalance(acct, -1200, 30);
 
-  const briefingId = runBriefing(sess);
+  const briefingId = await runBriefing(sess);
 
   const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'credit_health'").all(briefingId) as any[];
   assert.ok(findings.length >= 1, 'should fire credit_health finding for growing credit card debt');
   assert.equal(findings[0].severity, 'warn');
 });
 
-test('spendingAnomaly generator fires when category spend doubles vs baseline', () => {
+test('spendingAnomaly generator fires when category spend doubles vs baseline', async () => {
   const acct = mkAccount();
   const sess = mkSession();
 
@@ -184,18 +184,18 @@ test('spendingAnomaly generator fires when category spend doubles vs baseline', 
   db.prepare('INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source) VALUES (?, ?, ?, ?, ?)')
     .run(crypto.randomUUID(), now, recentTx, cat.id, 'rule');
 
-  const briefingId = runBriefing(sess);
+  const briefingId = await runBriefing(sess);
 
   const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'spending_anomaly'").all(briefingId) as any[];
   assert.ok(findings.length >= 1, 'should fire spending_anomaly when category spend is > 2× baseline');
 });
 
-test('savingsProgress generator does not fire for savings account with only 1 balance snapshot', () => {
+test('savingsProgress generator does not fire for savings account with only 1 balance snapshot', async () => {
   const acct = mkAccount('savings');
   const sess = mkSession();
   mkBalance(acct, 5000, 30); // only 1 snapshot
 
-  const briefingId = runBriefing(sess);
+  const briefingId = await runBriefing(sess);
 
   const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'savings_progress'").all(briefingId) as any[];
   assert.equal(findings.length, 0, 'should not fire with fewer than 2 balance snapshots');

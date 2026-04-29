@@ -277,7 +277,7 @@ function linkTransfers(ids: string[]) {
   }
 }
 
-export function processImport(options: {
+export async function processImport(options: {
   records: Record<string, unknown>[];
   checksum: string;
   filename: string;
@@ -285,7 +285,7 @@ export function processImport(options: {
   accountIban?: string;
   sourceBank: string;
   format: string;
-}): ImportResult {
+}): Promise<ImportResult> {
   const { records, checksum, filename, sourceBank, format } = options;
   const inferred = inferAccount(records, filename);
   const accountName = options.accountName ?? inferred.accountName;
@@ -423,7 +423,7 @@ export function processImport(options: {
   let briefingSessionId: string | undefined;
   try {
     detectPatterns(accountId);
-    briefingSessionId = runBriefing(importSessionId);
+    briefingSessionId = await runBriefing(importSessionId);
   } catch (err) {
     logEvent({ type: 'import.warning', scope: importSessionId, message: 'Briefing failed', payload: { error: String(err) } });
   }

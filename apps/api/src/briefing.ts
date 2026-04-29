@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import { db } from './db.js';
+import { getOpenAIApiKey } from './settings.js';
+import { enhanceBriefingDescriptions } from './ai/briefingEnhancer.js';
 
 type FindingInput = {
   finding_type: string;
@@ -246,7 +248,7 @@ const GENERATORS = [
 
 const SEVERITY_ORDER: Record<string, number> = { alert: 0, warn: 1, info: 2 };
 
-export function runBriefing(importSessionId: string): string {
+export async function runBriefing(importSessionId: string): Promise<string> {
   const now = new Date().toISOString();
   const briefingId = crypto.randomUUID();
 
@@ -278,6 +280,16 @@ export function runBriefing(importSessionId: string): string {
     if (sa !== sb) return sa - sb;
     return (b.impact_eur ?? 0) - (a.impact_eur ?? 0);
   });
+
+  const apiKey = getOpenAIApiKey();
+  if (apiKey && allFindings.length > 0) {
+    try {
+      const enhanced = await enhanceBriefingDescriptions(allFindings, apiKey);
+      enhanced.forEach((desc, i) => { allFindings[i].description = desc; });
+    } catch (err) {
+      console.error('[briefing] AI enhancement failed, using original descriptions:', err);
+    }
+  }
 
   for (const f of allFindings) {
     stmtInsertFinding.run(

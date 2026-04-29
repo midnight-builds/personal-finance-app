@@ -64,14 +64,14 @@ beforeEach(() => {
   clearDb();
 });
 
-test('deduplicates overlapping imports and assigns transaction groups', () => {
+test('deduplicates overlapping imports and assigns transaction groups', async () => {
   const records = [
     makeRecord({ date: '2026/01/20', amount: '-10,00', payee: 'Test Shop', payer: 'FI0011223344556677' }),
   ];
   const buf = Buffer.from('dummy');
   const hash = checksum(buf);
 
-  const first = processImport({
+  const first = await processImport({
     records,
     checksum: hash,
     filename: 'Kayttotili FI00 1122 3344 5566 77.csv',
@@ -79,7 +79,7 @@ test('deduplicates overlapping imports and assigns transaction groups', () => {
     format: 'CSV',
   });
 
-  const second = processImport({
+  const second = await processImport({
     records,
     checksum: hash,
     filename: 'Kayttotili FI00 1122 3344 5566 77.csv',
@@ -121,7 +121,7 @@ test('deduplicates overlapping imports and assigns transaction groups', () => {
   assert.equal(canonical.id, expected.id);
 });
 
-test('links transfers across accounts with opposite amounts', () => {
+test('links transfers across accounts with opposite amounts', async () => {
   const outRecords = [
     makeRecord({
       date: '2026/01/10',
@@ -139,7 +139,7 @@ test('links transfers across accounts with opposite amounts', () => {
     }),
   ];
 
-  processImport({
+  await processImport({
     records: outRecords,
     checksum: checksum(Buffer.from('out')),
     filename: 'Debit FI-DEBIT-IBAN.csv',
@@ -147,7 +147,7 @@ test('links transfers across accounts with opposite amounts', () => {
     format: 'CSV',
   });
 
-  processImport({
+  await processImport({
     records: inRecords,
     checksum: checksum(Buffer.from('in')),
     filename: 'Savings FI-SAV-IBAN.csv',
@@ -172,7 +172,7 @@ test('links transfers across accounts with opposite amounts', () => {
   assert.ok(to.amount > 0);
 });
 
-test('writes balance snapshots when saldo present', () => {
+test('writes balance snapshots when saldo present', async () => {
   const records = [
     {
       Kirjauspäivä: '2026/01/20',
@@ -184,7 +184,7 @@ test('writes balance snapshots when saldo present', () => {
     } as Record<string, unknown>,
   ];
 
-  processImport({
+  await processImport({
     records,
     checksum: checksum(Buffer.from('bal')),
     filename: 'Kayttotili FI00 1122 3344 5566 77.csv',

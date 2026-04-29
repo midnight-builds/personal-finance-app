@@ -41,5 +41,5 @@ export function updateAccount(
 
   if (sets.length === 0) return undefined;
   values.push(id);
-  return db.prepare(`UPDATE accounts SET ${sets.join(', ')} WHERE id = ?`).run(...values) as { changes: number };
+  return db.prepare(`UPDATE accounts SET ${sets.join(', ')} WHERE id = ?`).run(...(values as any[])) as { changes: number };
 }
