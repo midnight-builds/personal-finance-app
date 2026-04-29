@@ -3,6 +3,7 @@ import { db } from './db.js';
 import { getOpenAIApiKey } from './settings.js';
 import { enhanceBriefingDescriptions } from './ai/briefingEnhancer.js';
 import { listPendingConfirmations } from './patternConfirmations.js';
+import { computeMonthlyForecast } from './forecast.js';
 
 type FindingInput = {
   finding_type: string;
@@ -250,6 +251,54 @@ function pendingConfirmations(): FindingInput[] {
   }));
 }
 
+function monthlyForecast(): FindingInput[] {
+  const MONTHS = ['tammikuu', 'helmikuu', 'maaliskuu', 'huhtikuu', 'toukokuu', 'kesäkuu',
+                  'heinäkuu', 'elokuu', 'syyskuu', 'lokakuu', 'marraskuu', 'joulukuu'];
+
+  const forecast = computeMonthlyForecast(1);
+  if (forecast.projectedTotal === 0) return [];
+
+  const threeMonthsAgo = new Date(Date.now() - 90 * 86400_000).toISOString().slice(0, 10);
+  const recentRow = db.prepare(`
+    SELECT AVG(monthly_total) AS avg_spend FROM (
+      SELECT SUM(ABS(amount)) AS monthly_total
+      FROM normalized_transactions
+      WHERE booking_date >= ? AND amount < 0
+        AND id NOT IN (
+          SELECT from_transaction_id FROM transfer_links
+          UNION SELECT to_transaction_id FROM transfer_links
+        )
+      GROUP BY strftime('%Y-%m', booking_date)
+      LIMIT 3
+    )
+  `).get(threeMonthsAgo) as { avg_spend: number | null };
+
+  const recentAvg = recentRow?.avg_spend ?? 0;
+  const isExpensive = recentAvg > 0 && forecast.projectedTotal >= recentAvg * 1.3;
+
+  const [year, month] = forecast.targetMonth.split('-');
+  const monthName = MONTHS[parseInt(month, 10) - 1];
+
+  const annualNote =
+    forecast.annualItems.length > 0
+      ? ` + vuosikuluja: ${forecast.annualItems.map((i) => `${i.counterparty} ${fmt(i.amount)}`).join(', ')}`
+      : '';
+
+  return [{
+    finding_type: 'monthly_forecast',
+    title: `Ennuste ${monthName}lle ${year}: ${fmt(forecast.projectedTotal)}`,
+    description: `Tiedossa: ${forecast.knownFixed.length} kuukausimaksua (${fmt(forecast.knownFixed.reduce((s, i) => s + i.amount, 0))})${annualNote}. Historiakeskiarvo ${monthName}lle: ${forecast.historicalAvg > 0 ? fmt(forecast.historicalAvg) : 'ei dataa'}.`,
+    severity: isExpensive ? 'warn' : 'info',
+    impact_eur: forecast.projectedTotal,
+    metadata: {
+      targetMonth: forecast.targetMonth,
+      projectedTotal: forecast.projectedTotal,
+      knownFixedCount: forecast.knownFixed.length,
+      annualItemsCount: forecast.annualItems.length,
+    },
+  }];
+}
+
 // ── Engine ────────────────────────────────────────────────────────
 
 const GENERATORS = [
@@ -260,6 +309,7 @@ const GENERATORS = [
   creditHealth,
   spendingAnomaly,
   pendingConfirmations,
+  monthlyForecast,
 ];
 
 const SEVERITY_ORDER: Record<string, number> = { alert: 0, warn: 1, info: 2 };

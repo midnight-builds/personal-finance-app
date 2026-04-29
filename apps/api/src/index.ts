@@ -20,6 +20,7 @@ import { listAccounts, updateAccount } from './accounts.js';
 import { listBalanceAdjustments, createBalanceAdjustment, deleteBalanceAdjustment } from './balanceAdjustments.js';
 import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
 import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
+import { getForecast } from './forecast.js';
 
 initDb();
 seedDefaultCategories();
@@ -394,6 +395,8 @@ server.get('/recurring', async () => {
 server.get<{ Params: { accountId: string } }>('/balance-snapshots/:accountId', async (request) => {
   return getBalanceSnapshotsForAccount(request.params.accountId);
 });
+
+server.get('/forecast', async () => getForecast());
 
 server.get('/pattern-confirmations', async () => listPendingConfirmations());
 
