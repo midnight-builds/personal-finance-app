@@ -216,6 +216,12 @@ export function initDb() {
   safeExec(`ALTER TABLE accounts ADD COLUMN owner_label TEXT`);
   safeExec(`ALTER TABLE accounts ADD COLUMN credit_limit REAL`);
   safeExec(`ALTER TABLE accounts ADD COLUMN savings_goal REAL`);
+
+  safeExec(`
+    DELETE FROM category_rules WHERE rowid NOT IN (
+      SELECT MIN(rowid) FROM category_rules GROUP BY pattern, category_id, match_field
+    )
+  `);
 }
 
 export function seedDefaultCategories() {

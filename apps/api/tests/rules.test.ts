@@ -25,6 +25,26 @@ function createTx(id: string) {
   ).run(id, now, null, imp, acct, now, -10, 'EUR');
 }
 
+function getCategoryId(name: string): string {
+  const row = db.prepare('SELECT id FROM categories WHERE name = ?').get(name) as { id: string } | undefined;
+  if (!row) throw new Error(`Category not found: ${name}`);
+  return row.id;
+}
+
+function mkTxFull(counterparty: string): string {
+  const id = crypto.randomUUID();
+  const acctId = crypto.randomUUID();
+  const sessId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  db.prepare('INSERT INTO accounts (id, created_at, name, iban, type) VALUES (?, ?, ?, ?, ?)')
+    .run(acctId, now, 'Test', null, 'bank');
+  db.prepare('INSERT INTO import_sessions (id, created_at, source_bank, format) VALUES (?, ?, ?, ?)')
+    .run(sessId, now, 'Test', 'CSV');
+  db.prepare('INSERT INTO normalized_transactions (id, created_at, raw_transaction_id, import_session_id, account_id, booking_date, amount, currency, counterparty_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, now, null, sessId, acctId, now, -30, 'EUR', counterparty);
+  return id;
+}
+
 beforeEach(() => {
   db.exec('PRAGMA foreign_keys=OFF;');
   db.exec(`
@@ -73,4 +93,29 @@ test('upsertDecision replaces previous decision', () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].category_id, catB.id);
   assert.equal(rows[0].source, 'user');
+});
+
+test('upsertDecision does not create duplicate rule for same counterparty+category', () => {
+  const txId1 = mkTxFull('K-Market');
+  const txId2 = mkTxFull('K-Market');
+  const catId = getCategoryId('Ruoka ja päivittäistavarat');
+
+  upsertDecision({ transactionId: txId1, categoryId: catId, source: 'user', counterparty: 'K-Market' });
+  upsertDecision({ transactionId: txId2, categoryId: catId, source: 'user', counterparty: 'K-Market' });
+
+  const rules = db.prepare("SELECT * FROM category_rules WHERE pattern = 'k-market'").all() as any[];
+  assert.equal(rules.length, 1, 'should have exactly one rule for K-Market');
+});
+
+test('upsertDecision creates separate rules for same counterparty with different categories', () => {
+  const txId1 = mkTxFull('S-Market');
+  const txId2 = mkTxFull('S-Market');
+  const catFood = getCategoryId('Ruoka ja päivittäistavarat');
+  const catMisc = getCategoryId('Muut ja epäselvät');
+
+  upsertDecision({ transactionId: txId1, categoryId: catFood, source: 'user', counterparty: 'S-Market' });
+  upsertDecision({ transactionId: txId2, categoryId: catMisc, source: 'user', counterparty: 'S-Market' });
+
+  const rules = db.prepare("SELECT * FROM category_rules WHERE pattern = 's-market'").all() as any[];
+  assert.equal(rules.length, 2, 'different categories should produce separate rules');
 });

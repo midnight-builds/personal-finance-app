@@ -80,9 +80,15 @@ export function upsertDecision(options: {
   if (source === 'user') {
     const pattern = (counterparty || description || '').trim();
     if (pattern.length >= 3) {
-      db.prepare(
-        'INSERT INTO category_rules (id, created_at, category_id, pattern, match_field, priority) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(crypto.randomUUID(), now, categoryId, pattern.toLowerCase(), counterparty ? 'counterparty' : 'description', 10);
+      const matchField = counterparty ? 'counterparty' : 'description';
+      const existingRule = db.prepare(
+        'SELECT id FROM category_rules WHERE pattern = ? AND category_id = ? AND match_field = ? LIMIT 1'
+      ).get(pattern.toLowerCase(), categoryId, matchField);
+      if (!existingRule) {
+        db.prepare(
+          'INSERT INTO category_rules (id, created_at, category_id, pattern, match_field, priority) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(crypto.randomUUID(), now, categoryId, pattern.toLowerCase(), matchField, 10);
+      }
     }
   }
 }
