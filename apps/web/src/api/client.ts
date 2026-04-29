@@ -158,6 +158,19 @@ export type BalanceSnapshot = {
   currency: string;
 };
 
+export type RuleSuggestion = {
+  id: string;
+  created_at: string;
+  category_id: string;
+  category_name: string;
+  pattern: string;
+  match_field: string;
+  sample_counterparty: string | null;
+  ai_reason: string | null;
+  confidence: number;
+  status: string;
+};
+
 // ============================================================================
 // Helper
 // ============================================================================
@@ -438,4 +451,20 @@ export async function getBalanceSnapshots(accountId: string): Promise<BalanceSna
   const res = await safeFetch(`${API}/balance-snapshots/${encodeURIComponent(accountId)}`);
   if (!res.ok) throw new Error(`getBalanceSnapshots failed: ${res.statusText}`);
   return res.json();
+}
+
+export async function getRuleSuggestions(): Promise<RuleSuggestion[]> {
+  const res = await safeFetch(`${API}/rule-suggestions`);
+  if (!res.ok) throw new Error(`getRuleSuggestions failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function acceptRuleSuggestion(id: string): Promise<void> {
+  const res = await safeFetch(`${API}/rule-suggestions/${id}/accept`, { method: 'POST' });
+  if (!res.ok) throw new Error(`acceptRuleSuggestion failed: ${res.statusText}`);
+}
+
+export async function rejectRuleSuggestion(id: string): Promise<void> {
+  const res = await safeFetch(`${API}/rule-suggestions/${id}/reject`, { method: 'POST' });
+  if (!res.ok) throw new Error(`rejectRuleSuggestion failed: ${res.statusText}`);
 }

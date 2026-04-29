@@ -5,6 +5,7 @@ import type { HouseholdSummary } from '../api/client';
 import CfoStatePanel from '../components/CfoStatePanel';
 import ImportPrompt from '../components/ImportPrompt';
 import BriefingPanel from '../components/BriefingPanel';
+import RuleSuggestionsPanel from '../components/RuleSuggestionsPanel';
 
 type Account = { id: string; name: string; balance: number; currency: string; date: string };
 type Summary = {
@@ -244,6 +245,10 @@ export default function HomeView({
       <BriefingPanel
         setToast={setToast}
         onFilterTransactions={(ids) => setTxFilterIds(ids)}
+        refreshKey={briefingRefreshKey}
+      />
+      <RuleSuggestionsPanel
+        setToast={setToast}
         refreshKey={briefingRefreshKey}
       />
       <section className={`hero hero-${heroMood}`}>
