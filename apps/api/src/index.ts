@@ -19,6 +19,7 @@ import { listLog } from './logger.js';
 import { listAccounts, updateAccount } from './accounts.js';
 import { listBalanceAdjustments, createBalanceAdjustment, deleteBalanceAdjustment } from './balanceAdjustments.js';
 import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
+import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
 
 initDb();
 seedDefaultCategories();
@@ -392,6 +393,28 @@ server.get('/recurring', async () => {
 
 server.get<{ Params: { accountId: string } }>('/balance-snapshots/:accountId', async (request) => {
   return getBalanceSnapshotsForAccount(request.params.accountId);
+});
+
+server.get('/pattern-confirmations', async () => listPendingConfirmations());
+
+server.post<{ Params: { id: string } }>('/pattern-confirmations/:id/confirm', async (request, reply) => {
+  const { id } = request.params;
+  try {
+    confirmPatternConfirmation(id);
+    return reply.send({ ok: true });
+  } catch (err: any) {
+    return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });
+  }
+});
+
+server.post<{ Params: { id: string } }>('/pattern-confirmations/:id/reject', async (request, reply) => {
+  const { id } = request.params;
+  try {
+    rejectPatternConfirmation(id);
+    return reply.send({ ok: true });
+  } catch (err: any) {
+    return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });
+  }
 });
 
 const port = Number(process.env.PORT ?? 3001);

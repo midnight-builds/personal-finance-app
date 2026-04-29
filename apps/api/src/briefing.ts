@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { db } from './db.js';
 import { getOpenAIApiKey } from './settings.js';
 import { enhanceBriefingDescriptions } from './ai/briefingEnhancer.js';
+import { listPendingConfirmations } from './patternConfirmations.js';
 
 type FindingInput = {
   finding_type: string;
@@ -235,6 +236,20 @@ function spendingAnomaly(): FindingInput[] {
   }));
 }
 
+function pendingConfirmations(): FindingInput[] {
+  const MONTHS = ['tammikuu', 'helmikuu', 'maaliskuu', 'huhtikuu', 'toukokuu', 'kesäkuu',
+                  'heinäkuu', 'elokuu', 'syyskuu', 'lokakuu', 'marraskuu', 'joulukuu'];
+
+  return listPendingConfirmations().slice(0, 3).map((c) => ({
+    finding_type: 'pattern_confirmation',
+    title: `Tuleeko ${c.counterparty_name} ensi vuonna uudelleen?`,
+    description: `${fmt(c.typical_amount)} veloitus ${MONTHS[c.typical_month - 1]}ssa — onko tämä vuosittainen maksu?`,
+    severity: 'info' as const,
+    impact_eur: c.typical_amount,
+    metadata: { confirmationId: c.id, counterparty: c.counterparty_name, month: c.typical_month },
+  }));
+}
+
 // ── Engine ────────────────────────────────────────────────────────
 
 const GENERATORS = [
@@ -244,6 +259,7 @@ const GENERATORS = [
   savingsProgress,
   creditHealth,
   spendingAnomaly,
+  pendingConfirmations,
 ];
 
 const SEVERITY_ORDER: Record<string, number> = { alert: 0, warn: 1, info: 2 };
