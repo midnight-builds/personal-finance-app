@@ -6,6 +6,7 @@ import { logEvent } from './logger.js';
 import { chooseCategoryFor, upsertDecision } from './rules.js';
 import { detectPatterns } from './patterns.js';
 import { runBriefing } from './briefing.js';
+import { generateRuleSuggestions } from './ruleSuggestions.js';
 
 export type ImportResult = {
   importSessionId: string;
@@ -427,6 +428,11 @@ export async function processImport(options: {
   } catch (err) {
     logEvent({ type: 'import.warning', scope: importSessionId, message: 'Briefing failed', payload: { error: String(err) } });
   }
+
+  // Fire-and-forget: non-blocking AI rule suggestions
+  generateRuleSuggestions().catch((err) => {
+    console.error('[importer] generateRuleSuggestions failed:', err);
+  });
 
   logEvent({
     type: 'import.done',

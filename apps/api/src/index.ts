@@ -19,6 +19,7 @@ import { listLog } from './logger.js';
 import { listAccounts, updateAccount } from './accounts.js';
 import { listBalanceAdjustments, createBalanceAdjustment, deleteBalanceAdjustment } from './balanceAdjustments.js';
 import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
+import { listPendingRuleSuggestions, acceptRuleSuggestion, rejectRuleSuggestion } from './ruleSuggestions.js';
 
 initDb();
 seedDefaultCategories();
@@ -178,6 +179,7 @@ server.post<{ Params: { id: string }; Body: { categoryId: string } }>(
 server.post('/debug/clear', async () => {
   db.exec('PRAGMA foreign_keys=OFF;');
   db.exec(`
+    DELETE FROM rule_suggestions;
     DELETE FROM categorization_decisions;
     DELETE FROM category_rules;
     DELETE FROM categories;
@@ -198,6 +200,7 @@ server.post('/debug/clear', async () => {
 server.post('/debug/clear-imports', async () => {
   db.exec('PRAGMA foreign_keys=OFF;');
   db.exec(`
+    DELETE FROM rule_suggestions;
     DELETE FROM transfer_links;
     DELETE FROM balance_snapshots;
     DELETE FROM balance_adjustments;
@@ -390,6 +393,28 @@ server.get('/recurring', async () => {
 
 server.get<{ Params: { accountId: string } }>('/balance-snapshots/:accountId', async (request) => {
   return getBalanceSnapshotsForAccount(request.params.accountId);
+});
+
+server.get('/rule-suggestions', async () => listPendingRuleSuggestions());
+
+server.post<{ Params: { id: string } }>('/rule-suggestions/:id/accept', async (request, reply) => {
+  const { id } = request.params;
+  try {
+    acceptRuleSuggestion(id);
+    return reply.send({ ok: true });
+  } catch (err: any) {
+    return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });
+  }
+});
+
+server.post<{ Params: { id: string } }>('/rule-suggestions/:id/reject', async (request, reply) => {
+  const { id } = request.params;
+  try {
+    rejectRuleSuggestion(id);
+    return reply.send({ ok: true });
+  } catch (err: any) {
+    return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });
+  }
 });
 
 const port = Number(process.env.PORT ?? 3001);

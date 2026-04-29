@@ -190,6 +190,22 @@ export function initDb() {
       FOREIGN KEY(account_id) REFERENCES accounts(id)
     );
 
+    CREATE TABLE IF NOT EXISTS rule_suggestions (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      category_id TEXT NOT NULL,
+      category_name TEXT NOT NULL,
+      pattern TEXT NOT NULL,
+      match_field TEXT NOT NULL DEFAULT 'counterparty',
+      sample_counterparty TEXT,
+      ai_reason TEXT,
+      confidence REAL NOT NULL DEFAULT 0.8,
+      status TEXT NOT NULL DEFAULT 'pending',
+      resolved_at TEXT,
+      FOREIGN KEY(category_id) REFERENCES categories(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_rule_suggestions_status ON rule_suggestions(status);
+
     CREATE INDEX IF NOT EXISTS idx_import_sessions_overlap ON import_sessions(overlap_key);
     CREATE INDEX IF NOT EXISTS idx_normalized_booking_date ON normalized_transactions(booking_date);
     CREATE INDEX IF NOT EXISTS idx_normalized_account_date ON normalized_transactions(account_id, booking_date);
