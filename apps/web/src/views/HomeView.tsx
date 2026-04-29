@@ -5,6 +5,7 @@ import type { HouseholdSummary } from '../api/client';
 import CfoStatePanel from '../components/CfoStatePanel';
 import ImportPrompt from '../components/ImportPrompt';
 import BriefingPanel from '../components/BriefingPanel';
+import ForecastPanel from '../components/ForecastPanel';
 
 type Account = { id: string; name: string; balance: number; currency: string; date: string };
 type Summary = {
@@ -241,6 +242,7 @@ export default function HomeView({
       {householdSummary && (
         <CfoStatePanel summary={householdSummary} />
       )}
+      <ForecastPanel />
       <BriefingPanel
         setToast={setToast}
         onFilterTransactions={(ids) => setTxFilterIds(ids)}

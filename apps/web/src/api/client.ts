@@ -141,6 +141,27 @@ export type BriefingSession = {
   findings: InsightFinding[];
 };
 
+export type PatternConfirmationRecord = {
+  id: string;
+  created_at: string;
+  account_id: string;
+  counterparty_name: string;
+  typical_month: number;
+  typical_amount: number;
+  currency: string;
+  status: string;
+};
+
+export type ForecastItem = { counterparty: string; amount: number };
+export type AnnualForecastItem = { counterparty: string; amount: number; month: number };
+export type MonthlyForecast = {
+  targetMonth: string;
+  knownFixed: ForecastItem[];
+  historicalAvg: number;
+  annualItems: AnnualForecastItem[];
+  projectedTotal: number;
+};
+
 export type ImportResult = {
   importSessionId: string;
   accountId: string;
@@ -377,6 +398,22 @@ export async function getBriefing(id: string): Promise<BriefingSession> {
 export async function dismissFinding(findingId: string): Promise<void> {
   const res = await safeFetch(`${API}/briefing/${findingId}/dismiss`, { method: 'POST' });
   if (!res.ok) throw new Error(`dismissFinding failed: ${res.statusText}`);
+}
+
+export async function getForecast(): Promise<MonthlyForecast[]> {
+  const res = await safeFetch(`${API}/forecast`);
+  if (!res.ok) throw new Error(`getForecast failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function confirmPatternConfirmation(id: string): Promise<void> {
+  const res = await safeFetch(`${API}/pattern-confirmations/${id}/confirm`, { method: 'POST' });
+  if (!res.ok) throw new Error(`confirmPatternConfirmation failed: ${res.statusText}`);
+}
+
+export async function rejectPatternConfirmation(id: string): Promise<void> {
+  const res = await safeFetch(`${API}/pattern-confirmations/${id}/reject`, { method: 'POST' });
+  if (!res.ok) throw new Error(`rejectPatternConfirmation failed: ${res.statusText}`);
 }
 
 // ============================================================================

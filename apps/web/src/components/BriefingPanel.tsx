@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getLatestBriefing, dismissFinding } from '../api/client';
 import type { BriefingSession } from '../api/client';
 import FindingCard from './FindingCard';
+import PatternConfirmationCard from './PatternConfirmationCard';
 
 type BriefingPanelProps = {
   setToast: (v: string) => void;
@@ -37,6 +38,10 @@ export default function BriefingPanel({ setToast, onFilterTransactions, refreshK
     }
   };
 
+  const handleResolved = (findingId: string) => {
+    setDismissed((prev) => new Set(prev).add(findingId));
+  };
+
   // Visible findings = briefing.findings.filter(f => !dismissed.has(f.id))
   const visibleFindings =
     briefing && briefing.findings ? briefing.findings.filter((f) => !dismissed.has(f.id)) : [];
@@ -51,17 +56,21 @@ export default function BriefingPanel({ setToast, onFilterTransactions, refreshK
       <h2>Talousanalyysi</h2>
       {visibleFindings.map((finding) => (
         <div key={finding.id}>
-          <FindingCard
-            finding={finding}
-            onDismiss={handleDismiss}
-          />
-          {onFilterTransactions && finding.transactionIds.length > 0 && (
-            <button
-              className="mini"
-              onClick={() => onFilterTransactions(finding.transactionIds)}
-            >
-              Näytä tapahtumat
-            </button>
+          {finding.findingType === 'pattern_confirmation' ? (
+            <PatternConfirmationCard
+              finding={finding}
+              onResolved={handleResolved}
+              setToast={setToast}
+            />
+          ) : (
+            <>
+              <FindingCard finding={finding} onDismiss={handleDismiss} />
+              {onFilterTransactions && finding.transactionIds.length > 0 && (
+                <button className="mini" onClick={() => onFilterTransactions(finding.transactionIds)}>
+                  Näytä tapahtumat
+                </button>
+              )}
+            </>
           )}
         </div>
       ))}
