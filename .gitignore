@@ -47,3 +47,6 @@ apps/api/dist
 
 # local fixtures (never commit)
 testdata/
+
+# git worktrees
+.worktrees/
