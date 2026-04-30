@@ -100,4 +100,137 @@ export function detectPatterns(accountId: string): void {
       );
     }
   }
+
+  detectAnnualPatternsForAccount(accountId);
+  detectConfirmationCandidates(accountId);
+}
+
+const ANNUAL_CONFIRMATION_THRESHOLD_EUR = 80;
+
+function detectAnnualPatternsForAccount(accountId: string): void {
+  const now = new Date().toISOString();
+  const fourYearsAgo = new Date(Date.now() - 1460 * 86400_000).toISOString().slice(0, 10);
+
+  const rows = db.prepare(`
+    SELECT counterparty_name, amount, booking_date
+    FROM normalized_transactions
+    WHERE account_id = ?
+      AND booking_date >= ?
+      AND amount < 0
+      AND counterparty_name IS NOT NULL
+      AND counterparty_name NOT IN (
+        SELECT DISTINCT counterparty_name FROM normalized_transactions
+        WHERE account_id = ?
+          AND id IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+      )
+      AND counterparty_name NOT IN (
+        SELECT counterparty_name FROM recurring_patterns
+        WHERE account_id = ? AND pattern_type IN ('subscription', 'recurring') AND is_active = 1
+      )
+    ORDER BY counterparty_name, booking_date
+  `).all(accountId, fourYearsAgo, accountId, accountId) as Array<{ counterparty_name: string; amount: number; booking_date: string }>;
+
+  const byCounterparty = new Map<string, Array<{ amount: number; date: string }>>();
+  for (const r of rows) {
+    if (!byCounterparty.has(r.counterparty_name)) byCounterparty.set(r.counterparty_name, []);
+    byCounterparty.get(r.counterparty_name)!.push({ amount: r.amount, date: r.booking_date });
+  }
+
+  for (const [counterparty, occurrences] of byCounterparty) {
+    if (occurrences.length < 2) continue;
+
+    const sorted = occurrences.sort((a, b) => a.date.localeCompare(b.date));
+    const intervals: number[] = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const a = new Date(sorted[i - 1].date).getTime();
+      const b = new Date(sorted[i].date).getTime();
+      intervals.push((b - a) / 86400_000);
+    }
+
+    const avgInterval = intervals.reduce((s, v) => s + v, 0) / intervals.length;
+    if (avgInterval < 330 || avgInterval > 400) continue;
+
+    const amounts = sorted.map((o) => Math.abs(o.amount));
+    const avgAmount = amounts.reduce((s, v) => s + v, 0) / amounts.length;
+    if (avgAmount === 0) continue;
+    const consistent = amounts.every((a) => Math.abs(a - avgAmount) / avgAmount <= 0.25);
+    if (!consistent) continue;
+
+    const typicalMonth = new Date(sorted[sorted.length - 1].date).getMonth() + 1;
+
+    const existing = db.prepare(
+      'SELECT id FROM recurring_patterns WHERE account_id = ? AND counterparty_name = ?'
+    ).get(accountId, counterparty) as { id: string } | undefined;
+
+    if (existing) {
+      db.prepare(`
+        UPDATE recurring_patterns SET updated_at = ?, pattern_type = 'annual',
+          interval_days = ?, typical_amount = ?, last_seen = ?,
+          occurrence_count = ?, is_active = 1, typical_month = ?
+        WHERE id = ?
+      `).run(now, Math.round(avgInterval), avgAmount,
+             sorted[sorted.length - 1].date, sorted.length, typicalMonth, existing.id);
+    } else {
+      db.prepare(`
+        INSERT INTO recurring_patterns
+          (id, created_at, updated_at, account_id, counterparty_name, pattern_type,
+           interval_days, typical_amount, currency, first_seen, last_seen,
+           occurrence_count, is_active, typical_month)
+        VALUES (?, ?, ?, ?, ?, 'annual', ?, ?, 'EUR', ?, ?, ?, 1, ?)
+      `).run(
+        crypto.randomUUID(), now, now, accountId, counterparty,
+        Math.round(avgInterval), avgAmount,
+        sorted[0].date, sorted[sorted.length - 1].date, sorted.length, typicalMonth
+      );
+    }
+  }
+}
+
+function detectConfirmationCandidates(accountId: string): void {
+  const now = new Date().toISOString();
+  const fourYearsAgo = new Date(Date.now() - 1460 * 86400_000).toISOString().slice(0, 10);
+
+  const rows = db.prepare(`
+    SELECT counterparty_name, amount, booking_date
+    FROM normalized_transactions
+    WHERE account_id = ?
+      AND booking_date >= ?
+      AND amount < 0
+      AND ABS(amount) >= ?
+      AND counterparty_name IS NOT NULL
+      AND counterparty_name NOT IN (
+        SELECT DISTINCT counterparty_name FROM normalized_transactions
+        WHERE account_id = ?
+          AND id IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+      )
+      AND counterparty_name NOT IN (
+        SELECT counterparty_name FROM recurring_patterns WHERE account_id = ? AND is_active = 1
+      )
+    ORDER BY counterparty_name, booking_date
+  `).all(accountId, fourYearsAgo, ANNUAL_CONFIRMATION_THRESHOLD_EUR, accountId, accountId) as Array<{ counterparty_name: string; amount: number; booking_date: string }>;
+
+  const byCounterparty = new Map<string, Array<{ amount: number; date: string }>>();
+  for (const r of rows) {
+    if (!byCounterparty.has(r.counterparty_name)) byCounterparty.set(r.counterparty_name, []);
+    byCounterparty.get(r.counterparty_name)!.push({ amount: r.amount, date: r.booking_date });
+  }
+
+  for (const [counterparty, occurrences] of byCounterparty) {
+    if (occurrences.length !== 1) continue; // only true single-occurrence candidates
+
+    const occ = occurrences[0];
+    const typicalMonth = new Date(occ.date).getMonth() + 1;
+    const typicalAmount = Math.abs(occ.amount);
+
+    const alreadyPending = db.prepare(
+      'SELECT 1 FROM pattern_confirmations WHERE counterparty_name = ? AND typical_month = ? AND status = ?'
+    ).get(counterparty, typicalMonth, 'pending');
+    if (alreadyPending) continue;
+
+    db.prepare(`
+      INSERT INTO pattern_confirmations
+        (id, created_at, account_id, counterparty_name, typical_month, typical_amount, currency, status)
+      VALUES (?, ?, ?, ?, ?, ?, 'EUR', 'pending')
+    `).run(crypto.randomUUID(), now, accountId, counterparty, typicalMonth, typicalAmount);
+  }
 }

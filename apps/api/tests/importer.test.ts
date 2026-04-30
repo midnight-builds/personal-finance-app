@@ -11,6 +11,7 @@ function clearDb() {
     DELETE FROM insight_findings;
     DELETE FROM briefing_sessions;
     DELETE FROM recurring_patterns;
+    DELETE FROM pattern_confirmations;
     DELETE FROM categorization_decisions;
     DELETE FROM category_rules;
     DELETE FROM categories WHERE built_in = 0;

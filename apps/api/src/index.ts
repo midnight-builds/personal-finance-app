@@ -20,6 +20,8 @@ import { listAccounts, updateAccount } from './accounts.js';
 import { listBalanceAdjustments, createBalanceAdjustment, deleteBalanceAdjustment } from './balanceAdjustments.js';
 import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
 import { listPendingRuleSuggestions, acceptRuleSuggestion, rejectRuleSuggestion } from './ruleSuggestions.js';
+import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
+import { getForecast } from './forecast.js';
 
 initDb();
 seedDefaultCategories();
@@ -189,6 +191,7 @@ server.post('/debug/clear', async () => {
     DELETE FROM insight_findings;
     DELETE FROM briefing_sessions;
     DELETE FROM recurring_patterns;
+    DELETE FROM pattern_confirmations;
     DELETE FROM import_sessions;
     DELETE FROM accounts;
   `);
@@ -210,6 +213,7 @@ server.post('/debug/clear-imports', async () => {
     DELETE FROM insight_findings;
     DELETE FROM briefing_sessions;
     DELETE FROM recurring_patterns;
+    DELETE FROM pattern_confirmations;
     DELETE FROM import_sessions;
   `);
   db.exec('PRAGMA foreign_keys=ON;');
@@ -407,10 +411,34 @@ server.post<{ Params: { id: string } }>('/rule-suggestions/:id/accept', async (r
   }
 });
 
+server.get('/forecast', async () => getForecast());
+
+server.get('/pattern-confirmations', async () => listPendingConfirmations());
+
+server.post<{ Params: { id: string } }>('/pattern-confirmations/:id/confirm', async (request, reply) => {
+  const { id } = request.params;
+  try {
+    confirmPatternConfirmation(id);
+    return reply.send({ ok: true });
+  } catch (err: any) {
+    return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });
+  }
+});
+
 server.post<{ Params: { id: string } }>('/rule-suggestions/:id/reject', async (request, reply) => {
   const { id } = request.params;
   try {
     rejectRuleSuggestion(id);
+    return reply.send({ ok: true });
+  } catch (err: any) {
+    return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });
+  }
+});
+
+server.post<{ Params: { id: string } }>('/pattern-confirmations/:id/reject', async (request, reply) => {
+  const { id } = request.params;
+  try {
+    rejectPatternConfirmation(id);
     return reply.send({ ok: true });
   } catch (err: any) {
     return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });

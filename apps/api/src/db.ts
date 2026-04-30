@@ -206,6 +206,21 @@ export function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_rule_suggestions_status ON rule_suggestions(status);
 
+    CREATE TABLE IF NOT EXISTS pattern_confirmations (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      counterparty_name TEXT NOT NULL,
+      typical_month INTEGER NOT NULL,
+      typical_amount REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      status TEXT NOT NULL DEFAULT 'pending',
+      resolved_at TEXT,
+      FOREIGN KEY(account_id) REFERENCES accounts(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pattern_conf_status ON pattern_confirmations(status);
+    CREATE INDEX IF NOT EXISTS idx_pattern_conf_account ON pattern_confirmations(account_id);
+
     CREATE INDEX IF NOT EXISTS idx_import_sessions_overlap ON import_sessions(overlap_key);
     CREATE INDEX IF NOT EXISTS idx_normalized_booking_date ON normalized_transactions(booking_date);
     CREATE INDEX IF NOT EXISTS idx_normalized_account_date ON normalized_transactions(account_id, booking_date);
@@ -232,6 +247,9 @@ export function initDb() {
   safeExec(`ALTER TABLE accounts ADD COLUMN owner_label TEXT`);
   safeExec(`ALTER TABLE accounts ADD COLUMN credit_limit REAL`);
   safeExec(`ALTER TABLE accounts ADD COLUMN savings_goal REAL`);
+
+  safeExec(`ALTER TABLE recurring_patterns ADD COLUMN typical_month INTEGER`);
+  safeExec(`ALTER TABLE recurring_patterns ADD COLUMN user_confirmed INTEGER`);
 
   safeExec(`
     DELETE FROM category_rules WHERE rowid NOT IN (
