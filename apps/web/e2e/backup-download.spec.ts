@@ -73,6 +73,21 @@ async function stubSettingsApi(page: import("@playwright/test").Page) {
   await page.route("**/monthly*", async (route) => route.fulfill(json([])));
   await page.route("**/raw*", async (route) => route.fulfill(json([])));
   await page.route("**/log*", async (route) => route.fulfill(json([])));
+
+  // New endpoints added in CFO / learning features.
+  await page.route("**/household/summary*", async (route) =>
+    route.fulfill(json({ liquidAssets: 0, totalSavings: 0, creditDebt: 0, monthlySubscriptions: 0, runwayMonths: null, accounts: [], dataAgeDays: 0 }))
+  );
+  await page.route("**/briefing/latest*", async (route) =>
+    route.fulfill(json(null))
+  );
+  await page.route("**/forecast*", async (route) => route.fulfill(json([])));
+  await page.route("**/rule-suggestions*", async (route) =>
+    route.fulfill(json([]))
+  );
+  await page.route("**/pattern-confirmations*", async (route) =>
+    route.fulfill(json([]))
+  );
 }
 
 test("Settings: backup download triggers a browser download", async ({ page }) => {
@@ -93,10 +108,7 @@ test("Settings: backup download triggers a browser download", async ({ page }) =
   await page.goto("/");
   await expect(page.locator(".tabs")).toBeVisible();
 
-  const settingsTab = page.locator("button.tab", { hasText: "Asetukset" });
-  await expect(settingsTab).toBeVisible();
-  await settingsTab.click();
-
+  // The backup button is in the Transactions section on the analytics (default) tab.
   const dlBtn = page.locator("button", { hasText: "Lataa varmuuskopio" });
   await expect(dlBtn).toBeVisible();
 

@@ -76,6 +76,21 @@ async function stubSettingsApi(page: import('@playwright/test').Page) {
   await page.route('**/monthly*', async (route) => route.fulfill(json([])));
   await page.route('**/raw*', async (route) => route.fulfill(json([])));
   await page.route('**/log*', async (route) => route.fulfill(json([])));
+
+  // New endpoints added in CFO / learning features.
+  await page.route('**/household/summary*', async (route) =>
+    route.fulfill(json({ liquidAssets: 0, totalSavings: 0, creditDebt: 0, monthlySubscriptions: 0, runwayMonths: null, accounts: [], dataAgeDays: 0 }))
+  );
+  await page.route('**/briefing/latest*', async (route) =>
+    route.fulfill(json(null))
+  );
+  await page.route('**/forecast*', async (route) => route.fulfill(json([])));
+  await page.route('**/rule-suggestions*', async (route) =>
+    route.fulfill(json([]))
+  );
+  await page.route('**/pattern-confirmations*', async (route) =>
+    route.fulfill(json([]))
+  );
 }
 
 async function expectNoHorizontalOverflow(page: import('@playwright/test').Page) {
