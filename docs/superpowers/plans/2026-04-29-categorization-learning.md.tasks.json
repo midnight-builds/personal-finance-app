@@ -1,0 +1,26 @@
+{
+  "planPath": "docs/superpowers/plans/2026-04-29-categorization-learning.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: Rule Deduplication",
+      "status": "pending",
+      "description": "**Goal:** Prevent duplicate `category_rules` from repeated user decisions; deduplicate existing rules.\n\n**Files:**\n- Modify: `apps/api/src/db.ts`\n- Modify: `apps/api/src/rules.ts`\n- Modify: `apps/api/tests/rules.test.ts`\n\n**Acceptance Criteria:**\n- [ ] `upsertDecision` twice with same counterparty+category creates exactly 1 rule\n- [ ] Same counterparty with different categories creates 2 rules\n- [ ] Existing duplicate rules removed on startup via migration\n- [ ] All existing tests pass\n\n**Verify:** `cd apps/api && NODE_OPTIONS=--experimental-sqlite tsx --test --test-concurrency=1 tests/rules.test.ts` → all pass\n\n```json:metadata\n{\"files\": [\"apps/api/src/db.ts\", \"apps/api/src/rules.ts\", \"apps/api/tests/rules.test.ts\"], \"verifyCommand\": \"cd apps/api && NODE_OPTIONS=--experimental-sqlite tsx --test --test-concurrency=1 tests/rules.test.ts\", \"acceptanceCriteria\": [\"no duplicate rules from repeated decisions\", \"different categories create separate rules\", \"migration deduplicates existing rules\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: AI Rule Suggestion Backend",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** New `ruleSuggestions.ts` generates AI suggestions for uncategorized transactions; REST endpoints to list/accept/reject.\n\n**Files:**\n- Modify: `apps/api/src/db.ts` (rule_suggestions table)\n- Create: `apps/api/src/ruleSuggestions.ts`\n- Create: `apps/api/tests/rule-suggestions.test.ts`\n- Modify: `apps/api/src/importer.ts`\n- Modify: `apps/api/src/index.ts`\n\n**Acceptance Criteria:**\n- [ ] `rule_suggestions` table created\n- [ ] `listPendingRuleSuggestions()` returns pending only\n- [ ] `acceptRuleSuggestion(id)` creates rule + applies to existing Muut transactions\n- [ ] `acceptRuleSuggestion(id)` skips duplicate rules\n- [ ] `rejectRuleSuggestion(id)` marks rejected without creating rule\n- [ ] `generateRuleSuggestions()` is no-op without OpenAI key\n- [ ] 3 REST endpoints added\n\n**Verify:** `cd apps/api && NODE_OPTIONS=--experimental-sqlite tsx --test --test-concurrency=1 tests/rule-suggestions.test.ts` → 4/4 pass\n\n```json:metadata\n{\"files\": [\"apps/api/src/db.ts\", \"apps/api/src/ruleSuggestions.ts\", \"apps/api/src/importer.ts\", \"apps/api/src/index.ts\", \"apps/api/tests/rule-suggestions.test.ts\"], \"verifyCommand\": \"cd apps/api && NODE_OPTIONS=--experimental-sqlite tsx --test --test-concurrency=1 tests/rule-suggestions.test.ts\", \"acceptanceCriteria\": [\"rule_suggestions table exists\", \"list/accept/reject functions work\", \"accept creates rule and applies retroactively\", \"no-op without API key\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: AI Rule Suggestions UI",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** `RuleSuggestionsPanel` shows pending AI rule suggestions with one-click approve/reject.\n\n**Files:**\n- Modify: `apps/web/src/api/client.ts`\n- Create: `apps/web/src/components/RuleSuggestionsPanel.tsx`\n- Modify: `apps/web/src/views/HomeView.tsx`\n\n**Acceptance Criteria:**\n- [ ] RuleSuggestionsPanel loads suggestions on mount and on refreshKey change\n- [ ] Each row shows: counterparty → category + AI reason\n- [ ] Approve button calls accept, removes row optimistically\n- [ ] Reject button calls reject, removes row optimistically\n- [ ] Panel hidden when no pending suggestions\n- [ ] Mounted in HomeView after BriefingPanel with briefingRefreshKey\n\n```json:metadata\n{\"files\": [\"apps/web/src/api/client.ts\", \"apps/web/src/components/RuleSuggestionsPanel.tsx\", \"apps/web/src/views/HomeView.tsx\"], \"verifyCommand\": \"npm run build --workspace apps/web\", \"acceptanceCriteria\": [\"panel loads and shows suggestions\", \"approve/reject work\", \"panel hidden when empty\", \"mounted in HomeView\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-04-29T00:00:00.000Z"
+}
