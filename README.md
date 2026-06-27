@@ -30,8 +30,8 @@ Fallback behavior: if AI is unavailable, the app still starts and acts as a most
 - Default SQLite path: `apps/api/data/finance.db` (configurable via `DB_PATH`).
 - Backup/restore: see `docs/BACKUP_RESTORE.md`
 
-### Running on your-server and using the UI locally
-If you run the dev server on your-server, use port-forwarding:
+### Running on a remote server and using the UI locally
+If you run the dev server on a remote machine, use SSH port-forwarding:
 
 ```bash
 ssh -L 5173:127.0.0.1:5173 -L 3001:127.0.0.1:3001 user@your-server

@@ -40,9 +40,10 @@ function App() {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [settings, setSettings] = useState<Settings>({ payday: 15, paydayFlexDays: 2, openaiConfigured: false });
 
-  useEffect(() => {
+  const selectTab = useCallback((next: 'analytics' | 'raw' | 'settings') => {
+    setTab(next);
     setToast('');
-  }, [tab]);
+  }, []);
 
   const loadLogs = useCallback(async () => {
     // Logs are polled; SettingsView loads its own copy on mount.
@@ -94,13 +95,13 @@ function App() {
       <nav className="topbar">
         <div className="brand">Finance App</div>
         <div className="tabs">
-          <button className={tab === 'analytics' ? 'tab active' : 'tab'} onClick={() => setTab('analytics')}>
+          <button className={tab === 'analytics' ? 'tab active' : 'tab'} onClick={() => selectTab('analytics')}>
             Analytiikka
           </button>
-          <button className={tab === 'raw' ? 'tab active' : 'tab'} onClick={() => setTab('raw')}>
+          <button className={tab === 'raw' ? 'tab active' : 'tab'} onClick={() => selectTab('raw')}>
             Raaka data
           </button>
-          <button className={tab === 'settings' ? 'tab active' : 'tab'} onClick={() => setTab('settings')}>
+          <button className={tab === 'settings' ? 'tab active' : 'tab'} onClick={() => selectTab('settings')}>
             Asetukset
           </button>
         </div>
