@@ -2,6 +2,8 @@
 
 Single-user, no-auth personal finance tracker.
 
+> **Status:** personal project, alpha. Built for my own use and shared as-is — no support or stability guarantees.
+
 Goal: **easy import → automatic categorization → clear reports**.
 
 - Product vision: `docs/VISION.md`
@@ -49,6 +51,10 @@ Then open http://localhost:5173/
 
 ### Known limitations
 - **`xlsx` (SheetJS) advisories.** Excel import depends on `xlsx`, which has open high-severity advisories (prototype pollution, ReDoS) with no fix published on the npm registry. As a single-user, local, no-auth tool the practical exposure is limited to files you import yourself — **only import bank exports you trust.** Migrating to a maintained reader (e.g. `exceljs`) is on the roadmap.
+
+## How it's built
+
+AI-assisted, end to end, with a disciplined loop: plan → test-driven implementation → review → ship. Agent conventions live in [`AGENTS.md`](AGENTS.md), and CI gates every push on lint, tests, and type-checks.
 
 ## Repo scripts
 - `npm run dev` – start API + Web (concurrently)
