@@ -47,6 +47,9 @@ ssh -L 5173:127.0.0.1:5173 -L 3001:127.0.0.1:3001 user@your-server
 
 Then open http://localhost:5173/
 
+### Known limitations
+- **`xlsx` (SheetJS) advisories.** Excel import depends on `xlsx`, which has open high-severity advisories (prototype pollution, ReDoS) with no fix published on the npm registry. As a single-user, local, no-auth tool the practical exposure is limited to files you import yourself — **only import bank exports you trust.** Migrating to a maintained reader (e.g. `exceljs`) is on the roadmap.
+
 ## Repo scripts
 - `npm run dev` – start API + Web (concurrently)
 - `npm run ci` – build + test + lint
