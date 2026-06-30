@@ -15,6 +15,6 @@
     "doctor": "npm run ci"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^10.0.3"
   }
 }
