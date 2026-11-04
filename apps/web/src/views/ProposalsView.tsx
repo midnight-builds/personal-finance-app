@@ -79,6 +79,7 @@ export default function ProposalsView({ setToast }: Props) {
     try {
       await resolveFeatureProposal(p.id, action, notes[p.id], resolutions[p.id]);
       showToast(setToast, ACTION_TOAST[action]);
+      setNotes((prev) => ({ ...prev, [p.id]: '' }));
     } catch {
       showToast(setToast, 'Tallennus epäonnistui — ehdotus on ehkä jo käsitelty');
     } finally {
@@ -161,6 +162,7 @@ export default function ProposalsView({ setToast }: Props) {
                         <li key={i}>
                           {formatDate(e.at)} · {STATUS_LABEL[e.status]}
                           {e.note && ` — ${e.note}`}
+                          {e.resolution && ` (${e.resolution})`}
                         </li>
                       ))}
                     </ul>

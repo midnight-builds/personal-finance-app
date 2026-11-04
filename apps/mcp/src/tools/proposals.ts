@@ -11,8 +11,8 @@ export const proposalTools: ToolDefinition[] = [
     description:
       'Feature proposals and bug reports already submitted, with their outcome. Check this before ' +
       'proposing to avoid duplicates, and to learn what has been handled. status: "new" = not reviewed yet, ' +
-      '"accepted" = approved but not built yet, "done" = implemented and deployed (resolution names the ' +
-      'commit or PR), "rejected" = will not be done (decisionNote says why). history lists every status ' +
+      '"accepted" = approved but not built yet, "done" = implemented (resolution names the commit ' +
+      'or PR), "rejected" = will not be done (decisionNote says why). history lists every status ' +
       'change with time and note. A proposal that is new or accepted counts as open.',
     inputSchema: featureProposalListQuerySchema.shape,
     annotations: READ_ONLY,

@@ -46,7 +46,7 @@ Lifecycle (`POST /feature-proposals/:id/<action>`, body `{ note?, resolution? }`
 | Action | To | From |
 |--------|----|------|
 | `accept` | `accepted` — approved, not built yet | `new` |
-| `done` | `done` — implemented and deployed; `resolution` (commit/PR) required | `new`, `accepted` |
+| `done` | `done` — implemented; `resolution` (commit/PR) required | `new`, `accepted` |
 | `reject` | `rejected` — will not be done | `new`, `accepted` |
 
 `done` and `rejected` are final; any other transition returns `409 invalid_transition`.
