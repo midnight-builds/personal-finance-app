@@ -262,6 +262,15 @@ export function initDb() {
       decision_note TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_feature_proposals_status ON feature_proposals(status);
+    CREATE TABLE IF NOT EXISTS feature_proposal_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      proposal_id TEXT NOT NULL REFERENCES feature_proposals(id),
+      at TEXT NOT NULL,
+      status TEXT NOT NULL,
+      note TEXT,
+      resolution TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_feature_proposal_events_proposal ON feature_proposal_events(proposal_id);
 
     CREATE INDEX IF NOT EXISTS idx_import_sessions_overlap ON import_sessions(overlap_key);
     CREATE INDEX IF NOT EXISTS idx_normalized_booking_date ON normalized_transactions(booking_date);
@@ -292,6 +301,16 @@ export function initDb() {
 
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN typical_month INTEGER`);
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN user_confirmed INTEGER`);
+
+  safeExec(`ALTER TABLE feature_proposals ADD COLUMN kind TEXT NOT NULL DEFAULT 'feature'`);
+  safeExec(`ALTER TABLE feature_proposals ADD COLUMN resolution TEXT`);
+  // Decisions made before the event log existed become its first entry.
+  db.exec(`
+    INSERT INTO feature_proposal_events (proposal_id, at, status, note)
+    SELECT id, resolved_at, status, decision_note FROM feature_proposals p
+    WHERE status != 'new' AND resolved_at IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM feature_proposal_events e WHERE e.proposal_id = p.id)
+  `);
 
   safeExec(`
     DELETE FROM category_rules WHERE rowid NOT IN (

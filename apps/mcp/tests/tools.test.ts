@@ -91,7 +91,22 @@ test('propose_feature posts to the review queue with the configured source', asy
   const { client, calls } = await connect({ '/feature-proposals': { duplicate: false, proposal: { id: 'p1' } } });
   const res = await client.callTool({ name: 'propose_feature', arguments: validProposal });
   assert.equal(res.isError, undefined);
-  assert.deepEqual(calls, [{ method: 'post', path: '/feature-proposals', arg: { ...validProposal, source: 'hermes' } }]);
+  assert.deepEqual(calls, [
+    { method: 'post', path: '/feature-proposals', arg: { kind: 'feature', ...validProposal, source: 'hermes' } },
+  ]);
+});
+
+test('propose_feature accepts bug reports; list_feature_proposals can filter by done', async () => {
+  const { client, calls } = await connect({ '/feature-proposals': [] });
+  await client.callTool({ name: 'propose_feature', arguments: { ...validProposal, kind: 'bug' } });
+  await client.callTool({ name: 'list_feature_proposals', arguments: { status: 'done' } });
+  assert.deepEqual(
+    calls.map((c) => [c.method, (c.arg as { kind?: string; status?: string }).kind ?? (c.arg as { status?: string }).status]),
+    [
+      ['post', 'bug'],
+      ['get', 'done'],
+    ]
+  );
 });
 
 test('responses are redacted: iban keys dropped, account numbers in text masked', async () => {

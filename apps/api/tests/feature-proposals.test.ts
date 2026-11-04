@@ -23,7 +23,7 @@ const valid = {
 };
 
 beforeEach(() => {
-  db.exec('DELETE FROM feature_proposals;');
+  db.exec('DELETE FROM feature_proposal_events; DELETE FROM feature_proposals;');
 });
 
 test('createFeatureProposal stores a new proposal', () => {
@@ -31,6 +31,9 @@ test('createFeatureProposal stores a new proposal', () => {
   assert.equal(res.duplicate, false);
   assert.equal(res.proposal.status, 'new');
   assert.equal(res.proposal.source, 'hermes');
+  assert.equal(res.proposal.kind, 'feature');
+  assert.equal(res.proposal.resolution, null);
+  assert.deepEqual(res.proposal.history, []);
   assert.deepEqual(res.proposal.acceptanceCriteria, valid.acceptanceCriteria);
   assert.equal(listFeatureProposals().length, 1);
 });
@@ -65,14 +68,64 @@ test('resolveFeatureProposal records the decision and status filter works', () =
   assert.equal(listFeatureProposals('accepted').length, 1);
 });
 
-test('decisions are final and unknown ids are reported', () => {
+test('kind is stored and an accepted proposal still blocks a duplicate', () => {
+  const bug = createFeatureProposal({ ...valid, title: 'Zero balance shown for missing data', kind: 'bug' });
+  assert.equal(bug.proposal.kind, 'bug');
   const { proposal } = createFeatureProposal(valid);
-  resolveFeatureProposal(proposal.id, 'accepted', 'yes');
-  assert.throws(
-    () => resolveFeatureProposal(proposal.id, 'rejected', 'oops'),
-    (e) => e instanceof DomainError && e.code === 'already_resolved' && e.statusCode === 409
+  resolveFeatureProposal(proposal.id, 'accepted');
+  const again = createFeatureProposal(valid);
+  assert.equal(again.duplicate, true);
+  assert.equal(again.proposal.id, proposal.id);
+});
+
+test('lifecycle: new → accepted → done keeps a history the agent can read', () => {
+  const { proposal } = createFeatureProposal(valid);
+  resolveFeatureProposal(proposal.id, 'accepted', 'build it');
+  const done = resolveFeatureProposal(proposal.id, 'done', 'shipped', 'abc1234');
+  assert.equal(done.status, 'done');
+  assert.equal(done.resolution, 'abc1234');
+  assert.equal(done.decisionNote, 'shipped');
+  assert.deepEqual(
+    done.history.map((e) => [e.status, e.note, e.resolution]),
+    [
+      ['accepted', 'build it', null],
+      ['done', 'shipped', 'abc1234'],
+    ]
   );
-  assert.equal(listFeatureProposals()[0].decisionNote, 'yes');
+  assert.ok(done.history.every((e) => e.at));
+  assert.deepEqual(listFeatureProposals('done')[0].history, done.history);
+  assert.equal(createFeatureProposal(valid).duplicate, false);
+});
+
+test('a clear bug can go straight from new to done, but only with a resolution', () => {
+  const { proposal } = createFeatureProposal({ ...valid, kind: 'bug' });
+  assert.throws(
+    () => resolveFeatureProposal(proposal.id, 'done', 'fixed'),
+    (e) => e instanceof DomainError && e.code === 'resolution_required' && e.statusCode === 400
+  );
+  assert.equal(listFeatureProposals()[0].status, 'new');
+  assert.equal(resolveFeatureProposal(proposal.id, 'done', null, 'https://example.test/pr/1').status, 'done');
+});
+
+test('final statuses cannot change, accepted may still be rejected, unknown ids are reported', () => {
+  const { proposal } = createFeatureProposal(valid);
+  resolveFeatureProposal(proposal.id, 'rejected', 'no');
+  for (const decision of ['accepted', 'rejected', 'done'] as const) {
+    assert.throws(
+      () => resolveFeatureProposal(proposal.id, decision, 'oops', 'x'),
+      (e) => e instanceof DomainError && e.code === 'invalid_transition' && e.statusCode === 409,
+      decision
+    );
+  }
+  const after = listFeatureProposals()[0];
+  assert.equal(after.decisionNote, 'no');
+  assert.equal(after.history.length, 1);
+
+  const second = createFeatureProposal({ ...valid, title: 'Other' }).proposal;
+  resolveFeatureProposal(second.id, 'accepted');
+  assert.throws(() => resolveFeatureProposal(second.id, 'accepted'), (e) => e instanceof DomainError && e.statusCode === 409);
+  assert.equal(resolveFeatureProposal(second.id, 'rejected', 'dropped').status, 'rejected');
+
   assert.throws(
     () => resolveFeatureProposal('missing', 'rejected'),
     (e) => e instanceof DomainError && e.statusCode === 404
