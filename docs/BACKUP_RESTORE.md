@@ -20,7 +20,43 @@ npm run backup --workspace apps/api -- --out /path/to/finance-backup.db
 DB_PATH=/path/to/finance.db npm run backup --workspace apps/api
 ```
 
-Backups are written to `apps/api/backups/` by default.
+Backups are written to `apps/api/backups/` by default. `VACUUM INTO` reads a
+consistent snapshot, so backing up while the API runs is safe.
+
+### Scheduled backups with retention
+
+`--dir` names the file `finance-<timestamp>.db`; `--keep <n>` then deletes all but
+the newest `n` such files in that directory (other files are never touched):
+
+```bash
+npm run backup --workspace apps/api -- --dir ~/finance-backups --keep 30
+```
+
+Example systemd timer (adjust user and paths):
+
+```ini
+# /etc/systemd/system/finance-app-backup.service
+[Unit]
+Description=Finance App database backup
+
+[Service]
+Type=oneshot
+User=<user>
+WorkingDirectory=/path/to/finance-app/apps/api
+Environment=NODE_OPTIONS=--experimental-sqlite
+ExecStart=/path/to/finance-app/node_modules/.bin/tsx scripts/backup.ts --dir /home/<user>/finance-backups --keep 30
+
+# /etc/systemd/system/finance-app-backup.timer
+[Unit]
+Description=Daily Finance App database backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
 
 ## Restore
 

@@ -1,0 +1,25 @@
+{
+  "name": "finance-app-mcp",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "finance-app-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "prebuild": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "tsx --test \"tests/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@finance-app/shared": "*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "tsx": "^4.15.7",
+    "typescript": "^5.6.2"
+  }
+}

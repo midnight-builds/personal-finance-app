@@ -4,21 +4,23 @@
   "type": "module",
   "scripts": {
     "dev": "NODE_OPTIONS=--experimental-sqlite tsx watch src/index.ts",
+    "prebuild": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc -p tsconfig.json",
     "start": "NODE_OPTIONS=--experimental-sqlite node dist/index.js",
-    "test": "NODE_OPTIONS=--experimental-sqlite tsx --test --test-concurrency=1 \"tests/**/*.ts\"",
+    "test": "DB_PATH=:memory: NODE_OPTIONS=--experimental-sqlite tsx --test --test-concurrency=1 \"tests/**/*.test.ts\"",
     "backup": "NODE_OPTIONS=--experimental-sqlite tsx scripts/backup.ts",
     "restore": "NODE_OPTIONS=--experimental-sqlite tsx scripts/restore.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
     "@fastify/multipart": "^9.4.0",
+    "@finance-app/shared": "*",
     "csv-parse": "^6.1.0",
+    "dotenv": "^16.6.1",
     "fastify": "^5.7.4",
     "openai": "^6.21.0",
     "xlsx": "^0.18.5",
-    "zod": "^4.3.6",
-    "dotenv": "^16.6.1"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",

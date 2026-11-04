@@ -747,3 +747,63 @@ label {
 .settings-grid label {
   min-width: 0;
 }
+
+/* Feature proposals */
+.proposals {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.proposal {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.proposal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.proposal dl {
+  margin: 10px 0 0;
+}
+
+.proposal dt {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+  margin-top: 8px;
+}
+
+.proposal dd {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
+.proposal dd ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.proposal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  align-items: center;
+}
+
+.proposal-actions input[type="text"] {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e2e8f0;
+}

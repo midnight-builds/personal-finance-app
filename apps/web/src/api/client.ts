@@ -1,4 +1,5 @@
 // Typed API client for finance app
+import type { FeatureProposal, FeatureProposalAction } from '@finance-app/shared';
 // All fetch functions use /api as base; Vite proxies to http://127.0.0.1:3001
 
 // ============================================================================
@@ -504,4 +505,29 @@ export async function acceptRuleSuggestion(id: string): Promise<void> {
 export async function rejectRuleSuggestion(id: string): Promise<void> {
   const res = await safeFetch(`${API}/rule-suggestions/${id}/reject`, { method: 'POST' });
   if (!res.ok) throw new Error(`rejectRuleSuggestion failed: ${res.statusText}`);
+}
+
+// ============================================================================
+// Feature proposals (from external agents via MCP)
+// ============================================================================
+
+export type { FeatureProposal };
+
+export async function getFeatureProposals(): Promise<FeatureProposal[]> {
+  const res = await safeFetch(`${API}/feature-proposals`);
+  if (!res.ok) throw new Error(`getFeatureProposals failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function resolveFeatureProposal(
+  id: string,
+  action: FeatureProposalAction,
+  note?: string
+): Promise<void> {
+  const res = await safeFetch(`${API}/feature-proposals/${id}/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: note || undefined }),
+  });
+  if (!res.ok) throw new Error(`resolveFeatureProposal failed: ${res.statusText}`);
 }

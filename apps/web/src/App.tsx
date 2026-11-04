@@ -3,6 +3,7 @@ import './App.css';
 import HomeView from './views/HomeView';
 import ExplorerView from './views/ExplorerView';
 import SettingsView from './views/SettingsView';
+import ProposalsView from './views/ProposalsView';
 import { safeFetch, API } from './utils';
 import type { Category, Summary, MonthlyRow, Insight, Settings } from './api/client';
 
@@ -27,8 +28,10 @@ type Transaction = {
   recurringMonthly?: boolean;
 };
 
+type Tab = 'analytics' | 'raw' | 'proposals' | 'settings';
+
 function App() {
-  const [tab, setTab] = useState<'analytics' | 'raw' | 'settings'>('analytics');
+  const [tab, setTab] = useState<Tab>('analytics');
   const [toast, setToast] = useState('');
 
   // Shared state — needed by multiple views
@@ -40,7 +43,7 @@ function App() {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [settings, setSettings] = useState<Settings>({ payday: 15, paydayFlexDays: 2, openaiConfigured: false });
 
-  const selectTab = useCallback((next: 'analytics' | 'raw' | 'settings') => {
+  const selectTab = useCallback((next: Tab) => {
     setTab(next);
     setToast('');
   }, []);
@@ -101,6 +104,9 @@ function App() {
           <button className={tab === 'raw' ? 'tab active' : 'tab'} onClick={() => selectTab('raw')}>
             Raaka data
           </button>
+          <button className={tab === 'proposals' ? 'tab active' : 'tab'} onClick={() => selectTab('proposals')}>
+            Ehdotukset
+          </button>
           <button className={tab === 'settings' ? 'tab active' : 'tab'} onClick={() => selectTab('settings')}>
             Asetukset
           </button>
@@ -122,6 +128,7 @@ function App() {
           />
         )}
         {tab === 'raw' && <ExplorerView setToast={setToast} />}
+        {tab === 'proposals' && <ProposalsView setToast={setToast} />}
         {tab === 'settings' && (
           <SettingsView
             accounts={accounts}

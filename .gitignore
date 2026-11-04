@@ -41,6 +41,7 @@ examples/
 home/
 
 # build outputs (workspaces)
+packages/**/dist/
 apps/**/dist/
 
 # build artifacts

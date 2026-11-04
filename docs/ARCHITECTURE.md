@@ -21,3 +21,19 @@ Insight ja forecast kerros tuottaa analyysit ja ennusteet. AI:ta käytetään va
 ## Plug-in periaate pankeille
 
 Jokainen pankki toteutetaan omana adapterinaan. Adapteri ei tee analyysiä, vain parsimisen ja kenttien perusmapituksen.
+
+## Paketit
+
+| Paketti | Sisältö |
+|---------|---------|
+| `packages/shared` | Yhteiset sopimukset (zod-skeemat ja tyypit) ja tietosuoja-apurit (`redactDeep`). Käytössä API:ssa, MCP:ssä ja webissä, joten skeema määritellään vain kerran. |
+| `apps/api` | REST API ja tietokanta |
+| `apps/mcp` | MCP-palvelin ulkoisille agenteille, ks. `docs/MCP.md` |
+| `apps/web` | Käyttöliittymä |
+
+## Uudet API-reitit
+
+Uudet reitit tehdään Fastify-plugineina hakemistoon `apps/api/src/routes/` ja lisätään `routes/index.ts`:ään.
+Palvelukerros heittää `DomainError`in (esim. `not_found`, `already_resolved`) tai `ZodError`in, ja yhteinen virheenkäsittelijä muuntaa ne vastaukseksi `{ error, details? }`.
+Kyselyparametrit jäsennetään `queryParser(shape)`:n palauttamalla jäsentimellä samaa skeemaa vasten kuin MCP-työkalut; tukematon kenttätyyppi kaatuu jo käynnistyksessä.
+Vanhat reitit `index.ts`:ssä toimivat ennallaan, ja niitä voi siirtää plugineiksi vähitellen.
