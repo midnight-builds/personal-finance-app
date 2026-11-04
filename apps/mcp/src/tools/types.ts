@@ -19,6 +19,11 @@ export type ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> = {
   inputSchema?: Shape;
   annotations: ToolAnnotations;
   run: (args: z.output<z.ZodObject<Shape>>, ctx: ToolContext) => Promise<unknown>;
+  /**
+   * Adds a separate `meta` content block with data freshness (see `freshnessMeta`).
+   * A function contributes tool-specific fields derived from the result.
+   */
+  freshness?: true | ((data: unknown) => Record<string, unknown>);
 };
 
 /** Keeps the args type of `run` tied to `inputSchema` while allowing a heterogeneous registry. */

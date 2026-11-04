@@ -10,6 +10,7 @@ import { checksum, parseCsv, parseXlsx, processImport } from './importer.js';
 import { listTransactions } from './query.js';
 import { listCategories, upsertDecision, createCategory, renameCategory, deleteCategory } from './rules.js';
 import { getSummary, getHouseholdSummary } from './summary.js';
+import { getDataStatus } from './dataStatus.js';
 import { getInsights } from './insights.js';
 import { aiCategorize } from './ai.js';
 import { getMonthlyOverview } from './monthly.js';
@@ -119,6 +120,7 @@ server.post('/imports/nordea/xlsx', async (request, reply) => {
 server.get('/transactions', async () => listTransactions());
 server.get('/categories', async () => listCategories());
 server.get('/summary', async () => getSummary());
+server.get('/data-status', async () => getDataStatus());
 server.get('/insights', async () => getInsights());
 server.get('/monthly', async () => getMonthlyOverview());
 server.get('/raw', async () => listRaw());

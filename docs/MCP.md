@@ -16,6 +16,12 @@ over the REST API and never opens the database.
 
 Everything except `propose_feature` is read-only; no tool changes or deletes data.
 
+Tools backed by imported bank data (all except `list_categories` and the proposal
+tools) return a second content block `{ "meta": { generatedAt, lastImportAt, dataAsOf } }`
+from `GET /data-status`; `get_forecast` adds `forecastStartMonth`. The first block
+is the API response unchanged. If the status lookup fails, the timestamps are `null`
+and the tool still succeeds.
+
 Every response is passed through `redactDeep` (`packages/shared`): keys containing
 `iban` are dropped and IBANs, old Finnish account numbers and Finnish personal ids
 inside text are replaced with `[REDACTED]`. `search_transactions` excludes transfers

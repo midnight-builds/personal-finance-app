@@ -9,7 +9,22 @@ function readEndpoint(name: string, title: string, description: string, path: st
   return defineTool({ name, title, description, annotations: READ_ONLY, run: (_args, { api }) => api.get(path) });
 }
 
-export const financeTools: ToolDefinition[] = [
+const FRESHNESS_NOTE =
+  ' A second content block { meta } tells how fresh the data is: generatedAt (response time), ' +
+  'lastImportAt (latest bank import) and dataAsOf (latest booking date, YYYY-MM-DD); timestamps are ISO 8601 UTC.';
+
+/** Marks a tool as backed by imported bank data, so its response carries a `meta` freshness block. */
+function withFreshness(tool: ToolDefinition, extra?: (data: unknown) => Record<string, unknown>): ToolDefinition {
+  return { ...tool, description: tool.description + FRESHNESS_NOTE, freshness: extra ?? true };
+}
+
+/** First forecast month, so the agent need not infer it from its own clock. */
+function forecastStart(data: unknown): Record<string, unknown> {
+  const first = Array.isArray(data) ? (data[0] as { targetMonth?: unknown } | undefined) : undefined;
+  return { forecastStartMonth: typeof first?.targetMonth === 'string' ? first.targetMonth : null };
+}
+
+const dataTools: ToolDefinition[] = [
   defineTool({
     name: 'search_transactions',
     title: 'Search transactions',
@@ -58,8 +73,16 @@ export const financeTools: ToolDefinition[] = [
       }
     },
   }),
-  readEndpoint('get_forecast', 'Forecast', 'Forecast of upcoming months based on recurring and annual patterns.', '/forecast'),
-  readEndpoint('list_categories', 'Categories', 'All spending categories (id + name).', '/categories'),
+  withFreshness(
+    readEndpoint(
+      'get_forecast',
+      'Forecast',
+      'Forecast of upcoming months based on recurring and annual patterns. meta.forecastStartMonth is the first ' +
+        'forecast month (YYYY-MM).',
+      '/forecast'
+    ),
+    forecastStart
+  ),
   readEndpoint('list_accounts', 'Accounts', 'Accounts with type, owner label and latest balance.', '/accounts'),
   readEndpoint(
     'list_recurring',
@@ -67,4 +90,9 @@ export const financeTools: ToolDefinition[] = [
     'Active recurring patterns (subscriptions, monthly and annual payments).',
     '/recurring'
   ),
+];
+
+export const financeTools: ToolDefinition[] = [
+  ...dataTools.map((tool) => (tool.freshness ? tool : withFreshness(tool))),
+  readEndpoint('list_categories', 'Categories', 'All spending categories (id + name).', '/categories'),
 ];
