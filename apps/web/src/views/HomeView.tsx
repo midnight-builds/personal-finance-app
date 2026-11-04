@@ -293,6 +293,9 @@ export default function HomeView({
             <div className="metric">
               <span>Runway</span>
               <strong>{summary.runwayMonths === null ? '—' : `${summary.runwayMonths.toFixed(1)} kk`}</strong>
+              {!summary.isComplete && summary.runwayMonths !== null && (
+                <span className="muted">Osittainen — tunnetuista saldoista</span>
+              )}
             </div>
           </div>
         )}
