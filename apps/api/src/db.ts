@@ -3,11 +3,38 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'crypto';
 
-const dbPath = process.env.DB_PATH || path.resolve('data', 'finance.db');
+const IN_MEMORY = ':memory:';
 
-const dataDir = path.dirname(dbPath);
-if (!fs.existsSync(dataDir) && dataDir !== ':memory:') {
-  fs.mkdirSync(dataDir, { recursive: true });
+const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
+
+/**
+ * True when this process runs tests, however it was started: `node --test`,
+ * `tsx --test`, or a test file executed directly (`tsx tests/x.test.ts`).
+ */
+function isTestProcess() {
+  const args = [...process.execArgv, ...process.argv];
+  return (
+    Boolean(process.env.NODE_TEST_CONTEXT) ||
+    args.some((a) => a === '--test' || a.startsWith('--test=') || TEST_FILE.test(a))
+  );
+}
+
+function resolveDbPath() {
+  const configured = process.env.DB_PATH || path.resolve('data', 'finance.db');
+  // Tests wipe tables in beforeEach, so a test process must never open a file
+  // database. Test files import tests/setup/testDb.ts first; this is the backstop.
+  if (configured !== IN_MEMORY && isTestProcess()) {
+    throw new Error(
+      `Refusing to open ${configured} from a test process; import tests/setup/testDb.ts first or set DB_PATH=${IN_MEMORY}`
+    );
+  }
+  return configured;
+}
+
+const dbPath = resolveDbPath();
+
+if (dbPath !== IN_MEMORY) {
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 }
 
 export const db = new DatabaseSync(dbPath);
@@ -220,6 +247,21 @@ export function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_pattern_conf_status ON pattern_confirmations(status);
     CREATE INDEX IF NOT EXISTS idx_pattern_conf_account ON pattern_confirmations(account_id);
+
+    CREATE TABLE IF NOT EXISTS feature_proposals (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      source TEXT NOT NULL,
+      title TEXT NOT NULL,
+      problem TEXT NOT NULL,
+      evidence TEXT NOT NULL,
+      proposal TEXT NOT NULL,
+      acceptance_criteria TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'new',
+      resolved_at TEXT,
+      decision_note TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_feature_proposals_status ON feature_proposals(status);
 
     CREATE INDEX IF NOT EXISTS idx_import_sessions_overlap ON import_sessions(overlap_key);
     CREATE INDEX IF NOT EXISTS idx_normalized_booking_date ON normalized_transactions(booking_date);

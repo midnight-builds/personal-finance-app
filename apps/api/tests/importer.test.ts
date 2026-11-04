@@ -1,7 +1,6 @@
+import './setup/testDb.js';
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-
-process.env.DB_PATH = ':memory:';
 
 import { initDb, seedDefaultCategories, db } from '../src/db.js';
 import { checksum, processImport } from '../src/importer.js';

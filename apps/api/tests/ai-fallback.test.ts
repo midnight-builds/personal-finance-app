@@ -1,7 +1,7 @@
+import './setup/testDb.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-process.env.DB_PATH = ':memory:';
 process.env.OPENAI_API_KEY = '';
 
 import { initDb, seedDefaultCategories } from '../src/db.js';
