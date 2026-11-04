@@ -65,3 +65,40 @@ test('summary includes balance adjustments up to snapshot date', () => {
   // 100 + (10-3) = 107
   assert.equal(summary.totalBalance.toFixed(2), '107.00');
 });
+
+test('an account without a balance stays in the summary and is not counted as zero', () => {
+  const now = new Date().toISOString();
+  const known = crypto.randomUUID();
+  const unknown = crypto.randomUUID();
+  const insert = db.prepare('INSERT INTO accounts (id, created_at, name, iban, type) VALUES (?, ?, ?, ?, ?)');
+  insert.run(known, now, 'Known', 'FI00TEST1', 'bank');
+  insert.run(unknown, now, 'Unknown', 'FI00TEST2', 'bank');
+  db.prepare('INSERT INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), now, known, '2026-02-01', 100, 'EUR');
+
+  const summary = getSummary();
+  assert.equal(summary.accounts.length, 2);
+  const missing = summary.accounts.find((a) => a.id === unknown)!;
+  assert.equal(missing.balance, null);
+  assert.equal(missing.date, null);
+  assert.equal(summary.totalBalance, 100);
+  assert.equal(summary.isComplete, false);
+  assert.equal(summary.missingBalanceAccountCount, 1);
+});
+
+test('no accounts is complete; a known zero balance is a real zero', () => {
+  const empty = getSummary();
+  assert.equal(empty.isComplete, true);
+  assert.equal(empty.missingBalanceAccountCount, 0);
+  assert.deepEqual(empty.accounts, []);
+
+  const now = new Date().toISOString();
+  const acct = crypto.randomUUID();
+  db.prepare('INSERT INTO accounts (id, created_at, name, iban, type) VALUES (?, ?, ?, ?, ?)')
+    .run(acct, now, 'A', 'FI00TEST', 'bank');
+  db.prepare('INSERT INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), now, acct, '2026-02-01', 0, 'EUR');
+  const zero = getSummary();
+  assert.equal(zero.accounts[0].balance, 0);
+  assert.equal(zero.isComplete, true);
+});

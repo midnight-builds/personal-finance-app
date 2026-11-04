@@ -21,24 +21,34 @@ export type HouseholdSummary = {
   dataAgeDays: number;
 };
 
+/**
+ * Every account is listed. An account without any balance snapshot has
+ * `balance: null` (unknown, not zero); `totalBalance` and `runwayMonths` then
+ * cover known balances only and `isComplete` is false.
+ */
 export function getSummary() {
   const latestBalances = db
     .prepare(
-      `SELECT b.account_id AS accountId,
+      `SELECT a.id AS accountId,
               a.name AS accountName,
               b.balance,
               b.currency,
               b.date
-       FROM balance_snapshots b
-       JOIN accounts a ON a.id = b.account_id
-       JOIN (
-         SELECT account_id, MAX(date) AS maxdate FROM balance_snapshots GROUP BY account_id
-       ) latest ON latest.account_id = b.account_id AND latest.maxdate = b.date
-       GROUP BY b.account_id`
+       FROM accounts a
+       LEFT JOIN (
+         SELECT bs.account_id, bs.balance, bs.currency, bs.date
+         FROM balance_snapshots bs
+         JOIN (
+           SELECT account_id, MAX(date) AS maxdate FROM balance_snapshots GROUP BY account_id
+         ) latest ON latest.account_id = bs.account_id AND latest.maxdate = bs.date
+         GROUP BY bs.account_id
+       ) b ON b.account_id = a.id
+       ORDER BY a.created_at ASC`
     )
     .all() as Array<any>;
 
   const accountsWithAdjustments = latestBalances.map((b) => {
+    if (b.date == null) return { ...b, adjustedBalance: null, adjustmentSum: 0 };
     const baseBalance = Number(b.balance) || 0;
     const adj = getAdjustmentSumForAccountAtOrBeforeDate(String(b.accountId), String(b.date));
     return {
@@ -48,6 +58,7 @@ export function getSummary() {
     };
   });
 
+  const missingBalanceAccountCount = accountsWithAdjustments.filter((b) => b.adjustedBalance === null).length;
   const totalBalance = accountsWithAdjustments.reduce((sum, b) => sum + (Number(b.adjustedBalance) || 0), 0);
 
   const monthlyNetRow = db
@@ -76,15 +87,17 @@ export function getSummary() {
 
   return {
     totalBalance,
+    isComplete: missingBalanceAccountCount === 0,
+    missingBalanceAccountCount,
     monthlyNet,
     monthlyNetWithTransfers: Number(monthlyNetAll.net || 0),
     runwayMonths,
     accounts: accountsWithAdjustments.map((b) => ({
       id: b.accountId,
       name: b.accountName,
-      balance: Number(b.adjustedBalance),
-      currency: b.currency,
-      date: b.date,
+      balance: b.adjustedBalance === null ? null : Number(b.adjustedBalance),
+      currency: b.currency ?? null,
+      date: b.date ?? null,
       // Optional debug info (harmless):
       adjustmentSum: Number(b.adjustmentSum || 0),
     })),

@@ -132,3 +132,21 @@ test('API failures surface as redacted tool errors', async () => {
   assert.ok(textOf(res).includes('Finance API error 500'));
   assert.equal(textOf(res).includes('FI21'), false);
 });
+
+test('get_latest_briefing: same shape with or without a briefing; other failures stay errors', async () => {
+  const call = async (response: unknown) => {
+    const { client } = await connect({ '/briefing/latest': response });
+    return client.callTool({ name: 'get_latest_briefing', arguments: {} });
+  };
+
+  const ok = await call({ id: 'b1', findings: [] });
+  assert.deepEqual(JSON.parse(textOf(ok)), { status: 'ok', briefing: { id: 'b1', findings: [] } });
+
+  const none = await call(new ApiError(404, { error: 'not_found' }));
+  assert.equal(none.isError, undefined);
+  assert.deepEqual(JSON.parse(textOf(none)), { status: 'not_generated', briefing: null });
+
+  const missingRoute = await call(new ApiError(404, { error: 'Not Found', message: 'Route GET:/briefing/latest not found' }));
+  assert.equal(missingRoute.isError, true);
+  assert.equal((await call(new ApiError(500, { error: 'boom' }))).isError, true);
+});

@@ -38,11 +38,15 @@ export type Transaction = {
 export type Category = { id: string; name: string };
 
 export type Summary = {
+  /** Sum of known balances; partial when `isComplete` is false. */
   totalBalance: number;
+  isComplete: boolean;
+  missingBalanceAccountCount: number;
   monthlyNet: number;
   monthlyNetWithTransfers: number;
   runwayMonths: number | null;
-  accounts: { id: string; name: string; balance: number; currency: string; date: string }[];
+  /** `balance`, `currency` and `date` are null when the account has no balance yet. */
+  accounts: { id: string; name: string; balance: number | null; currency: string | null; date: string | null }[];
 };
 
 export type MonthlyRow = { month: string; income: number; expense: number; net: number; direction: string };
