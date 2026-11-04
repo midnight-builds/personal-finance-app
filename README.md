@@ -16,6 +16,7 @@ Goal: **easy import → automatic categorization → clear reports**.
 - **Categorization** — default categories, manual rules, and AI-suggested rules you can approve or reject
 - **Pattern detection** — detects annual recurring expenses and flags large one-off transactions for confirmation
 - **Forecasting** — 3-month spending forecast engine with a briefing generator and UI panel
+- **MCP server** — read-only tools for external agents (e.g. Hermes) plus a feature-proposal queue you review in the UI; see `docs/MCP.md`
 
 ## Quick start
 
@@ -59,4 +60,10 @@ AI-assisted, end to end, with a disciplined loop: plan → test-driven implement
 ## Repo scripts
 - `npm run dev` – start API + Web (concurrently)
 - `npm run ci` – build + test + lint
+
+### Tests and the database
+
+API tests always use an in-memory SQLite database. Every test file must start with
+`import './setup/testDb.js';` (enforced by `tests/test-isolation.test.ts`), and
+`db.ts` refuses to open a database file from any test process as a backstop.
 

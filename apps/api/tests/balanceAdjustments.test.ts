@@ -1,7 +1,6 @@
+import './setup/testDb.js';
 import { test } from "node:test";
 import assert from "node:assert/strict";
-
-process.env.DB_PATH = ":memory:";
 
 import { initDb, db } from "../src/db.js";
 import { createBalanceAdjustment, getAdjustmentSumForAccountAtOrBeforeDate } from "../src/balanceAdjustments.js";

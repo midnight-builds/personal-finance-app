@@ -22,6 +22,7 @@ import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
 import { listPendingRuleSuggestions, acceptRuleSuggestion, rejectRuleSuggestion } from './ruleSuggestions.js';
 import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
 import { getForecast } from './forecast.js';
+import { routes } from './routes/index.js';
 
 initDb();
 seedDefaultCategories();
@@ -445,7 +446,10 @@ server.post<{ Params: { id: string } }>('/pattern-confirmations/:id/reject', asy
   }
 });
 
+await server.register(routes);
+
 const port = Number(process.env.PORT ?? 3001);
-const host = process.env.HOST ?? '0.0.0.0';
+// Loopback by default: the API has no auth. Set HOST=0.0.0.0 only on a trusted network.
+const host = process.env.HOST ?? '127.0.0.1';
 
 await server.listen({ port, host });

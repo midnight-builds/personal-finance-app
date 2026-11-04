@@ -7,6 +7,7 @@ import { chooseCategoryFor, upsertDecision } from './rules.js';
 import { detectPatterns } from './patterns.js';
 import { runBriefing } from './briefing.js';
 import { generateRuleSuggestions } from './ruleSuggestions.js';
+import { canonicalGroupOrder } from './sql/transactions.js';
 
 export type ImportResult = {
   importSessionId: string;
@@ -210,7 +211,7 @@ function assignDuplicateGroup(txId: string, candidateId: string) {
 
   const canonical = db
     .prepare(
-      'SELECT id FROM normalized_transactions WHERE transaction_group_id = ? ORDER BY created_at ASC, id ASC LIMIT 1'
+      `SELECT id FROM normalized_transactions WHERE transaction_group_id = ? ORDER BY ${canonicalGroupOrder()} LIMIT 1`
     )
     .get(groupId) as { id: string } | undefined;
 

@@ -26,11 +26,11 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Build (API + Web)
+      - name: Build (shared, API, MCP, Web)
         run: npm run build
 
-      - name: Test (API)
-        run: npm run test --workspace apps/api
+      - name: Test (all workspaces)
+        run: npm test
 
       - name: Lint (Web)
-        run: npm run lint --workspace apps/web
+        run: npm run lint

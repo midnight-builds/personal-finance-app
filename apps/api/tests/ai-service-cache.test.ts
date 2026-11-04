@@ -1,3 +1,4 @@
+import './setup/testDb.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -5,6 +6,10 @@ import type { AiCategoryProvider } from '../src/ai/provider.js';
 import type { AiCategorySuggestionRequest } from '../src/ai/contract.js';
 import { createInMemoryAiCache } from '../src/ai/cache.js';
 import { suggestCategory } from '../src/ai/service.js';
+import { initDb } from '../src/db.js';
+
+// The rules fallback queries category tables; the test DB is in-memory (see package.json).
+initDb();
 
 test('suggestCategory: cache prevents duplicate provider calls', async () => {
   let calls = 0;

@@ -1,5 +1,6 @@
 import { db } from "./db.js";
 import { getSettings } from "./settings.js";
+import { latestCategoryDecisionJoin } from "./sql/transactions.js";
 
 export function listTransactions() {
   const { payday, paydayFlexDays } = getSettings();
@@ -64,12 +65,7 @@ export function listTransactions() {
               a.iban AS accountIban
        FROM normalized_transactions nt
        JOIN accounts a ON a.id = nt.account_id
-       LEFT JOIN categorization_decisions cd ON cd.id = (
-         SELECT id FROM categorization_decisions
-         WHERE transaction_id = nt.id
-         ORDER BY created_at DESC
-         LIMIT 1
-       )
+       ${latestCategoryDecisionJoin()}
        LEFT JOIN categories c ON c.id = cd.category_id
        LEFT JOIN transfer_links tl ON tl.from_transaction_id = nt.id OR tl.to_transaction_id = nt.id
        LEFT JOIN recurring rec ON rec.counterparty_name = nt.counterparty_name AND rec.amount = nt.amount

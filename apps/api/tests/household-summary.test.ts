@@ -1,6 +1,4 @@
-// IMPORTANT: set DB_PATH before any project imports
-process.env.DB_PATH = ':memory:';
-
+import './setup/testDb.js';
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'crypto';

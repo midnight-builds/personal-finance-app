@@ -1,8 +1,7 @@
+import './setup/testDb.js';
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'crypto';
-
-process.env.DB_PATH = ':memory:';
 
 import { initDb, db } from '../src/db.js';
 import { seedDefaultCategories } from '../src/db.js';
