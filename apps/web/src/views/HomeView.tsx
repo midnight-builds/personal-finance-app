@@ -8,9 +8,11 @@ import BriefingPanel from '../components/BriefingPanel';
 import RuleSuggestionsPanel from '../components/RuleSuggestionsPanel';
 import ForecastPanel from '../components/ForecastPanel';
 
-type Account = { id: string; name: string; balance: number; currency: string; date: string };
+type Account = { id: string; name: string; balance: number | null; currency: string | null; date: string | null };
 type Summary = {
   totalBalance: number;
+  isComplete: boolean;
+  missingBalanceAccountCount: number;
   monthlyNet: number;
   monthlyNetWithTransfers: number;
   runwayMonths: number | null;
@@ -284,10 +286,16 @@ export default function HomeView({
             <div className="metric">
               <span>Kokonais­saldot</span>
               <strong>{formatAmount(summary.totalBalance)}</strong>
+              {!summary.isComplete && (
+                <span className="muted">Osittainen — {summary.missingBalanceAccountCount} tililtä puuttuu saldo</span>
+              )}
             </div>
             <div className="metric">
               <span>Runway</span>
               <strong>{summary.runwayMonths === null ? '—' : `${summary.runwayMonths.toFixed(1)} kk`}</strong>
+              {!summary.isComplete && summary.runwayMonths !== null && (
+                <span className="muted">Osittainen — tunnetuista saldoista</span>
+              )}
             </div>
           </div>
         )}
@@ -309,8 +317,8 @@ export default function HomeView({
             {summary.accounts.map((a) => (
               <div className="balance" key={a.id}>
                 <div className="label">{a.name}</div>
-                <div className="value">{formatAmount(a.balance, a.currency)}</div>
-                <div className="sub">Päivitetty {formatDate(a.date)}</div>
+                <div className="value">{a.balance === null ? 'Saldo puuttuu' : formatAmount(a.balance, a.currency ?? undefined)}</div>
+                <div className="sub">{a.date ? `Päivitetty ${formatDate(a.date)}` : 'Ei saldotietoa tuonnissa'}</div>
               </div>
             ))}
           </div>
