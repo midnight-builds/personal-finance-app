@@ -137,3 +137,9 @@ test('malformed JSON body is a client error, not a 500', async () => {
   assert.equal(res.statusCode, 400);
   assert.equal(res.json().error, 'bad_request');
 });
+
+test('POST /feature-proposals keeps the source the UI sends for user-written proposals', async () => {
+  const res = await app.inject({ method: 'POST', url: '/feature-proposals', payload: { ...proposal, source: 'user' } });
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.json().proposal.source, 'user');
+});

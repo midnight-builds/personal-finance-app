@@ -1,5 +1,11 @@
 // Typed API client for finance app
-import type { FeatureProposal, FeatureProposalAction, FeatureProposalUpdate } from '@finance-app/shared';
+import type {
+  CreateFeatureProposalResponse,
+  FeatureProposal,
+  FeatureProposalAction,
+  FeatureProposalInput,
+  FeatureProposalUpdate,
+} from '@finance-app/shared';
 // All fetch functions use /api as base; Vite proxies to http://127.0.0.1:3001
 
 // ============================================================================
@@ -523,8 +529,8 @@ export async function getFeatureProposals(): Promise<FeatureProposal[]> {
   return res.json();
 }
 
-/** Rejected edit: `code` is the API error code, `details` lists validation issues. */
-export class FeatureProposalUpdateError extends Error {
+/** Rejected create or edit: `code` is the API error code, `details` lists validation issues. */
+export class FeatureProposalRequestError extends Error {
   readonly code: string;
   readonly details: string[];
 
@@ -535,17 +541,25 @@ export class FeatureProposalUpdateError extends Error {
   }
 }
 
-export async function updateFeatureProposal(id: string, patch: FeatureProposalUpdate): Promise<FeatureProposal> {
-  const res = await safeFetch(`${API}/feature-proposals/${id}`, {
-    method: 'PATCH',
+async function sendFeatureProposal<T>(path: string, method: 'POST' | 'PATCH', body: unknown): Promise<T> {
+  const res = await safeFetch(`${API}${path}`, {
+    method,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new FeatureProposalUpdateError(body.error ?? 'unknown', Array.isArray(body.details) ? body.details : []);
+    const err = await res.json().catch(() => ({}));
+    throw new FeatureProposalRequestError(err.error ?? 'unknown', Array.isArray(err.details) ? err.details : []);
   }
   return res.json();
+}
+
+export function createFeatureProposal(input: FeatureProposalInput): Promise<CreateFeatureProposalResponse> {
+  return sendFeatureProposal('/feature-proposals', 'POST', input);
+}
+
+export function updateFeatureProposal(id: string, patch: FeatureProposalUpdate): Promise<FeatureProposal> {
+  return sendFeatureProposal(`/feature-proposals/${id}`, 'PATCH', patch);
 }
 
 export async function resolveFeatureProposal(

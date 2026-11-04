@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  FeatureProposalUpdateError,
+  FeatureProposalRequestError,
+  createFeatureProposal,
   getFeatureProposals,
   resolveFeatureProposal,
   updateFeatureProposal,
@@ -77,6 +78,11 @@ const FIELD_LABEL: Record<TextField | 'kind' | 'acceptanceCriteria', string> = {
 
 type Draft = Pick<FeatureProposal, TextField | 'kind'> & { criteria: string };
 
+const EMPTY_DRAFT: Draft = { kind: 'feature', title: '', problem: '', evidence: '', proposal: '', criteria: '' };
+
+/** Source recorded for proposals the user writes in the UI. */
+const USER_SOURCE = 'user';
+
 const toDraft = (p: FeatureProposal): Draft => ({
   kind: p.kind,
   title: p.title,
@@ -86,6 +92,12 @@ const toDraft = (p: FeatureProposal): Draft => ({
   criteria: p.acceptanceCriteria.join('\n'),
 });
 
+const parseCriteria = (criteria: string) =>
+  criteria
+    .split('\n')
+    .map((c) => c.trim())
+    .filter(Boolean);
+
 // Only changed fields are sent, so an untouched field is never overwritten.
 function diffDraft(p: FeatureProposal, d: Draft): FeatureProposalUpdate {
   const patch: FeatureProposalUpdate = {};
@@ -93,45 +105,50 @@ function diffDraft(p: FeatureProposal, d: Draft): FeatureProposalUpdate {
   for (const f of ['title', 'problem', 'evidence', 'proposal'] as const) {
     if (d[f].trim() !== p[f]) patch[f] = d[f];
   }
-  const criteria = d.criteria
-    .split('\n')
-    .map((c) => c.trim())
-    .filter(Boolean);
+  const criteria = parseCriteria(d.criteria);
   if (JSON.stringify(criteria) !== JSON.stringify(p.acceptanceCriteria)) patch.acceptanceCriteria = criteria;
   return patch;
 }
 
-// "evidence: contains_account_or_personal_id" → "Peruste: sisältää tilinumeron tai henkilötunnuksen"
+// "evidence: contains_account_or_personal_id" → "Peruste: sisältää tilinumeron tai henkilötunnuksen".
+// Duplicate issues collapse: an empty criteria list and an empty item both read "pakollinen".
 function describeIssue(issue: string) {
   const [path, ...rest] = issue.split(': ');
   const field = path.split('.')[0] as keyof typeof FIELD_LABEL;
   const message = rest.join(': ');
-  const text = message.includes(SENSITIVE_ID_ERROR) ? 'sisältää tilinumeron tai henkilötunnuksen' : message;
+  const text = message.includes(SENSITIVE_ID_ERROR)
+    ? 'sisältää tilinumeron tai henkilötunnuksen'
+    : message.startsWith('Too small')
+      ? 'pakollinen'
+      : message.startsWith('Too big')
+        ? 'liian pitkä'
+        : message;
   return `${FIELD_LABEL[field] ?? path}: ${text}`;
 }
 
-function describeUpdateError(err: unknown) {
-  if (!(err instanceof FeatureProposalUpdateError)) return 'Tallennus epäonnistui';
+function describeRequestError(err: unknown) {
+  if (!(err instanceof FeatureProposalRequestError)) return 'Tallennus epäonnistui';
   if (err.code === 'duplicate_title') return 'Samalla otsikolla on jo toinen avoin ehdotus';
   if (err.code === 'not_editable') return 'Ehdotus on jo käsitelty, sitä ei voi enää muokata';
   if (err.code === 'not_found') return 'Ehdotusta ei löydy';
-  if (err.details.length > 0) return err.details.map(describeIssue).join('; ');
+  if (err.details.length > 0) return [...new Set(err.details.map(describeIssue))].join('; ');
   return 'Tallennus epäonnistui';
 }
 
 type EditorProps = {
-  proposal: FeatureProposal;
+  /** Proposal to edit; omitted for a new one. */
+  proposal?: FeatureProposal;
   onSaved: () => void;
   onCancel: () => void;
   setToast: (v: string) => void;
 };
 
 function ProposalEditor({ proposal, onSaved, onCancel, setToast }: EditorProps) {
-  const [draft, setDraft] = useState(() => toDraft(proposal));
+  const [draft, setDraft] = useState(() => (proposal ? toDraft(proposal) : EMPTY_DRAFT));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const patch = diffDraft(proposal, draft);
-  const changed = Object.keys(patch).length > 0;
+  const patch = proposal && diffDraft(proposal, draft);
+  const changed = patch ? Object.keys(patch).length > 0 : true;
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((prev) => ({ ...prev, [key]: value }));
 
@@ -140,11 +157,30 @@ function ProposalEditor({ proposal, onSaved, onCancel, setToast }: EditorProps) 
     setSaving(true);
     setError(null);
     try {
-      await updateFeatureProposal(proposal.id, patch);
-      showToast(setToast, 'Ehdotus päivitetty');
+      if (proposal && patch) {
+        await updateFeatureProposal(proposal.id, patch);
+        showToast(setToast, 'Ehdotus päivitetty');
+      } else {
+        const { duplicate } = await createFeatureProposal({
+          kind: draft.kind,
+          title: draft.title,
+          problem: draft.problem,
+          evidence: draft.evidence,
+          proposal: draft.proposal,
+          acceptanceCriteria: parseCriteria(draft.criteria),
+          source: USER_SOURCE,
+        });
+        // Keep the form open so the text is not lost; the existing proposal is in the list.
+        if (duplicate) {
+          setError('Samalla otsikolla on jo avoin ehdotus');
+          setSaving(false);
+          return;
+        }
+        showToast(setToast, 'Ehdotus lisätty');
+      }
       onSaved();
     } catch (err) {
-      setError(describeUpdateError(err));
+      setError(describeRequestError(err));
       setSaving(false);
     }
   };
@@ -181,11 +217,13 @@ function ProposalEditor({ proposal, onSaved, onCancel, setToast }: EditorProps) 
         {FIELD_LABEL.acceptanceCriteria} (yksi per rivi)
         <textarea rows={4} value={draft.criteria} onChange={(e) => set('criteria', e.target.value)} />
       </label>
-      <p className="muted">Agentti näkee muokatun tekstin. Älä lisää nimiä, tilinumeroita tai tarkkoja summia.</p>
+      <p className="muted">
+        Agentti näkee {proposal ? 'muokatun' : 'tämän'} tekstin. Älä lisää nimiä, tilinumeroita tai tarkkoja summia.
+      </p>
       {error && <p className="proposal-error">{error}</p>}
       <div className="proposal-actions">
         <button className="mini" type="submit" disabled={!changed || saving}>
-          Tallenna
+          {proposal ? 'Tallenna' : 'Lisää ehdotus'}
         </button>
         <button className="mini ghost" type="button" disabled={saving} onClick={onCancel}>
           Peruuta
@@ -202,6 +240,7 @@ export default function ProposalsView({ setToast }: Props) {
   const [resolutions, setResolutions] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(() => {
     getFeatureProposals()
@@ -246,18 +285,41 @@ export default function ProposalsView({ setToast }: Props) {
     <section className="card glass">
       <div className="card-head">
         <div>
-          <p className="eyebrow">Agenttien ehdotukset</p>
+          <p className="eyebrow">Agenttien ja omat ehdotukset</p>
           <h2>Ominaisuusehdotukset</h2>
         </div>
-        <button className="mini ghost" type="button" onClick={() => setShowResolved((v) => !v)}>
-          {showResolved ? 'Näytä vain avoimet' : `Näytä myös valmiit ja hylätyt (${resolved.length})`}
-        </button>
+        <div className="proposal-actions">
+          {!creating && (
+            <button className="mini" type="button" onClick={() => setCreating(true)}>
+              Uusi ehdotus
+            </button>
+          )}
+          <button className="mini ghost" type="button" onClick={() => setShowResolved((v) => !v)}>
+            {showResolved ? 'Näytä vain avoimet' : `Näytä myös valmiit ja hylätyt (${resolved.length})`}
+          </button>
+        </div>
       </div>
       <p className="muted">
         Ulkoiset agentit (esim. Hermes) voivat ehdottaa ominaisuuksia ja ilmoittaa virheistä MCP:n kautta. Ne
-        eivät toteuta mitään — sinä päätät. Agentti näkee tilan, perustelut ja toteutuksen viitteen. Hyväksytyn
-        ehdotuksen voi kopioida GitHub-issueksi.
+        eivät toteuta mitään — sinä päätät. Agentti näkee tilan, perustelut ja toteutuksen viitteen. Voit myös
+        lisätä oman ehdotuksen ja muokata avoimia. Hyväksytyn ehdotuksen voi kopioida GitHub-issueksi.
       </p>
+
+      {creating && (
+        <article className="proposal">
+          <div className="proposal-head">
+            <strong>Uusi ehdotus</strong>
+          </div>
+          <ProposalEditor
+            setToast={setToast}
+            onCancel={() => setCreating(false)}
+            onSaved={() => {
+              setCreating(false);
+              load();
+            }}
+          />
+        </article>
+      )}
 
       {visible.length === 0 && <p className="muted">Ei avoimia ehdotuksia.</p>}
 

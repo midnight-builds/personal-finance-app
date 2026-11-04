@@ -853,3 +853,7 @@ label {
   color: #fca5a5;
   margin: 0;
 }
+
+.card-head .proposal-actions {
+  margin-top: 0;
+}
