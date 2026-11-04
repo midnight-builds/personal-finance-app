@@ -57,8 +57,14 @@ after(() => {
   if (dir) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+const rejections: string[] = [];
+
 async function listen(overrides: Partial<HttpConfig> = {}) {
-  const server = createMcpHttpServer({ ...config, ...overrides }, () => new McpServer({ name: 't', version: '0' }));
+  const server = createMcpHttpServer(
+    { ...config, ...overrides },
+    () => new McpServer({ name: 't', version: '0' }),
+    (message) => rejections.push(message)
+  );
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   return (server.address() as AddressInfo).port;
@@ -115,4 +121,15 @@ test('rejections: wrong token 401, wrong path 404, GET 405, bad JSON 400, huge b
 test('allow-list: listed client passes, others get 403 even with a valid token', { skip: !hasOpenssl }, async () => {
   assert.equal((await request({ port: await listen({ allowedClients: parseAllowedClients('127.0.0.1') }) })).status, 200);
   assert.equal((await request({ port: await listen({ allowedClients: parseAllowedClients('10.9.9.9') }) })).status, 403);
+});
+
+test('rejections are logged with the client address and never the token', { skip: !hasOpenssl }, async () => {
+  rejections.length = 0;
+  await request({ port: await listen({ allowedClients: parseAllowedClients('10.9.9.9') }) });
+  await request({ port: await listen(), token: 'c'.repeat(64) });
+  assert.deepEqual(rejections, [
+    'Rejected 127.0.0.1: not in MCP_ALLOWED_IPS',
+    'Rejected 127.0.0.1: missing or invalid bearer token',
+  ]);
+  assert.ok(rejections.every((m) => !m.includes(config.token) && !m.includes('c'.repeat(64))));
 });

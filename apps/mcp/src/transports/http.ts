@@ -28,13 +28,19 @@ function tokenMatches(header: string | undefined, token: string) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function clientAllowed(allowed: net.BlockList | null, remote: string | undefined) {
+/** Dual-stack sockets report IPv4 clients as ::ffff:a.b.c.d; use the plain form. */
+function clientAddress(remote: string | undefined) {
+  if (!remote) return undefined;
+  return remote.startsWith('::ffff:') && net.isIPv4(remote.slice(7)) ? remote.slice(7) : remote;
+}
+
+function clientAllowed(allowed: net.BlockList | null, address: string | undefined) {
   if (!allowed) return true;
-  if (!remote) return false;
-  // Dual-stack sockets report IPv4 clients as ::ffff:a.b.c.d.
-  const address = remote.startsWith('::ffff:') && net.isIPv4(remote.slice(7)) ? remote.slice(7) : remote;
+  if (!address) return false;
   return allowed.check(address, net.isIPv4(address) ? 'ipv4' : 'ipv6');
 }
+
+export type RejectionLogger = (message: string) => void;
 
 async function readJson(req: http.IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -60,12 +66,20 @@ async function readJson(req: http.IncomingMessage): Promise<unknown> {
  */
 export function createMcpHttpServer(
   config: Pick<HttpConfig, 'token' | 'tls' | 'allowedClients'>,
-  buildServer: () => McpServer
+  buildServer: () => McpServer,
+  logRejection: RejectionLogger = (message) => console.warn(message)
 ) {
   const handler: http.RequestListener = async (req, res) => {
     if (new URL(req.url ?? '/', 'http://localhost').pathname !== MCP_PATH) return sendError(res, 404, 'not_found');
-    if (!clientAllowed(config.allowedClients, req.socket.remoteAddress)) return sendError(res, 403, 'forbidden');
+    // Rejections are logged with the client address (never the token) so an
+    // allow-list that does not match, e.g. behind NAT, is easy to diagnose.
+    const address = clientAddress(req.socket.remoteAddress);
+    if (!clientAllowed(config.allowedClients, address)) {
+      logRejection(`Rejected ${address ?? 'unknown client'}: not in MCP_ALLOWED_IPS`);
+      return sendError(res, 403, 'forbidden');
+    }
     if (!tokenMatches(req.headers.authorization, config.token)) {
+      logRejection(`Rejected ${address ?? 'unknown client'}: missing or invalid bearer token`);
       return sendError(res, 401, 'unauthorized', { 'www-authenticate': 'Bearer' });
     }
     // Stateless server: no server-initiated streams or sessions.
