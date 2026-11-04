@@ -64,7 +64,7 @@ test('disabled tools are not exposed; unknown names fail loudly', async () => {
 test('search_transactions forwards validated filters with defaults to the API', async () => {
   const { client, calls } = await connect({ '/transactions/search': { total: 0, items: [] } });
   await client.callTool({ name: 'search_transactions', arguments: { from: '2026-01-01', q: 'market', limit: 10 } });
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.filter((c) => c.path !== '/data-status'), [
     {
       method: 'get',
       path: '/transactions/search',
@@ -131,6 +131,42 @@ test('API failures surface as redacted tool errors', async () => {
   assert.equal(res.isError, true);
   assert.ok(textOf(res).includes('Finance API error 500'));
   assert.equal(textOf(res).includes('FI21'), false);
+});
+
+test('data tools add a meta freshness block; the data block is unchanged', async () => {
+  const status = { lastImportAt: '2026-11-02T09:30:00.000Z', dataAsOf: '2026-10-31' };
+  const { client } = await connect({
+    '/data-status': status,
+    '/summary': { totalBalance: 1 },
+    '/forecast': [{ targetMonth: '2026-12' }, { targetMonth: '2027-01' }],
+    '/categories': [{ id: 'c1' }],
+    '/feature-proposals': [],
+  });
+  const blocks = async (name: string) =>
+    ((await client.callTool({ name, arguments: {} })) as { content: Array<{ text: string }> }).content.map((c) =>
+      JSON.parse(c.text)
+    );
+
+  const [summary, { meta }] = await blocks('get_summary');
+  assert.deepEqual(summary, { totalBalance: 1 });
+  assert.equal(meta.lastImportAt, status.lastImportAt);
+  assert.equal(meta.dataAsOf, status.dataAsOf);
+  assert.ok(/^\d{4}-\d\d-\d\dT.*Z$/.test(meta.generatedAt));
+
+  const forecast = await blocks('get_forecast');
+  assert.equal(forecast[1].meta.forecastStartMonth, '2026-12');
+
+  assert.equal((await blocks('list_categories')).length, 1);
+  assert.equal((await blocks('list_feature_proposals')).length, 1);
+});
+
+test('a failing freshness lookup does not fail the tool', async () => {
+  const { client } = await connect({ '/data-status': new ApiError(500, {}), '/summary': { totalBalance: 1 } });
+  const res = (await client.callTool({ name: 'get_summary', arguments: {} })) as { isError?: boolean; content: Array<{ text: string }> };
+  assert.equal(res.isError, undefined);
+  const { meta } = JSON.parse(res.content[1].text);
+  assert.equal(meta.lastImportAt, null);
+  assert.equal(meta.dataAsOf, null);
 });
 
 test('get_latest_briefing: same shape with or without a briefing; other failures stay errors', async () => {

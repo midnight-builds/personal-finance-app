@@ -26,10 +26,32 @@ function describeError(err: unknown): string {
   return `Finance API unreachable: ${err instanceof Error ? err.message : String(err)}`;
 }
 
+/**
+ * Freshness of the data behind a response. A failing status lookup must not
+ * fail the tool itself, so the timestamps are then null.
+ */
+async function freshnessMeta(api: ToolContext['api']) {
+  const status = (await api.get('/data-status').catch(() => null)) as
+    | { lastImportAt?: string | null; dataAsOf?: string | null }
+    | null;
+  return {
+    generatedAt: new Date().toISOString(),
+    lastImportAt: status?.lastImportAt ?? null,
+    dataAsOf: status?.dataAsOf ?? null,
+  };
+}
+
+const toText = (value: unknown) => ({ type: 'text' as const, text: JSON.stringify(redactDeep(value), null, 2) });
+
 export async function runTool(tool: ToolDefinition, args: unknown, ctx: ToolContext): Promise<CallToolResult> {
   try {
-    const data = await tool.run(args as never, ctx);
-    return { content: [{ type: 'text', text: JSON.stringify(redactDeep(data), null, 2) }] };
+    const [data, meta] = await Promise.all([
+      tool.run(args as never, ctx),
+      tool.freshness ? freshnessMeta(ctx.api) : undefined,
+    ]);
+    if (!meta) return { content: [toText(data)] };
+    const extra = typeof tool.freshness === 'function' ? tool.freshness(data) : {};
+    return { content: [toText(data), toText({ meta: { ...meta, ...extra } })] };
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: describeError(err) }] };
   }
