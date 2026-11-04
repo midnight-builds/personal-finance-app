@@ -8,6 +8,7 @@ import {
   createFeatureProposal,
   listFeatureProposals,
   resolveFeatureProposal,
+  updateFeatureProposal,
 } from '../src/featureProposals.js';
 import { DomainError } from '../src/http/errors.js';
 
@@ -128,6 +129,57 @@ test('final statuses cannot change, accepted may still be rejected, unknown ids 
 
   assert.throws(
     () => resolveFeatureProposal('missing', 'rejected'),
+    (e) => e instanceof DomainError && e.statusCode === 404
+  );
+});
+
+test('updateFeatureProposal edits only the given fields of an open proposal', () => {
+  const { proposal } = createFeatureProposal({ ...valid, kind: 'bug' });
+  assert.equal(proposal.updatedAt, null);
+  const edited = updateFeatureProposal(proposal.id, {
+    title: 'Budget warnings per category',
+    acceptanceCriteria: ['Warning appears at 80% of budget'],
+  });
+  assert.equal(edited.title, 'Budget warnings per category');
+  assert.deepEqual(edited.acceptanceCriteria, ['Warning appears at 80% of budget']);
+  assert.equal(edited.kind, 'bug', 'omitted kind must not fall back to the default');
+  assert.equal(edited.problem, valid.problem);
+  assert.equal(edited.status, 'new');
+  assert.ok(edited.updatedAt);
+  assert.deepEqual(edited.history, []);
+
+  resolveFeatureProposal(proposal.id, 'accepted');
+  assert.equal(updateFeatureProposal(proposal.id, { kind: 'feature' }).kind, 'feature');
+  assert.equal(listFeatureProposals()[0].status, 'accepted');
+});
+
+test('updateFeatureProposal validates input like create', () => {
+  const { proposal } = createFeatureProposal(valid);
+  assert.throws(() => updateFeatureProposal(proposal.id, {}), ZodError);
+  assert.throws(() => updateFeatureProposal(proposal.id, { title: '  ' }), ZodError);
+  assert.throws(() => updateFeatureProposal(proposal.id, { acceptanceCriteria: [] }), ZodError);
+  assert.throws(() => updateFeatureProposal(proposal.id, { evidence: 'from FI21 1234 5600 0007 85' }), ZodError);
+  assert.throws(() => updateFeatureProposal(proposal.id, { status: 'done' }), ZodError);
+  assert.equal(listFeatureProposals()[0].updatedAt, null);
+});
+
+test('updateFeatureProposal refuses final statuses, unknown ids and duplicate open titles', () => {
+  const { proposal } = createFeatureProposal(valid);
+  const other = createFeatureProposal({ ...valid, title: 'Other' }).proposal;
+  assert.throws(
+    () => updateFeatureProposal(other.id, { title: ' budget alerts PER category' }),
+    (e) => e instanceof DomainError && e.code === 'duplicate_title' && e.statusCode === 409
+  );
+  assert.equal(updateFeatureProposal(proposal.id, { title: 'Budget alerts per Category' }).title, 'Budget alerts per Category');
+
+  resolveFeatureProposal(proposal.id, 'rejected', 'no');
+  assert.equal(updateFeatureProposal(other.id, { title: 'Budget alerts per category' }).title, 'Budget alerts per category');
+  assert.throws(
+    () => updateFeatureProposal(proposal.id, { title: 'Changed' }),
+    (e) => e instanceof DomainError && e.code === 'not_editable' && e.statusCode === 409
+  );
+  assert.throws(
+    () => updateFeatureProposal('missing', { title: 'x' }),
     (e) => e instanceof DomainError && e.statusCode === 404
   );
 });

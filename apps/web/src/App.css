@@ -807,3 +807,53 @@ label {
   background: rgba(255, 255, 255, 0.04);
   color: #e2e8f0;
 }
+
+.proposal-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.proposal-edit label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+}
+
+.proposal-edit input[type="text"],
+.proposal-edit textarea,
+.proposal-edit select {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background-color: rgba(255, 255, 255, 0.04);
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.95rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.proposal-edit select {
+  align-self: flex-start;
+  width: auto;
+  min-width: 200px;
+}
+
+.proposal-edit textarea {
+  resize: vertical;
+}
+
+.proposal-error {
+  color: #fca5a5;
+  margin: 0;
+}
+
+.card-head .proposal-actions {
+  margin-top: 0;
+}

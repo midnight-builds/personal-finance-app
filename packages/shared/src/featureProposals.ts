@@ -63,6 +63,18 @@ export const featureProposalInputSchema = z.object({
 });
 export type FeatureProposalInput = z.input<typeof featureProposalInputSchema>;
 
+/**
+ * User's edit of an open proposal: any subset of the agent-filled fields, at
+ * least one. `kind` is redeclared without its default so omitting it keeps the
+ * stored value.
+ */
+export const featureProposalUpdateSchema = z
+  .object({ ...featureProposalFields, kind: z.enum(FEATURE_PROPOSAL_KINDS) })
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to update' });
+export type FeatureProposalUpdate = z.input<typeof featureProposalUpdateSchema>;
+
 export const featureProposalDecisionSchema = z.object({
   note: z.string().trim().max(DECISION_NOTE_MAX_LENGTH).optional(),
   /** Where the change lives: commit SHA, PR URL or release. Required for `done`. */
@@ -85,6 +97,8 @@ export type FeatureProposal = z.output<typeof featureProposalInputSchema> & {
   id: string;
   createdAt: string;
   status: FeatureProposalStatus;
+  /** Time the user last edited the text, null if never. */
+  updatedAt: string | null;
   /** Time of the latest status change. */
   resolvedAt: string | null;
   /** Note of the latest status change. */

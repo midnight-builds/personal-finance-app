@@ -71,6 +71,27 @@ test('accept/done: invalid transition 409, done needs resolution, unknown id 404
   assert.equal((await post('reject', {}, 'nope')).statusCode, 404);
 });
 
+test('PATCH /feature-proposals/:id edits an open proposal, 400 invalid, 409 final, 404 unknown', async () => {
+  const { proposal: p } = (await app.inject({ method: 'POST', url: '/feature-proposals', payload: proposal })).json();
+  const patch = (payload: object, id = p.id) => app.inject({ method: 'PATCH', url: `/feature-proposals/${id}`, payload });
+
+  const ok = await patch({ problem: 'clearer problem' });
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.json().problem, 'clearer problem');
+  assert.equal(ok.json().title, proposal.title);
+  assert.ok(ok.json().updatedAt);
+
+  const invalid = await patch({ title: '' });
+  assert.equal(invalid.statusCode, 400);
+  assert.ok(invalid.json().details.some((d: string) => d.startsWith('title:')));
+
+  assert.equal((await patch({ title: 'x' }, 'nope')).statusCode, 404);
+  await app.inject({ method: 'POST', url: `/feature-proposals/${p.id}/reject`, payload: {} });
+  const final = await patch({ title: 'x' });
+  assert.equal(final.statusCode, 409);
+  assert.equal(final.json().error, 'not_editable');
+});
+
 test('GET /feature-proposals validates the status filter', async () => {
   assert.equal((await app.inject({ url: '/feature-proposals?status=new' })).statusCode, 200);
   assert.equal((await app.inject({ url: '/feature-proposals?status=done' })).statusCode, 200);
@@ -115,4 +136,10 @@ test('malformed JSON body is a client error, not a 500', async () => {
   });
   assert.equal(res.statusCode, 400);
   assert.equal(res.json().error, 'bad_request');
+});
+
+test('POST /feature-proposals keeps the source the UI sends for user-written proposals', async () => {
+  const res = await app.inject({ method: 'POST', url: '/feature-proposals', payload: { ...proposal, source: 'user' } });
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.json().proposal.source, 'user');
 });

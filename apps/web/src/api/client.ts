@@ -1,5 +1,11 @@
 // Typed API client for finance app
-import type { FeatureProposal, FeatureProposalAction } from '@finance-app/shared';
+import type {
+  CreateFeatureProposalResponse,
+  FeatureProposal,
+  FeatureProposalAction,
+  FeatureProposalInput,
+  FeatureProposalUpdate,
+} from '@finance-app/shared';
 // All fetch functions use /api as base; Vite proxies to http://127.0.0.1:3001
 
 // ============================================================================
@@ -521,6 +527,39 @@ export async function getFeatureProposals(): Promise<FeatureProposal[]> {
   const res = await safeFetch(`${API}/feature-proposals`);
   if (!res.ok) throw new Error(`getFeatureProposals failed: ${res.statusText}`);
   return res.json();
+}
+
+/** Rejected create or edit: `code` is the API error code, `details` lists validation issues. */
+export class FeatureProposalRequestError extends Error {
+  readonly code: string;
+  readonly details: string[];
+
+  constructor(code: string, details: string[] = []) {
+    super(code);
+    this.code = code;
+    this.details = details;
+  }
+}
+
+async function sendFeatureProposal<T>(path: string, method: 'POST' | 'PATCH', body: unknown): Promise<T> {
+  const res = await safeFetch(`${API}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new FeatureProposalRequestError(err.error ?? 'unknown', Array.isArray(err.details) ? err.details : []);
+  }
+  return res.json();
+}
+
+export function createFeatureProposal(input: FeatureProposalInput): Promise<CreateFeatureProposalResponse> {
+  return sendFeatureProposal('/feature-proposals', 'POST', input);
+}
+
+export function updateFeatureProposal(id: string, patch: FeatureProposalUpdate): Promise<FeatureProposal> {
+  return sendFeatureProposal(`/feature-proposals/${id}`, 'PATCH', patch);
 }
 
 export async function resolveFeatureProposal(

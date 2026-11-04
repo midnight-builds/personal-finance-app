@@ -4,7 +4,12 @@ import {
   featureProposalDecisionSchema,
   featureProposalListQuerySchema,
 } from '@finance-app/shared';
-import { createFeatureProposal, listFeatureProposals, resolveFeatureProposal } from '../featureProposals.js';
+import {
+  createFeatureProposal,
+  listFeatureProposals,
+  resolveFeatureProposal,
+  updateFeatureProposal,
+} from '../featureProposals.js';
 import { queryParser } from '../http/query.js';
 
 const parseListQuery = queryParser(featureProposalListQuerySchema.shape);
@@ -19,6 +24,10 @@ export const featureProposalRoutes: FastifyPluginAsync = async (app) => {
     const result = createFeatureProposal(request.body);
     return reply.code(result.duplicate ? 200 : 201).send(result);
   });
+
+  app.patch<{ Params: { id: string } }>('/feature-proposals/:id', async (request) =>
+    updateFeatureProposal(request.params.id, request.body)
+  );
 
   for (const [action, decision] of Object.entries(FEATURE_PROPOSAL_ACTIONS)) {
     app.post<{ Params: { id: string } }>(`/feature-proposals/:id/${action}`, async (request) => {

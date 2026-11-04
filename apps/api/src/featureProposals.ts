@@ -3,6 +3,7 @@ import {
   FEATURE_PROPOSAL_TRANSITIONS,
   OPEN_FEATURE_PROPOSAL_STATUSES,
   featureProposalInputSchema,
+  featureProposalUpdateSchema,
   type CreateFeatureProposalResponse,
   type FeatureProposal,
   type FeatureProposalDecision,
@@ -30,6 +31,7 @@ type Row = {
   proposal: string;
   acceptance_criteria: string;
   status: FeatureProposalStatus;
+  updated_at: string | null;
   resolved_at: string | null;
   decision_note: string | null;
   resolution: string | null;
@@ -47,6 +49,7 @@ function toProposal(row: Row, history: FeatureProposalEvent[]): FeatureProposal 
     proposal: row.proposal,
     acceptanceCriteria: JSON.parse(row.acceptance_criteria) as string[],
     status: row.status,
+    updatedAt: row.updated_at,
     resolvedAt: row.resolved_at,
     decisionNote: row.decision_note,
     resolution: row.resolution,
@@ -85,6 +88,15 @@ function getRow(id: string) {
   return db.prepare('SELECT * FROM feature_proposals WHERE id = ?').get(id) as Row | undefined;
 }
 
+function openRows() {
+  return db
+    .prepare(
+      `SELECT * FROM feature_proposals
+       WHERE status IN (${OPEN_FEATURE_PROPOSAL_STATUSES.map(() => '?').join(',')})`
+    )
+    .all(...OPEN_FEATURE_PROPOSAL_STATUSES) as Row[];
+}
+
 /**
  * Validates and stores a proposal. An agent may re-propose the same idea, so a
  * title matching an open (new or accepted) proposal returns that one instead of
@@ -93,13 +105,7 @@ function getRow(id: string) {
 export function createFeatureProposal(input: unknown): CreateFeatureProposalResponse {
   const data = featureProposalInputSchema.parse(input);
 
-  const openRows = db
-    .prepare(
-      `SELECT * FROM feature_proposals
-       WHERE status IN (${OPEN_FEATURE_PROPOSAL_STATUSES.map(() => '?').join(',')})`
-    )
-    .all(...OPEN_FEATURE_PROPOSAL_STATUSES) as Row[];
-  const existing = openRows.find((r) => titleKey(r.title) === titleKey(data.title));
+  const existing = openRows().find((r) => titleKey(r.title) === titleKey(data.title));
   if (existing) return { duplicate: true, proposal: withHistory([existing])[0] };
 
   const id = crypto.randomUUID();
@@ -161,6 +167,47 @@ export function resolveFeatureProposal(
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
+  }
+  return getProposal(id)!;
+}
+
+const UPDATE_COLUMNS = {
+  kind: 'kind',
+  title: 'title',
+  problem: 'problem',
+  evidence: 'evidence',
+  proposal: 'proposal',
+  acceptanceCriteria: 'acceptance_criteria',
+} as const;
+
+/**
+ * Applies the user's edit to an open (new or accepted) proposal; status and
+ * history are untouched. A title may not match another open proposal, which
+ * would break duplicate detection. Throws `ZodError` on invalid input.
+ */
+export function updateFeatureProposal(id: string, input: unknown): FeatureProposal {
+  const data = featureProposalUpdateSchema.parse(input);
+
+  if (data.title !== undefined) {
+    const clash = openRows().find((r) => r.id !== id && titleKey(r.title) === titleKey(data.title!));
+    if (clash) throw DomainError.conflict('duplicate_title');
+  }
+
+  const entries = Object.entries(data).map(([key, value]) => [
+    UPDATE_COLUMNS[key as keyof typeof UPDATE_COLUMNS],
+    key === 'acceptanceCriteria' ? JSON.stringify(value) : (value as string),
+  ]);
+  const result = db
+    .prepare(
+      `UPDATE feature_proposals SET ${entries.map(([col]) => `${col} = ?`).join(', ')}, updated_at = ?
+       WHERE id = ? AND status IN (${OPEN_FEATURE_PROPOSAL_STATUSES.map(() => '?').join(',')})`
+    )
+    .run(...entries.map(([, v]) => v), new Date().toISOString(), id, ...OPEN_FEATURE_PROPOSAL_STATUSES) as {
+    changes: number | bigint;
+  };
+
+  if (Number(result.changes) === 0) {
+    throw getRow(id) ? DomainError.conflict('not_editable') : DomainError.notFound();
   }
   return getProposal(id)!;
 }
