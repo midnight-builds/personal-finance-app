@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getFeatureProposals, resolveFeatureProposal } from '../api/client';
 import type { FeatureProposal } from '../api/client';
-import { DECISION_NOTE_MAX_LENGTH, type FeatureProposalAction } from '@finance-app/shared';
+import {
+  DECISION_NOTE_MAX_LENGTH,
+  FEATURE_PROPOSAL_TRANSITIONS,
+  RESOLUTION_MAX_LENGTH,
+  type FeatureProposalAction,
+} from '@finance-app/shared';
 import { formatDate, showToast } from '../utils';
 
 type Props = {
@@ -12,7 +17,22 @@ const STATUS_LABEL: Record<FeatureProposal['status'], string> = {
   new: 'Uusi',
   accepted: 'Hyväksytty',
   rejected: 'Hylätty',
+  done: 'Toteutettu',
 };
+
+const KIND_LABEL: Record<FeatureProposal['kind'], string> = {
+  feature: 'Ominaisuus',
+  bug: 'Virhe',
+};
+
+const ACTION_TOAST: Record<FeatureProposalAction, string> = {
+  accept: 'Ehdotus hyväksytty',
+  reject: 'Ehdotus hylätty',
+  done: 'Merkitty toteutetuksi',
+};
+
+const canBecome = (p: FeatureProposal, status: keyof typeof FEATURE_PROPOSAL_TRANSITIONS) =>
+  FEATURE_PROPOSAL_TRANSITIONS[status].includes(p.status);
 
 // Markdown body for a GitHub issue. The repo is public: the user reviews and
 // edits this before publishing, nothing is posted automatically.
@@ -40,6 +60,7 @@ export default function ProposalsView({ setToast }: Props) {
   const [proposals, setProposals] = useState<FeatureProposal[]>([]);
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [resolutions, setResolutions] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -56,8 +77,8 @@ export default function ProposalsView({ setToast }: Props) {
     if (busyId) return;
     setBusyId(p.id);
     try {
-      await resolveFeatureProposal(p.id, action, notes[p.id]);
-      showToast(setToast, action === 'accept' ? 'Ehdotus hyväksytty' : 'Ehdotus hylätty');
+      await resolveFeatureProposal(p.id, action, notes[p.id], resolutions[p.id]);
+      showToast(setToast, ACTION_TOAST[action]);
     } catch {
       showToast(setToast, 'Tallennus epäonnistui — ehdotus on ehkä jo käsitelty');
     } finally {
@@ -75,8 +96,9 @@ export default function ProposalsView({ setToast }: Props) {
     }
   };
 
-  const open = proposals.filter((p) => p.status === 'new');
-  const resolved = proposals.filter((p) => p.status !== 'new');
+  const isOpen = (p: FeatureProposal) => p.status === 'new' || p.status === 'accepted';
+  const open = proposals.filter(isOpen);
+  const resolved = proposals.filter((p) => !isOpen(p));
   const visible = showResolved ? [...open, ...resolved] : open;
 
   return (
@@ -87,21 +109,23 @@ export default function ProposalsView({ setToast }: Props) {
           <h2>Ominaisuusehdotukset</h2>
         </div>
         <button className="mini ghost" type="button" onClick={() => setShowResolved((v) => !v)}>
-          {showResolved ? 'Näytä vain uudet' : `Näytä myös käsitellyt (${resolved.length})`}
+          {showResolved ? 'Näytä vain avoimet' : `Näytä myös valmiit ja hylätyt (${resolved.length})`}
         </button>
       </div>
       <p className="muted">
-        Ulkoiset agentit (esim. Hermes) voivat ehdottaa ominaisuuksia MCP:n kautta. Ne eivät toteuta mitään —
-        sinä päätät. Hyväksytyn ehdotuksen voi kopioida GitHub-issueksi.
+        Ulkoiset agentit (esim. Hermes) voivat ehdottaa ominaisuuksia ja ilmoittaa virheistä MCP:n kautta. Ne
+        eivät toteuta mitään — sinä päätät. Agentti näkee tilan, perustelut ja toteutuksen viitteen. Hyväksytyn
+        ehdotuksen voi kopioida GitHub-issueksi.
       </p>
 
-      {visible.length === 0 && <p className="muted">Ei uusia ehdotuksia.</p>}
+      {visible.length === 0 && <p className="muted">Ei avoimia ehdotuksia.</p>}
 
       <div className="proposals">
         {visible.map((p) => (
           <article key={p.id} className="proposal">
             <div className="proposal-head">
               <strong>{p.title}</strong>
+              <span className="chip soft">{KIND_LABEL[p.kind]}</span>
               <span className="chip soft">{STATUS_LABEL[p.status]}</span>
               <span className="muted">
                 {p.source} · {formatDate(p.createdAt)}
@@ -122,14 +146,29 @@ export default function ProposalsView({ setToast }: Props) {
                   ))}
                 </ul>
               </dd>
-              {p.decisionNote && (
+              {p.resolution && (
                 <>
-                  <dt>Päätöksen perustelu</dt>
-                  <dd>{p.decisionNote}</dd>
+                  <dt>Toteutus</dt>
+                  <dd>{p.resolution}</dd>
+                </>
+              )}
+              {p.history.length > 0 && (
+                <>
+                  <dt>Historia</dt>
+                  <dd>
+                    <ul>
+                      {p.history.map((e, i) => (
+                        <li key={i}>
+                          {formatDate(e.at)} · {STATUS_LABEL[e.status]}
+                          {e.note && ` — ${e.note}`}
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
                 </>
               )}
             </dl>
-            {p.status === 'new' ? (
+            {isOpen(p) && (
               <div className="proposal-actions">
                 <input
                   type="text"
@@ -138,9 +177,11 @@ export default function ProposalsView({ setToast }: Props) {
                   value={notes[p.id] ?? ''}
                   onChange={(e) => setNotes((prev) => ({ ...prev, [p.id]: e.target.value }))}
                 />
-                <button className="mini" type="button" disabled={busyId !== null} onClick={() => handleResolve(p, 'accept')}>
-                  Hyväksy
-                </button>
+                {canBecome(p, 'accepted') && (
+                  <button className="mini" type="button" disabled={busyId !== null} onClick={() => handleResolve(p, 'accept')}>
+                    Hyväksy
+                  </button>
+                )}
                 <button
                   className="mini ghost"
                   type="button"
@@ -150,14 +191,30 @@ export default function ProposalsView({ setToast }: Props) {
                   Hylkää
                 </button>
               </div>
-            ) : (
-              p.status === 'accepted' && (
-                <div className="proposal-actions">
+            )}
+            {isOpen(p) && (
+              <div className="proposal-actions">
+                <input
+                  type="text"
+                  maxLength={RESOLUTION_MAX_LENGTH}
+                  placeholder="Commit tai PR-linkki"
+                  value={resolutions[p.id] ?? ''}
+                  onChange={(e) => setResolutions((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                />
+                <button
+                  className="mini ghost"
+                  type="button"
+                  disabled={busyId !== null || !resolutions[p.id]?.trim()}
+                  onClick={() => handleResolve(p, 'done')}
+                >
+                  Merkitse toteutetuksi
+                </button>
+                {p.status === 'accepted' && (
                   <button className="mini ghost" type="button" onClick={() => handleCopy(p)}>
                     Kopioi issueksi (Markdown)
                   </button>
-                </div>
-              )
+                )}
+              </div>
             )}
           </article>
         ))}

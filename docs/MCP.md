@@ -11,8 +11,8 @@ over the REST API and never opens the database.
 | `search_transactions` | Filtered, paginated transactions (`GET /transactions/search`) |
 | `get_summary`, `get_monthly_overview`, `get_insights`, `get_latest_briefing`, `get_forecast` | Read reports |
 | `list_categories`, `list_accounts`, `list_recurring` | Read reference data |
-| `list_feature_proposals` | Earlier proposals and the user's decision notes |
-| `propose_feature` | Adds a proposal to the local review queue |
+| `list_feature_proposals` | Earlier proposals and bug reports with their status, notes, resolution and history |
+| `propose_feature` | Adds a feature proposal or bug report (`kind`) to the local review queue |
 
 Everything except `propose_feature` is read-only; no tool changes or deletes data.
 
@@ -35,19 +35,30 @@ and collapses duplicate rows from overlapping imports by default.
 3. Extend the tests in `apps/mcp/tests/tools.test.ts` (the registry test asserts
    annotations, so a new writing tool must be acknowledged there explicitly).
 
-## Feature proposals
+## Feature proposals and bug reports
 
 `propose_feature` → `POST /feature-proposals` → `feature_proposals` table, status `new`.
-The user reviews proposals in the **Ehdotukset** tab and accepts or rejects them
-(the optional note is visible to the agent via `list_feature_proposals`). An
-accepted proposal can be copied as issue Markdown; publishing is always manual.
+`kind` is `feature` (default) or `bug`. The user reviews them in the **Ehdotukset**
+tab. An accepted proposal can be copied as issue Markdown; publishing is always manual.
+
+Lifecycle (`POST /feature-proposals/:id/<action>`, body `{ note?, resolution? }`):
+
+| Action | To | From |
+|--------|----|------|
+| `accept` | `accepted` — approved, not built yet | `new` |
+| `done` | `done` — implemented and deployed; `resolution` (commit/PR) required | `new`, `accepted` |
+| `reject` | `rejected` — will not be done | `new`, `accepted` |
+
+`done` and `rejected` are final; any other transition returns `409 invalid_transition`.
+Every change is appended to `feature_proposal_events` and returned as `history`
+(`at`, `status`, `note`, `resolution`). This is the agent's feedback channel:
+`list_feature_proposals` tells it what was fixed, where, and why something was declined.
 
 The schema lives in `packages/shared/src/featureProposals.ts` and is used by both
 the API and the MCP tool:
-- fields `title`, `problem`, `evidence`, `proposal`, `acceptanceCriteria[]`, length-limited
+- fields `kind`, `title`, `problem`, `evidence`, `proposal`, `acceptanceCriteria[]`, length-limited
 - text containing an account number or personal id is rejected
-- the same title as an open proposal returns the existing one (`duplicate: true`)
-- decisions are final: resolving an already resolved proposal returns `409`
+- the same title as an open (`new` or `accepted`) proposal returns the existing one (`duplicate: true`)
 
 ## Configuration
 

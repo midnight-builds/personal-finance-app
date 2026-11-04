@@ -522,12 +522,13 @@ export async function getFeatureProposals(): Promise<FeatureProposal[]> {
 export async function resolveFeatureProposal(
   id: string,
   action: FeatureProposalAction,
-  note?: string
+  note?: string,
+  resolution?: string
 ): Promise<void> {
   const res = await safeFetch(`${API}/feature-proposals/${id}/${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ note: note || undefined }),
+    body: JSON.stringify({ note: note || undefined, resolution: resolution || undefined }),
   });
   if (!res.ok) throw new Error(`resolveFeatureProposal failed: ${res.statusText}`);
 }

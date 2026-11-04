@@ -13,7 +13,7 @@ await app.register(routes);
 after(() => app.close());
 
 beforeEach(() => {
-  db.exec('DELETE FROM feature_proposals;');
+  db.exec('DELETE FROM feature_proposal_events; DELETE FROM feature_proposals;');
 });
 
 const proposal = {
@@ -44,26 +44,36 @@ test('POST /feature-proposals: 201 created, 200 for duplicate, 400 with details 
   assert.ok(invalid.json().details.some((d: string) => d.startsWith('title:')));
 });
 
-test('accept/reject: decision is final (409), unknown id 404, note length validated', async () => {
+test('accept/done: invalid transition 409, done needs resolution, unknown id 404, note length validated', async () => {
   const { proposal: p } = (await app.inject({ method: 'POST', url: '/feature-proposals', payload: proposal })).json();
+  const post = (action: string, payload: object, id = p.id) =>
+    app.inject({ method: 'POST', url: `/feature-proposals/${id}/${action}`, payload });
 
-  const tooLong = await app.inject({ method: 'POST', url: `/feature-proposals/${p.id}/accept`, payload: { note: 'x'.repeat(1001) } });
-  assert.equal(tooLong.statusCode, 400);
+  assert.equal((await post('accept', { note: 'x'.repeat(1001) })).statusCode, 400);
 
-  const ok = await app.inject({ method: 'POST', url: `/feature-proposals/${p.id}/accept`, payload: { note: 'yes' } });
+  const ok = await post('accept', { note: 'yes' });
   assert.equal(ok.statusCode, 200);
   assert.equal(ok.json().status, 'accepted');
 
-  const again = await app.inject({ method: 'POST', url: `/feature-proposals/${p.id}/reject`, payload: {} });
+  const again = await post('accept', {});
   assert.equal(again.statusCode, 409);
-  assert.equal(again.json().error, 'already_resolved');
+  assert.equal(again.json().error, 'invalid_transition');
 
-  const missing = await app.inject({ method: 'POST', url: '/feature-proposals/nope/reject', payload: {} });
-  assert.equal(missing.statusCode, 404);
+  const noResolution = await post('done', { note: 'shipped' });
+  assert.equal(noResolution.statusCode, 400);
+  assert.equal(noResolution.json().error, 'resolution_required');
+
+  const done = await post('done', { note: 'shipped', resolution: 'abc1234' });
+  assert.equal(done.statusCode, 200);
+  assert.equal(done.json().resolution, 'abc1234');
+  assert.deepEqual(done.json().history.map((e: { status: string }) => e.status), ['accepted', 'done']);
+
+  assert.equal((await post('reject', {}, 'nope')).statusCode, 404);
 });
 
 test('GET /feature-proposals validates the status filter', async () => {
   assert.equal((await app.inject({ url: '/feature-proposals?status=new' })).statusCode, 200);
+  assert.equal((await app.inject({ url: '/feature-proposals?status=done' })).statusCode, 200);
   assert.equal((await app.inject({ url: '/feature-proposals?status=bogus' })).statusCode, 400);
 });
 

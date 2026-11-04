@@ -5,24 +5,45 @@ import { publishableText } from './schemas.js';
 // the user. Proposals may later be copied into a public issue tracker, hence
 // `publishableText` on every free-text field.
 
-export const FEATURE_PROPOSAL_STATUSES = ['new', 'accepted', 'rejected'] as const;
+// Lifecycle: new → accepted → done, new → done (clear bug fixed directly),
+// new/accepted → rejected. `done` and `rejected` are final.
+export const FEATURE_PROPOSAL_STATUSES = ['new', 'accepted', 'rejected', 'done'] as const;
 export type FeatureProposalStatus = (typeof FEATURE_PROPOSAL_STATUSES)[number];
 export type FeatureProposalDecision = Exclude<FeatureProposalStatus, 'new'>;
+
+/** Statuses from which each decision may be made. */
+export const FEATURE_PROPOSAL_TRANSITIONS: Record<FeatureProposalDecision, readonly FeatureProposalStatus[]> = {
+  accepted: ['new'],
+  rejected: ['new', 'accepted'],
+  done: ['new', 'accepted'],
+};
+
+/** Statuses that still count as open: a matching title is a duplicate. */
+export const OPEN_FEATURE_PROPOSAL_STATUSES = ['new', 'accepted'] as const satisfies readonly FeatureProposalStatus[];
 
 /** URL action → resulting status: `POST /feature-proposals/:id/<action>`. */
 export const FEATURE_PROPOSAL_ACTIONS = {
   accept: 'accepted',
   reject: 'rejected',
+  done: 'done',
 } as const satisfies Record<string, FeatureProposalDecision>;
 export type FeatureProposalAction = keyof typeof FEATURE_PROPOSAL_ACTIONS;
 
+export const FEATURE_PROPOSAL_KINDS = ['feature', 'bug'] as const;
+export type FeatureProposalKind = (typeof FEATURE_PROPOSAL_KINDS)[number];
+
 export const DECISION_NOTE_MAX_LENGTH = 1000;
+export const RESOLUTION_MAX_LENGTH = 300;
 
 /** Who submitted a proposal, e.g. "hermes". */
 export const proposalSourceSchema = z.string().trim().min(1).max(40);
 
 /** Fields an agent fills in. Shared by the API validator and the MCP tool schema. */
 export const featureProposalFields = {
+  kind: z
+    .enum(FEATURE_PROPOSAL_KINDS)
+    .default('feature')
+    .describe('"bug" for something that works incorrectly today, "feature" for new behaviour'),
   title: publishableText(120).describe('Short imperative title'),
   problem: publishableText(2000).describe('What the user cannot do, or notices too late, today'),
   evidence: publishableText(2000).describe(
@@ -44,18 +65,33 @@ export type FeatureProposalInput = z.input<typeof featureProposalInputSchema>;
 
 export const featureProposalDecisionSchema = z.object({
   note: z.string().trim().max(DECISION_NOTE_MAX_LENGTH).optional(),
+  /** Where the change lives: commit SHA, PR URL or release. Required for `done`. */
+  resolution: z.string().trim().min(1).max(RESOLUTION_MAX_LENGTH).optional(),
 });
 
 export const featureProposalListQuerySchema = z.object({
   status: z.enum(FEATURE_PROPOSAL_STATUSES).optional(),
 });
 
+/** One status change, oldest first in `FeatureProposal.history`. */
+export type FeatureProposalEvent = {
+  at: string;
+  status: FeatureProposalDecision;
+  note: string | null;
+  resolution: string | null;
+};
+
 export type FeatureProposal = z.output<typeof featureProposalInputSchema> & {
   id: string;
   createdAt: string;
   status: FeatureProposalStatus;
+  /** Time of the latest status change. */
   resolvedAt: string | null;
+  /** Note of the latest status change. */
   decisionNote: string | null;
+  /** Set when `status` is `done`. */
+  resolution: string | null;
+  history: FeatureProposalEvent[];
 };
 
 export type CreateFeatureProposalResponse = { duplicate: boolean; proposal: FeatureProposal };

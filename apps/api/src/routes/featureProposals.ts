@@ -22,8 +22,8 @@ export const featureProposalRoutes: FastifyPluginAsync = async (app) => {
 
   for (const [action, decision] of Object.entries(FEATURE_PROPOSAL_ACTIONS)) {
     app.post<{ Params: { id: string } }>(`/feature-proposals/:id/${action}`, async (request) => {
-      const { note } = featureProposalDecisionSchema.parse(request.body ?? {});
-      return resolveFeatureProposal(request.params.id, decision, note);
+      const { note, resolution } = featureProposalDecisionSchema.parse(request.body ?? {});
+      return resolveFeatureProposal(request.params.id, decision, note, resolution);
     });
   }
 };
