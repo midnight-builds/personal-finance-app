@@ -69,6 +69,10 @@ HTTP request checks, in order: path `/mcp` (404), client address (403), token (4
 method `POST` (405), body ≤ 1 MiB (413) and valid JSON (400). The endpoint is
 stateless; there are no sessions or server-initiated streams.
 
+Allow-list and token rejections are logged with the client address (never the
+token). If the agent gets `403` behind a router, the log shows the address the
+server actually sees, e.g. the router's when it NATs between subnets.
+
 ## Running
 
 ```bash
