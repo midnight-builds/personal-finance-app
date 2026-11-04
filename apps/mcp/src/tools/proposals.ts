@@ -13,7 +13,8 @@ export const proposalTools: ToolDefinition[] = [
       'proposing to avoid duplicates, and to learn what has been handled. status: "new" = not reviewed yet, ' +
       '"accepted" = approved but not built yet, "done" = implemented (resolution names the commit ' +
       'or PR), "rejected" = will not be done (decisionNote says why). history lists every status ' +
-      'change with time and note. A proposal that is new or accepted counts as open.',
+      'change with time and note. A proposal that is new or accepted counts as open. The user may ' +
+      'edit the text of an open proposal; updatedAt is then set and the edited text is authoritative.',
     inputSchema: featureProposalListQuerySchema.shape,
     annotations: READ_ONLY,
     run: (args, { api }) => api.get('/feature-proposals', args),

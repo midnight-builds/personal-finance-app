@@ -304,6 +304,7 @@ export function initDb() {
 
   safeExec(`ALTER TABLE feature_proposals ADD COLUMN kind TEXT NOT NULL DEFAULT 'feature'`);
   safeExec(`ALTER TABLE feature_proposals ADD COLUMN resolution TEXT`);
+  safeExec(`ALTER TABLE feature_proposals ADD COLUMN updated_at TEXT`);
   // Decisions made before the event log existed become its first entry.
   db.exec(`
     INSERT INTO feature_proposal_events (proposal_id, at, status, note)
