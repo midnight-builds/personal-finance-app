@@ -26,6 +26,15 @@ body {
   flex-direction: column;
 }
 
+.demo-ribbon {
+  padding: 6px 28px;
+  background: #b45309;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
 .topbar {
   display: flex;
   align-items: center;

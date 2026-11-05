@@ -27,12 +27,45 @@ test('db.ts refuses a file database when a test file is run directly without the
   try {
     const probe = `${dir}/probe.test.ts`;
     fs.writeFileSync(probe, "await import('../src/db.ts');\n");
+    const env = { ...process.env, NODE_OPTIONS: '--experimental-sqlite', DB_PATH: `${dir}/data/finance.db` };
+    delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, ['--import', 'tsx', probe], { cwd: dir, env, encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Refusing to open/);
+    assert.equal(fs.existsSync(`${dir}/data`), false, 'no database directory may be created');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('db.ts does not create a missing database unless asked to', () => {
+  const dir = fs.mkdtempSync(`${testsDir}/../.tmp-isolation-`);
+  try {
+    const probe = `${dir}/probe.ts`;
+    fs.writeFileSync(probe, "await import('../src/db.ts');\n");
+    const env = { ...process.env, NODE_OPTIONS: '--experimental-sqlite', DB_PATH: `${dir}/typo/finance.db` };
+    delete env.NODE_TEST_CONTEXT;
+    delete env.DB_CREATE;
+    const result = spawnSync(process.execPath, ['--import', 'tsx', probe], { cwd: dir, env, encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /does not exist/);
+    assert.equal(fs.existsSync(`${dir}/typo`), false, 'no database may be created');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('db.ts has no default path: without DB_PATH it opens nothing', () => {
+  const dir = fs.mkdtempSync(`${testsDir}/../.tmp-isolation-`);
+  try {
+    const probe = `${dir}/probe.ts`;
+    fs.writeFileSync(probe, "await import('../src/db.ts');\n");
     const env = { ...process.env, NODE_OPTIONS: '--experimental-sqlite' };
     delete env.DB_PATH;
     delete env.NODE_TEST_CONTEXT;
     const result = spawnSync(process.execPath, ['--import', 'tsx', probe], { cwd: dir, env, encoding: 'utf8' });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Refusing to open/);
+    assert.match(result.stderr, /DB_PATH is not set/);
     assert.equal(fs.existsSync(`${dir}/data`), false, 'no database directory may be created');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

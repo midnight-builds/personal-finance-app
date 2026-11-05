@@ -6,6 +6,7 @@ import { processImport, checksum } from '../importer.js';
 import { db } from '../db.js';
 import { upsertDecision } from '../rules.js';
 import { createBalanceAdjustment } from '../balanceAdjustments.js';
+import { markDemoDataset } from '../dataStatus.js';
 
 export const DEMO_CHECKING_IBAN = 'FI00 1234 5600 0000 01';
 export const DEMO_SAVINGS_IBAN = 'FI00 1234 5600 0000 02';
@@ -149,6 +150,8 @@ export type DemoSeedResult = { accountIds: { checking: string; savings: string }
  * Expects an initialized database with default categories.
  */
 export async function seedDemo(anchor: string): Promise<DemoSeedResult> {
+  // Marked first, so even a half-seeded database can never pass for real data.
+  markDemoDataset();
   const importSessionIds: string[] = [];
   for (const exp of demoExports(anchor)) {
     const result = await processImport({

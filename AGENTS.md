@@ -25,6 +25,12 @@ Tämä agentti rakentaa testidatan rungon ja testit. Se tekee golden file testit
 ### AI integraatio agentti
 Tämä agentti toteuttaa OpenAI Responses API integraation. Se pakottaa ulostulon JSON skeemaan ja tuottaa selvennyskysymykset ja kategorisointiehdotukset.
 
+## Data ja ympäristöt
+
+Kehitys ja agentit käyttävät vain demokantaa (`npm run dev`), testit muistikantaa. Oikea data
+(`~/finance-app-data/finance.db`) on vain tuotannon palveluiden ja MCP:n käytössä. Oikeaa
+dataa tutkitaan vain varmuuskopion kopiosta. Ks. `docs/ENVIRONMENTS.md`.
+
 ## Työjärjestys
 
 Ensimmäinen tavoite on saada yksi pankki sisään CSV ja XLSX formaateissa, normalisoituna tietokantaan ja näkyviin UI:ssa.

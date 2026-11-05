@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import crypto from 'crypto';
 
 import { initDb, db } from '../src/db.js';
-import { getDataStatus } from '../src/dataStatus.js';
+import { getDataStatus, markDemoDataset } from '../src/dataStatus.js';
 
 initDb();
 
@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 
 test('no imports: both timestamps are null', () => {
-  assert.deepEqual(getDataStatus(), { lastImportAt: null, dataAsOf: null });
+  assert.deepEqual(getDataStatus(), { lastImportAt: null, dataAsOf: null, dataset: 'real' });
 });
 
 test('latest import time and latest booking date', () => {
@@ -46,5 +46,15 @@ test('latest import time and latest booking date', () => {
   insertTx('2026-10-31');
   insertTx(null);
 
-  assert.deepEqual(getDataStatus(), { lastImportAt: '2026-11-02T09:30:00.000Z', dataAsOf: '2026-10-31' });
+  assert.deepEqual(getDataStatus(), { lastImportAt: '2026-11-02T09:30:00.000Z', dataAsOf: '2026-10-31', dataset: 'real' });
+});
+
+test('a database marked by the demo seed reports dataset demo', () => {
+  markDemoDataset();
+  try {
+    assert.equal(getDataStatus().dataset, 'demo');
+  } finally {
+    db.exec("DELETE FROM app_settings WHERE key = 'dataset'");
+  }
+  assert.equal(getDataStatus().dataset, 'real');
 });

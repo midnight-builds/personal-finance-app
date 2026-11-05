@@ -8,7 +8,7 @@ Restores the main SQLite DB file from a backup.
 
 Options:
   --from   Backup file path (required)
-  --db     Target DB path (defaults to DB_PATH env or data/finance.db)
+  --db     Target DB path (defaults to DB_PATH env; required)
   --force  Overwrite existing DB file
 `);
   process.exit(2);
@@ -31,7 +31,12 @@ const { from, db: dbArg, force } = parseArgs(process.argv.slice(2));
 if (!from) usage();
 
 const fromPath = path.resolve(from);
-const dbPath = path.resolve(dbArg || process.env.DB_PATH || path.resolve('data', 'finance.db'));
+const dbTarget = dbArg || process.env.DB_PATH;
+if (!dbTarget) {
+  console.error('No target database: pass --db or set DB_PATH (see docs/ENVIRONMENTS.md)');
+  process.exit(1);
+}
+const dbPath = path.resolve(dbTarget);
 
 if (!fs.existsSync(fromPath)) {
   console.error(`Backup not found: ${fromPath}`);
