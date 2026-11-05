@@ -9,7 +9,8 @@
     "start": "NODE_OPTIONS=--experimental-sqlite node dist/index.js",
     "test": "DB_PATH=:memory: NODE_OPTIONS=--experimental-sqlite tsx --test --test-concurrency=1 \"tests/**/*.test.ts\"",
     "backup": "NODE_OPTIONS=--experimental-sqlite tsx scripts/backup.ts",
-    "restore": "NODE_OPTIONS=--experimental-sqlite tsx scripts/restore.ts"
+    "restore": "NODE_OPTIONS=--experimental-sqlite tsx scripts/restore.ts",
+    "seed:demo": "NODE_OPTIONS=--experimental-sqlite tsx scripts/seed-demo.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",

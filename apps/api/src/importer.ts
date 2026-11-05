@@ -227,16 +227,34 @@ function dedupeInserted(ids: string[]) {
   for (const id of ids) {
     const row = db
       .prepare(
-        'SELECT account_id, booking_date, amount, counterparty_name, description FROM normalized_transactions WHERE id = ?'
+        'SELECT account_id, import_session_id, booking_date, amount, counterparty_name, description FROM normalized_transactions WHERE id = ?'
       )
       .get(id) as any;
     if (!row || !row.booking_date) continue;
     const candidates = db
       .prepare(
-        `SELECT id, counterparty_name, description\n         FROM normalized_transactions\n         WHERE id != ?\n           AND account_id = ?\n           AND booking_date = ?\n           AND amount = ?\n           AND (counterparty_name = ? OR (counterparty_name IS NULL AND ? IS NULL))\n         LIMIT 1`
+        `SELECT c.id
+         FROM normalized_transactions c
+         WHERE c.id != ?
+           AND c.import_session_id != ?
+           -- pair one-to-one: skip rows already matched by an earlier row of this import
+           AND NOT EXISTS (
+             SELECT 1 FROM normalized_transactions o
+             WHERE c.transaction_group_id IS NOT NULL
+               AND o.transaction_group_id = c.transaction_group_id
+               AND o.import_session_id = ?
+           )
+           AND c.account_id = ?
+           AND c.booking_date = ?
+           AND c.amount = ?
+           AND (c.counterparty_name = ? OR (c.counterparty_name IS NULL AND ? IS NULL))
+         ORDER BY ${canonicalGroupOrder('c')}
+         LIMIT 1`
       )
       .get(
         id,
+        row.import_session_id,
+        row.import_session_id,
         row.account_id,
         row.booking_date,
         row.amount,
@@ -329,6 +347,15 @@ export async function processImport(options: {
     'INSERT OR REPLACE INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES (?, ?, ?, ?, ?, ?)'
   );
 
+  // A day's snapshot is its closing balance: the Saldo of the day's last row
+  // in time. Nordea lists newest first, so then that is the day's first row in
+  // the file. An export whose dates ascend is read the other way round.
+  const bookedDates = records
+    .map((r) => parseDate(getField(r, 'Kirjauspäivä')))
+    .filter((d): d is string => d !== null);
+  const newestFirst = bookedDates.length === 0 || bookedDates[0] >= bookedDates[bookedDates.length - 1];
+  const closingBalances = new Map<string, { saldo: number; currency: string }>();
+
   db.exec('BEGIN');
   try {
     for (const record of records) {
@@ -393,8 +420,8 @@ export async function processImport(options: {
         null
       );
 
-      if (saldo !== null && bookingDate) {
-        insertBalance.run(createId(), now, accountId, bookingDate, saldo, currency);
+      if (saldo !== null && bookingDate && !(newestFirst && closingBalances.has(bookingDate))) {
+        closingBalances.set(bookingDate, { saldo, currency });
       }
 
       const categoryId = chooseCategoryFor({
@@ -408,6 +435,10 @@ export async function processImport(options: {
 
       insertedIds.push(normalizedId);
       normalizedCount += 1;
+    }
+
+    for (const [day, { saldo, currency }] of closingBalances) {
+      insertBalance.run(createId(), now, accountId, day, saldo, currency);
     }
 
     db.exec('COMMIT');
