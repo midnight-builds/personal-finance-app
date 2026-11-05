@@ -26,14 +26,15 @@ function describeError(err: unknown): string {
   return `Finance API unreachable: ${err instanceof Error ? err.message : String(err)}`;
 }
 
-/**
- * Freshness of the data behind a response. A failing status lookup must not
- * fail the tool itself, so the timestamps are then null.
- */
-async function freshnessMeta(api: ToolContext['api']) {
-  const status = (await api.get('/data-status').catch(() => null)) as
-    | { lastImportAt?: string | null; dataAsOf?: string | null }
-    | null;
+type DataStatus = { lastImportAt?: string | null; dataAsOf?: string | null; dataset?: string };
+
+/** A failing status lookup must not fail the tool itself; freshness is then unknown. */
+async function dataStatus(api: ToolContext['api']): Promise<DataStatus | null> {
+  return (await api.get('/data-status').catch(() => null)) as DataStatus | null;
+}
+
+/** Freshness of the data behind a response. */
+function freshnessMeta(status: DataStatus | null) {
   return {
     generatedAt: new Date().toISOString(),
     lastImportAt: status?.lastImportAt ?? null,
@@ -41,17 +42,22 @@ async function freshnessMeta(api: ToolContext['api']) {
   };
 }
 
+// The agent works on the household's real data only. An API serving the demo
+// database (a development setup on the wrong port) gets no reads and no writes:
+// figures there are fiction, and proposals filed there would be lost.
+export const DEMO_REFUSAL =
+  'Refusing: the finance API behind this MCP server serves the demo database, not real data. Check FINANCE_API_URL (docs/ENVIRONMENTS.md).';
+
 const toText = (value: unknown) => ({ type: 'text' as const, text: JSON.stringify(redactDeep(value), null, 2) });
 
 export async function runTool(tool: ToolDefinition, args: unknown, ctx: ToolContext): Promise<CallToolResult> {
   try {
-    const [data, meta] = await Promise.all([
-      tool.run(args as never, ctx),
-      tool.freshness ? freshnessMeta(ctx.api) : undefined,
-    ]);
-    if (!meta) return { content: [toText(data)] };
+    const status = await dataStatus(ctx.api);
+    if (status?.dataset === 'demo') return { isError: true, content: [{ type: 'text', text: DEMO_REFUSAL }] };
+    const data = await tool.run(args as never, ctx);
+    if (!tool.freshness) return { content: [toText(data)] };
     const extra = typeof tool.freshness === 'function' ? tool.freshness(data) : {};
-    return { content: [toText(data), toText({ meta: { ...meta, ...extra } })] };
+    return { content: [toText(data), toText({ meta: { ...freshnessMeta(status), ...extra } })] };
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: describeError(err) }] };
   }

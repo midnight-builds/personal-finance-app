@@ -4,6 +4,7 @@ import HomeView from './views/HomeView';
 import ExplorerView from './views/ExplorerView';
 import SettingsView from './views/SettingsView';
 import ProposalsView from './views/ProposalsView';
+import DemoRibbon from './components/DemoRibbon';
 import { safeFetch, API } from './utils';
 import type { Category, Summary, MonthlyRow, Insight, Settings } from './api/client';
 
@@ -95,6 +96,7 @@ function App() {
 
   return (
     <div className="shell">
+      <DemoRibbon />
       <nav className="topbar">
         <div className="brand">Finance App</div>
         <div className="tabs">

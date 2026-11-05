@@ -20,13 +20,25 @@ function isTestProcess() {
 }
 
 function resolveDbPath() {
-  const configured = process.env.DB_PATH || path.resolve('data', 'finance.db');
+  // No default: real data and the demo database live outside the repo
+  // (docs/ENVIRONMENTS.md), and guessing a path is how a dev run once opened
+  // the wrong one. The systemd units and npm scripts always set DB_PATH.
+  const configured = process.env.DB_PATH;
+  if (!configured) {
+    throw new Error('DB_PATH is not set. See docs/ENVIRONMENTS.md (production: ~/finance-app-data/finance.db, development: npm run dev uses the demo database).');
+  }
   // Tests wipe tables in beforeEach, so a test process must never open a file
   // database. Test files import tests/setup/testDb.ts first; this is the backstop.
   if (configured !== IN_MEMORY && isTestProcess()) {
     throw new Error(
       `Refusing to open ${configured} from a test process; import tests/setup/testDb.ts first or set DB_PATH=${IN_MEMORY}`
     );
+  }
+  // A mistyped or forgotten path must fail, not start the app on a fresh empty
+  // database that looks like real data. Only callers that mean to create one
+  // (the demo seed) set DB_CREATE=1.
+  if (configured !== IN_MEMORY && !fs.existsSync(configured) && process.env.DB_CREATE !== '1') {
+    throw new Error(`Database ${configured} does not exist. Check DB_PATH (docs/ENVIRONMENTS.md); set DB_CREATE=1 to create a new one.`);
   }
   return configured;
 }

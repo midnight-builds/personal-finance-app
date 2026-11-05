@@ -9,7 +9,7 @@ function usage(): never {
 Creates a consistent SQLite backup using VACUUM INTO. Safe while the API is running.
 
 Options:
-  --db    Path to main DB file (defaults to DB_PATH env or data/finance.db)
+  --db    Path to main DB file (defaults to DB_PATH env; required)
   --out   Backup file path
   --dir   Backup directory; file is named finance-<timestamp>.db (default: backups/)
   --keep  With --dir: keep only the newest <n> backups in that directory
@@ -40,7 +40,11 @@ function parseArgs(argv: string[]): Args {
 
 const args = parseArgs(process.argv.slice(2));
 
-const dbPath = args.db || process.env.DB_PATH || path.resolve('data', 'finance.db');
+const dbPath = args.db || process.env.DB_PATH;
+if (!dbPath) {
+  console.error('No database: pass --db or set DB_PATH (see docs/ENVIRONMENTS.md)');
+  process.exit(1);
+}
 const outDir = path.resolve(args.dir ?? 'backups');
 const outPath = path.resolve(args.out ?? path.join(outDir, backupFileName()));
 

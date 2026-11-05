@@ -2,7 +2,7 @@
 
 This app is single-user and stores data in a local SQLite DB.
 
-- Default DB path: `apps/api/data/finance.db` (configurable via `DB_PATH`)
+- DB path: `DB_PATH` or `--db`, required. Production: `~/finance-app-data/finance.db` (see `docs/ENVIRONMENTS.md`)
 - **Before backup/restore:** stop the API process (or at least ensure nothing is writing to the DB).
 
 ## Backup
@@ -11,12 +11,12 @@ Creates a consistent copy using SQLite `VACUUM INTO`.
 
 ```bash
 # from repo root
-npm run backup --workspace apps/api
+DB_PATH=~/finance-app-data/finance.db npm run backup --workspace apps/api
 
 # optional: choose output path
-npm run backup --workspace apps/api -- --out /path/to/finance-backup.db
+npm run backup --workspace apps/api -- --db ~/finance-app-data/finance.db --out /path/to/finance-backup.db
 
-# optional: choose DB path
+# DB path from the environment instead of --db
 DB_PATH=/path/to/finance.db npm run backup --workspace apps/api
 ```
 

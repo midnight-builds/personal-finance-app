@@ -8,7 +8,10 @@ import { ALL_TOOLS, TOOL_NAMES, registerTools, selectTools } from '../src/tools/
 
 type Call = { method: 'get' | 'post'; path: string; arg?: unknown };
 
-/** Connects a real MCP client to a server backed by a fake API that records calls. */
+/**
+ * Connects a real MCP client to a server backed by a fake API that records
+ * calls. The runner's own `/data-status` lookups are answered but not recorded.
+ */
 async function connect(responses: Record<string, unknown> = {}, disabled: string[] = []) {
   const calls: Call[] = [];
   const respond = async (path: string) => {
@@ -17,7 +20,7 @@ async function connect(responses: Record<string, unknown> = {}, disabled: string
     return r ?? {};
   };
   const api: ApiClient = {
-    get: (path, query) => (calls.push({ method: 'get', path, arg: query }), respond(path)),
+    get: (path, query) => (path !== '/data-status' && calls.push({ method: 'get', path, arg: query }), respond(path)),
     post: (path, body) => (calls.push({ method: 'post', path, arg: body }), respond(path)),
   };
   const server = new McpServer({ name: 'test', version: '0' });
@@ -64,7 +67,7 @@ test('disabled tools are not exposed; unknown names fail loudly', async () => {
 test('search_transactions forwards validated filters with defaults to the API', async () => {
   const { client, calls } = await connect({ '/transactions/search': { total: 0, items: [] } });
   await client.callTool({ name: 'search_transactions', arguments: { from: '2026-01-01', q: 'market', limit: 10 } });
-  assert.deepEqual(calls.filter((c) => c.path !== '/data-status'), [
+  assert.deepEqual(calls, [
     {
       method: 'get',
       path: '/transactions/search',
@@ -94,6 +97,16 @@ test('propose_feature posts to the review queue with the configured source', asy
   assert.deepEqual(calls, [
     { method: 'post', path: '/feature-proposals', arg: { kind: 'feature', ...validProposal, source: 'hermes' } },
   ]);
+});
+
+test('an API serving demo data gets no reads and no writes', async () => {
+  const { client, calls } = await connect({ '/data-status': { dataset: 'demo' } });
+  for (const [name, args] of [['get_summary', {}], ['propose_feature', validProposal]] as const) {
+    const res = await client.callTool({ name, arguments: args });
+    assert.equal(res.isError, true, name);
+    assert.match(textOf(res), /demo database/);
+  }
+  assert.deepEqual(calls, []);
 });
 
 test('propose_feature accepts bug reports; list_feature_proposals can filter by done', async () => {
