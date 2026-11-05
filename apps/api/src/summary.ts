@@ -29,9 +29,9 @@ export type HouseholdSummary = {
  * "Monthly" net is the last 30 days up to and including `asOf`.
  */
 export function getSummary(asOf: string = today()) {
-  const balances = accountBalances();
+  const balances = accountBalances(asOf);
   const missingBalanceAccountCount = balances.filter((b) => b.balance === null).length;
-  const totalBalance = balances.reduce((sum, b) => sum + (b.balance ?? 0), 0);
+  const totalBalance = cents(balances.reduce((sum, b) => sum + (b.balance ?? 0), 0));
 
   const last30Days = { from: daysBefore(asOf, 30), to: asOf };
   const monthlyNet = net(last30Days);
@@ -60,13 +60,14 @@ export function getSummary(asOf: string = today()) {
   };
 }
 
+const cents = (n: number) => Math.round(n * 100) / 100;
+
 function net(scope: LedgerScope): number {
-  const cents = Math.round(ledgerEntries(scope).reduce((sum, e) => sum + e.amount * 100, 0));
-  return cents / 100;
+  return cents(ledgerEntries(scope).reduce((sum, e) => sum + e.amount, 0));
 }
 
 export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
-  const balanceOf = new Map(accountBalances().map((b) => [b.accountId, b]));
+  const balanceOf = new Map(accountBalances(asOf).map((b) => [b.accountId, b]));
   const accountRows = db
     .prepare(
       `SELECT id, name, account_subtype, owner_label
@@ -77,7 +78,7 @@ export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
   // The snapshot itself, before user corrections: credit debt is what the bank reports.
   const rawBalanceOf = (id: string) => {
     const b = balanceOf.get(id);
-    return b?.balance == null ? 0 : Math.round((b.balance - b.adjustmentSum) * 100) / 100;
+    return b?.balance == null ? 0 : cents(b.balance - b.adjustmentSum);
   };
 
   // Fetch the 2 most recent balance snapshots per account for trend computation
@@ -150,21 +151,21 @@ export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
     };
   });
 
-  const liquidAssets = accounts
+  const liquidAssets = cents(accounts
     .filter((a) => a.subtype === 'checking')
-    .reduce((sum, a) => sum + a.balance, 0);
+    .reduce((sum, a) => sum + a.balance, 0));
 
-  const totalSavings = accounts
+  const totalSavings = cents(accounts
     .filter((a) => a.subtype === 'savings')
-    .reduce((sum, a) => sum + a.balance, 0);
+    .reduce((sum, a) => sum + a.balance, 0));
 
   // Credit debt: sum of credit_card raw balances as positive
-  const creditDebt = accountRows
+  const creditDebt = cents(accountRows
     .filter((a) => a.account_subtype === 'credit_card')
     .reduce((sum, a) => {
       const rawBalance = rawBalanceOf(a.id);
       return sum + Math.abs(rawBalance < 0 ? rawBalance : 0);
-    }, 0);
+    }, 0));
 
   // Monthly subscriptions: sum typical_amount from active subscription patterns
   const subRow = db

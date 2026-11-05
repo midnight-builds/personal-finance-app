@@ -42,6 +42,14 @@ test('summary: balances are the latest snapshot plus the correction', () => {
   assert.equal(s.isComplete, true);
 });
 
+test('summary: balances follow the day asked for', () => {
+  // The correction is dated on the anchor, so a month earlier it does not count yet.
+  const [cAcc] = getSummary('2026-10-20').accounts;
+  const upTo = checking.filter((r) => r.date <= '2026-10-20');
+  assert.equal(cAcc.date, upTo[upTo.length - 1].date);
+  assert.equal(cAcc.balance, sum([{ amount: DEMO_CHECKING_OPENING }, ...upTo]));
+});
+
 test('summary: the last 30 days count each purchase once', () => {
   // The window reaches back into the month both checking exports contain.
   const window = between(checking, daysBefore(ANCHOR, 31), ANCHOR);
