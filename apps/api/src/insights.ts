@@ -1,4 +1,4 @@
-import { db } from './db.js';
+import { daysBefore, ledgerEntries, today, type LedgerEntry } from './ledger.js';
 
 export type Insight = {
   id: string;
@@ -9,86 +9,77 @@ export type Insight = {
   recommendation?: string;
 };
 
-function repeatedSmallPurchases(): Insight[] {
-  const rows = db
-    .prepare(
-      `SELECT counterparty_name AS name,
-              COUNT(*) as cnt,
-              SUM(amount) as total,
-              group_concat(id) as ids
-       FROM normalized_transactions
-       WHERE booking_date >= datetime('now', '-30 days')
-         AND amount < 0
-         AND ABS(amount) < 25
-         AND counterparty_name IS NOT NULL
-         AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-       GROUP BY counterparty_name
-       HAVING cnt >= 3
-       ORDER BY cnt DESC
-       LIMIT 5`
-    )
-    .all() as Array<any>;
+// Every detector reads countable transactions from the Ledger. Windows are
+// calendar days up to and including `asOf`: "last 30 days" starts 30 days
+// before `asOf`.
+
+const sumOf = (rows: LedgerEntry[]) => Math.round(rows.reduce((s, e) => s + e.amount * 100, 0)) / 100;
+/** Largest spend first; ties keep Ledger order (oldest first). */
+const byAbsAmountDesc = (a: LedgerEntry, b: LedgerEntry) => Math.abs(b.amount) - Math.abs(a.amount);
+/** Binary string order, as SQLite compares text. */
+const textAsc = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** First day of the month `months` months after (negative: before) the month of `day`. */
+function monthStart(day: string, months: number): string {
+  const [y, m] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1 + months, 1)).toISOString().slice(0, 10);
+}
+
+function groupBy<T, K>(rows: T[], key: (e: T) => K): Map<K, T[]> {
+  const groups = new Map<K, T[]>();
+  for (const e of rows) {
+    const k = key(e);
+    const list = groups.get(k);
+    if (list) list.push(e);
+    else groups.set(k, [e]);
+  }
+  return groups;
+}
+
+/** Named purchases (amount < 0, counterparty known) from `from` to `to`. */
+function namedExpenses(from: string, to: string): Array<LedgerEntry & { counterparty: string }> {
+  return ledgerEntries({ from, to }).filter(
+    (e): e is LedgerEntry & { counterparty: string } => e.amount < 0 && e.counterparty !== null
+  );
+}
+
+function repeatedSmallPurchases(asOf: string): Insight[] {
+  const small = namedExpenses(daysBefore(asOf, 30), asOf).filter((e) => Math.abs(e.amount) < 25);
+  const rows = [...groupBy(small, (e) => e.counterparty)]
+    .map(([name, txs]) => ({ name, cnt: txs.length, total: sumOf(txs), ids: txs.map((e) => e.id) }))
+    .filter((r) => r.cnt >= 3)
+    .sort((a, b) => b.cnt - a.cnt || textAsc(a.name, b.name))
+    .slice(0, 5);
 
   return rows.map((r) => ({
     id: `small-${r.name}`,
     title: `Pienet toistuvat ostot: ${r.name}`,
     description: `${r.cnt} ostosta 30 päivässä, yhteensä ${Math.abs(r.total).toFixed(2)} EUR`,
     severity: 'info',
-    transactionIds: (r.ids as string).split(','),
+    transactionIds: r.ids,
     recommendation:
       'Tarkista onko nämä tarpeellisia: voit niputtaa ne yhteen kategoriaan tai asettaa itsellesi kuukausirajan.',
   }));
 }
 
-function risingCategory(): Insight[] {
-  const rows = db
-    .prepare(
-      `WITH last3 AS (
-         SELECT c.name as cat, SUM(nt.amount) as s
-         FROM normalized_transactions nt
-         JOIN categorization_decisions cd ON cd.transaction_id = nt.id
-         JOIN categories c ON c.id = cd.category_id
-         WHERE nt.booking_date >= datetime('now', '-90 days')
-           AND nt.id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-         GROUP BY c.name
-       ),
-       prev3 AS (
-         SELECT c.name as cat, SUM(nt.amount) as s
-         FROM normalized_transactions nt
-         JOIN categorization_decisions cd ON cd.transaction_id = nt.id
-         JOIN categories c ON c.id = cd.category_id
-         WHERE nt.booking_date < datetime('now', '-90 days')
-           AND nt.booking_date >= datetime('now', '-180 days')
-           AND nt.id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-         GROUP BY c.name
-       )
-       SELECT l.cat as cat, l.s as lastSum, p.s as prevSum
-       FROM last3 l
-       LEFT JOIN prev3 p ON p.cat = l.cat
-       WHERE l.s < 0 AND ABS(l.s) > 100 AND (p.s IS NULL OR ABS(l.s) > ABS(COALESCE(p.s,0)) * 1.2)
-       ORDER BY ABS(l.s) DESC
-       LIMIT 5`
+function risingCategory(asOf: string): Insight[] {
+  const categorized = (from: string, to: string) =>
+    ledgerEntries({ from, to }).filter(
+      (e): e is LedgerEntry & { categoryName: string } => e.categoryName !== null
+    );
+  const last3 = categorized(daysBefore(asOf, 90), asOf);
+  const prev3 = groupBy(categorized(daysBefore(asOf, 180), daysBefore(asOf, 91)), (e) => e.categoryName);
+
+  const rows = [...groupBy(last3, (e) => e.categoryName)]
+    .map(([cat, txs]) => ({ cat, txs, lastSum: sumOf(txs), prevSum: prev3.has(cat) ? sumOf(prev3.get(cat)!) : null }))
+    .filter(
+      (r) =>
+        r.lastSum < 0 &&
+        Math.abs(r.lastSum) > 100 &&
+        (r.prevSum === null || Math.abs(r.lastSum) > Math.abs(r.prevSum) * 1.2)
     )
-    .all() as Array<any>;
-
-  const topTransactionIdsForCategory = (cat: string): string[] => {
-    const idsRows = db
-      .prepare(
-        `SELECT nt.id as id
-         FROM normalized_transactions nt
-         JOIN categorization_decisions cd ON cd.transaction_id = nt.id
-         JOIN categories c ON c.id = cd.category_id
-         WHERE nt.booking_date >= datetime('now', '-90 days')
-           AND nt.amount < 0
-           AND c.name = ?
-           AND nt.id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-         ORDER BY ABS(nt.amount) DESC
-         LIMIT 10`
-      )
-      .all(cat) as Array<any>;
-
-    return idsRows.map((r) => String(r.id));
-  };
+    .sort((a, b) => Math.abs(b.lastSum) - Math.abs(a.lastSum) || textAsc(a.cat, b.cat))
+    .slice(0, 5);
 
   return rows.map((r, idx) => ({
     id: `trend-${idx}-${r.cat}`,
@@ -97,48 +88,39 @@ function risingCategory(): Insight[] {
       r.prevSum || 0
     ).toFixed(2)} EUR`,
     severity: 'warn',
-    transactionIds: topTransactionIdsForCategory(String(r.cat)),
+    transactionIds: r.txs
+      .filter((e) => e.amount < 0)
+      .sort(byAbsAmountDesc)
+      .slice(0, 10)
+      .map((e) => e.id),
     recommendation:
       'Avaa suurimmat tapahtumat ja varmista kategorisointi. Jos kasvu on ok, harkitse budjetin/puskurin nostoa tälle kategorialle.',
   }));
 }
 
-function newRecurringMerchant(): Insight[] {
+function newRecurringMerchant(asOf: string): Insight[] {
   // Detect a new recurring merchant that appears recently (e.g. new subscription) but wasn't present earlier.
-  const rows = db
-    .prepare(
-      `WITH recent AS (
-         SELECT counterparty_name AS name,
-                COUNT(*) as cnt,
-                SUM(amount) as total,
-                group_concat(id) as ids
-         FROM normalized_transactions
-         WHERE booking_date >= datetime('now', '-45 days')
-           AND amount < 0
-           AND counterparty_name IS NOT NULL
-           AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-         GROUP BY counterparty_name
-         HAVING cnt >= 3
-       ),
-       prev AS (
-         SELECT counterparty_name AS name,
-                COUNT(*) as cnt
-         FROM normalized_transactions
-         WHERE booking_date < datetime('now', '-45 days')
-           AND booking_date >= datetime('now', '-365 days')
-           AND amount < 0
-           AND counterparty_name IS NOT NULL
-           AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-         GROUP BY counterparty_name
-       )
-       SELECT r.name as name, r.cnt as recentCnt, r.total as recentTotal, r.ids as ids, COALESCE(p.cnt, 0) as prevCnt
-       FROM recent r
-       LEFT JOIN prev p ON p.name = r.name
-       WHERE COALESCE(p.cnt, 0) <= 1
-       ORDER BY r.cnt DESC, ABS(r.total) DESC
-       LIMIT 5`
+  const prevCount = new Map(
+    [...groupBy(namedExpenses(daysBefore(asOf, 365), daysBefore(asOf, 46)), (e) => e.counterparty)].map(
+      ([name, txs]) => [name, txs.length]
     )
-    .all() as Array<any>;
+  );
+  const rows = [...groupBy(namedExpenses(daysBefore(asOf, 45), asOf), (e) => e.counterparty)]
+    .map(([name, txs]) => ({
+      name,
+      recentCnt: txs.length,
+      recentTotal: sumOf(txs),
+      ids: txs.map((e) => e.id),
+      prevCnt: prevCount.get(name) ?? 0,
+    }))
+    .filter((r) => r.recentCnt >= 3 && r.prevCnt <= 1)
+    .sort(
+      (a, b) =>
+        b.recentCnt - a.recentCnt ||
+        Math.abs(b.recentTotal) - Math.abs(a.recentTotal) ||
+        textAsc(a.name, b.name)
+    )
+    .slice(0, 5);
 
   return rows.map((r, idx) => ({
     id: `new-recurring-${idx}-${r.name}`,
@@ -147,53 +129,34 @@ function newRecurringMerchant(): Insight[] {
       2
     )} EUR (aiemmin ${r.prevCnt} krt / 12 kk)`,
     severity: 'warn',
-    transactionIds: String(r.ids).split(','),
+    transactionIds: r.ids,
     recommendation: 'Onko tämä uusi tilaus/palvelu? Jos et käytä sitä, peruuta tai etsi halvempi vaihtoehto.',
   }));
 }
 
-function monthlySpike(): Insight[] {
+/** Keys seen in at least 3 distinct months: known recurring payments. */
+function recurringKeys(rows: LedgerEntry[], key: (e: LedgerEntry) => string): Set<string> {
+  const months = new Map<string, Set<string>>();
+  for (const e of rows) {
+    const k = key(e);
+    if (!months.has(k)) months.set(k, new Set());
+    months.get(k)!.add(e.date.slice(0, 7));
+  }
+  return new Set([...months].filter(([, m]) => m.size >= 3).map(([k]) => k));
+}
+
+function monthlySpike(asOf: string): Insight[] {
   // Compare last full month vs the 3 full months before it, excluding known recurring monthly payments.
-  const rows = db
-    .prepare(
-      `WITH tx AS (
-         SELECT id,
-                counterparty_name AS name,
-                amount,
-                date(booking_date) AS d,
-                booking_date
-         FROM normalized_transactions
-         WHERE booking_date IS NOT NULL
-           AND counterparty_name IS NOT NULL
-           AND amount < 0
-           AND booking_date < date('now', 'start of month')
-           AND booking_date >= date('now', 'start of month', '-4 months')
-           AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-       ),
-       diffs AS (
-         SELECT name,
-                amount,
-                d,
-                (julianday(d) - julianday(LAG(d) OVER (PARTITION BY name, amount ORDER BY d))) AS dd
-         FROM tx
-       ),
-       recurring AS (
-         SELECT name,
-                amount,
-                COUNT(*) AS n,
-                COUNT(DISTINCT substr(d, 1, 7)) AS monthCnt
-         FROM diffs
-         GROUP BY name, amount
-         HAVING n >= 3
-       )
-       SELECT substr(date(tx.booking_date), 1, 7) as ym, SUM(tx.amount) as s
-       FROM tx
-       LEFT JOIN recurring rec ON rec.name = tx.name AND rec.amount = tx.amount
-       WHERE COALESCE(rec.monthCnt, 0) < 3
-       GROUP BY ym
-       ORDER BY ym ASC`
-    )
-    .all() as Array<any>;
+  const thisMonth = monthStart(asOf, 0);
+  const lastDayOfLastMonth = daysBefore(thisMonth, 1);
+
+  // Recurring = same merchant and amount in >= 3 of the 4 months.
+  const tx = namedExpenses(monthStart(asOf, -4), lastDayOfLastMonth);
+  const sameCharge = (e: LedgerEntry) => `${e.counterparty}\u0000${e.amount}`;
+  const recurring = recurringKeys(tx, sameCharge);
+  const rows = [...groupBy(tx.filter((e) => !recurring.has(sameCharge(e))), (e) => e.date.slice(0, 7))]
+    .map(([ym, txs]) => ({ ym, s: sumOf(txs) }))
+    .sort((a, b) => textAsc(a.ym, b.ym));
 
   if (rows.length < 4) return [];
 
@@ -210,55 +173,16 @@ function monthlySpike(): Insight[] {
   // Gate to avoid noise: must be meaningfully larger and over an absolute threshold.
   if (ratio < 1.3 || delta < 150) return [];
 
-  const idsRows = db
-    .prepare(
-      `WITH tx_all AS (
-         SELECT id,
-                counterparty_name AS name,
-                amount,
-                date(booking_date) AS d,
-                booking_date
-         FROM normalized_transactions
-         WHERE booking_date IS NOT NULL
-           AND counterparty_name IS NOT NULL
-           AND amount < 0
-           AND booking_date < date('now', 'start of month')
-           AND booking_date >= date('now', 'start of month', '-13 months')
-           AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-       ),
-       diffs AS (
-         SELECT name,
-                amount,
-                d,
-                (julianday(d) - julianday(LAG(d) OVER (PARTITION BY name, amount ORDER BY d))) AS dd
-         FROM tx_all
-       ),
-       recurring AS (
-         -- Recurring merchant heuristic: same merchant shows up in >=3 distinct months.
-         -- (We intentionally join by name only here; amount equality can be brittle with floats and price changes.)
-         SELECT name,
-                COUNT(*) AS n,
-                COUNT(DISTINCT substr(d, 1, 7)) AS monthCnt
-         FROM diffs
-         GROUP BY name
-         HAVING n >= 3
-       ),
-       tx_last_month AS (
-         SELECT *
-         FROM tx_all
-         WHERE booking_date >= date('now', 'start of month', '-1 month')
-           AND booking_date < date('now', 'start of month')
-       )
-       SELECT tx_last_month.id as id
-       FROM tx_last_month
-       LEFT JOIN recurring rec ON rec.name = tx_last_month.name
-       WHERE COALESCE(rec.monthCnt, 0) < 3
-       ORDER BY ABS(tx_last_month.amount) DESC
-       LIMIT 10`
-    )
-    .all() as Array<any>;
-
-  const transactionIds = idsRows.map((r) => String(r.id));
+  // Recurring merchant heuristic: same merchant shows up in >= 3 distinct months of the last 13.
+  // (Merchant only here; amount equality can be brittle with floats and price changes.)
+  const txAll = namedExpenses(monthStart(asOf, -13), lastDayOfLastMonth);
+  const recurringMerchants = recurringKeys(txAll, (e) => e.counterparty!);
+  const lastMonthStart = monthStart(asOf, -1);
+  const transactionIds = txAll
+    .filter((e) => e.date >= lastMonthStart && !recurringMerchants.has(e.counterparty))
+    .sort(byAbsAmountDesc)
+    .slice(0, 10)
+    .map((e) => e.id);
 
   return [
     {
@@ -275,73 +199,42 @@ function monthlySpike(): Insight[] {
   ];
 }
 
-function largeSingleExpense(): Insight[] {
-  const rows = db
-    .prepare(
-      `SELECT id, counterparty_name AS name, amount
-       FROM normalized_transactions
-       WHERE booking_date >= datetime('now', '-30 days')
-         AND booking_date IS NOT NULL
-         AND amount < 0
-         AND ABS(amount) >= 200
-         AND counterparty_name IS NOT NULL
-         AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-       ORDER BY ABS(amount) DESC
-       LIMIT 5`
-    )
-    .all() as Array<any>;
+function largeSingleExpense(asOf: string): Insight[] {
+  const rows = namedExpenses(daysBefore(asOf, 30), asOf)
+    .filter((e) => Math.abs(e.amount) >= 200)
+    .sort(byAbsAmountDesc)
+    .slice(0, 5);
 
   return rows.map((r, idx) => {
-    const absAmt = Math.abs(Number(r.amount || 0));
+    const absAmt = Math.abs(r.amount);
     const severity: Insight['severity'] = absAmt >= 500 ? 'warn' : 'info';
 
     return {
-      id: `large-expense-${idx}-${r.name}`,
-      title: `Iso yksittäinen meno: ${r.name}`,
+      id: `large-expense-${idx}-${r.counterparty}`,
+      title: `Iso yksittäinen meno: ${r.counterparty}`,
       description: `${absAmt.toFixed(2)} EUR (30 pv)`,
       severity,
-      transactionIds: [String(r.id)],
+      transactionIds: [r.id],
       recommendation:
         'Avaa tapahtuma ja varmista kategoria. Jos tämä oli kertaluontoinen, kuukausipiikit ja trendit selittyvät usein tällä.',
     };
   });
 }
 
-function uncategorizedSpending(): Insight[] {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) as cnt, SUM(nt.amount) as total
-       FROM normalized_transactions nt
-       LEFT JOIN categorization_decisions cd ON cd.transaction_id = nt.id
-       WHERE nt.booking_date >= datetime('now', '-30 days')
-         AND nt.amount < 0
-         AND cd.transaction_id IS NULL
-         AND nt.id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)`
-    )
-    .get() as any;
-
-  const cnt = Number(row?.cnt || 0);
-  const total = Number(row?.total || 0);
-  const totalAbs = Math.abs(total);
+function uncategorizedSpending(asOf: string): Insight[] {
+  const rows = ledgerEntries({ from: daysBefore(asOf, 30), to: asOf }).filter(
+    (e) => e.amount < 0 && e.categoryId === null
+  );
+  const cnt = rows.length;
+  const totalAbs = Math.abs(sumOf(rows));
 
   // Keep it quiet unless it looks actionable.
   if (cnt < 10 && totalAbs < 150) return [];
 
-  const idsRows = db
-    .prepare(
-      `SELECT nt.id as id
-       FROM normalized_transactions nt
-       LEFT JOIN categorization_decisions cd ON cd.transaction_id = nt.id
-       WHERE nt.booking_date >= datetime('now', '-30 days')
-         AND nt.amount < 0
-         AND cd.transaction_id IS NULL
-         AND nt.id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-       ORDER BY ABS(nt.amount) DESC
-       LIMIT 15`
-    )
-    .all() as Array<any>;
-
-  const transactionIds = idsRows.map((r) => String(r.id));
+  const transactionIds = rows
+    .sort(byAbsAmountDesc)
+    .slice(0, 15)
+    .map((e) => e.id);
 
   return [
     {
@@ -356,13 +249,13 @@ function uncategorizedSpending(): Insight[] {
   ];
 }
 
-export function getInsights(): Insight[] {
+export function getInsights(asOf: string = today()): Insight[] {
   return [
-    ...repeatedSmallPurchases(),
-    ...risingCategory(),
-    ...newRecurringMerchant(),
-    ...monthlySpike(),
-    ...largeSingleExpense(),
-    ...uncategorizedSpending(),
+    ...repeatedSmallPurchases(asOf),
+    ...risingCategory(asOf),
+    ...newRecurringMerchant(asOf),
+    ...monthlySpike(asOf),
+    ...largeSingleExpense(asOf),
+    ...uncategorizedSpending(asOf),
   ];
 }
