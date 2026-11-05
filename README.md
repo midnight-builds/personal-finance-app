@@ -40,6 +40,10 @@ Fallback: if AI is unavailable the app still starts as a manual browser/editor â
 ### Data / DB
 - Default SQLite path: `apps/api/data/finance.db` (configurable via `DB_PATH`).
 - Backup/restore: see `docs/BACKUP_RESTORE.md`
+- Demo data: `npm run seed:demo -w apps/api -- --db data/demo.db` creates a new database with a
+  fictional household (two overlapping exports, transfers, recurring bills). Run the API against it
+  with `DB_PATH=data/demo.db PORT=3101 npm run dev -w apps/api`. The script only creates new files.
+- Domain terms (Ledger, duplicate group, transfer, balance): see `GLOSSARY.md`.
 
 ### Running on a remote server and using the UI locally
 If you run the dev server on a remote machine, use SSH port-forwarding:

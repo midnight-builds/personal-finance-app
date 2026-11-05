@@ -279,6 +279,8 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_transaction_groups_canonical ON transaction_groups(canonical_transaction_id);
     CREATE INDEX IF NOT EXISTS idx_normalized_counterparty_iban ON normalized_transactions(counterparty_iban);
     CREATE INDEX IF NOT EXISTS idx_catdec_tx ON categorization_decisions(transaction_id);
+    CREATE INDEX IF NOT EXISTS idx_transfer_links_from ON transfer_links(from_transaction_id);
+    CREATE INDEX IF NOT EXISTS idx_transfer_links_to ON transfer_links(to_transaction_id);
     CREATE INDEX IF NOT EXISTS idx_event_log_created_at ON event_log(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_recurring_account ON recurring_patterns(account_id);
     CREATE INDEX IF NOT EXISTS idx_findings_briefing ON insight_findings(briefing_session_id);
