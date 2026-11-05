@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { db } from './db.js';
+import { LATEST_DECISION_ORDER, latestCategoryDecisionJoin } from './sql/transactions.js';
 
 type CategoryMatchInput = {
   counterparty: string;
@@ -61,6 +62,37 @@ export function chooseCategoryFor(input: CategoryMatchInput): string | null {
   return getCategoryIdByName('Muut ja epäselvät');
 }
 
+/**
+ * Append a categorization decision. Decisions are history: earlier ones are
+ * kept and the most recent one is the transaction's category (see
+ * latestCategoryDecisionJoin). Re-stating what the latest decision already
+ * says (same category from the same source, e.g. a rule re-run or the user
+ * picking the same category again) appends nothing, so the table does not grow
+ * on repeats. Returns true when a decision was appended.
+ */
+export function appendDecision(options: {
+  transactionId: string;
+  categoryId: string;
+  source: string;
+  ruleId?: string | null;
+  createdAt?: string;
+}): boolean {
+  const { transactionId, categoryId, source, ruleId = null } = options;
+  const latest = db
+    .prepare(
+      `SELECT category_id, source FROM categorization_decisions
+       WHERE transaction_id = ?
+       ORDER BY ${LATEST_DECISION_ORDER}
+       LIMIT 1`
+    )
+    .get(transactionId) as { category_id: string; source: string } | undefined;
+  if (latest && latest.category_id === categoryId && latest.source === source) return false;
+  db.prepare(
+    'INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source, rule_id) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(crypto.randomUUID(), options.createdAt ?? new Date().toISOString(), transactionId, categoryId, source, ruleId);
+  return true;
+}
+
 export function upsertDecision(options: {
   transactionId: string;
   categoryId: string;
@@ -71,10 +103,7 @@ export function upsertDecision(options: {
 }) {
   const { transactionId, categoryId, source, ruleId = null, counterparty, description } = options;
   const now = new Date().toISOString();
-  db.prepare('DELETE FROM categorization_decisions WHERE transaction_id = ?').run(transactionId);
-  db.prepare(
-    'INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source, rule_id) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(crypto.randomUUID(), now, transactionId, categoryId, source, ruleId);
+  appendDecision({ transactionId, categoryId, source, ruleId, createdAt: now });
 
   // simple learning: create a rule from counterparty/description
   if (source === 'user') {
@@ -149,6 +178,22 @@ export function deleteCategory(id: string) {
   if (!target) throw new Error('not_found');
   db.exec('BEGIN');
   try {
+    // Transactions currently in the deleted category move to misc as a new
+    // decision, so the move itself is recorded in the history.
+    const current = db
+      .prepare(
+        `SELECT nt.id FROM normalized_transactions nt
+         ${latestCategoryDecisionJoin('nt', 'cd')}
+         WHERE cd.category_id = ?`
+      )
+      .all(id) as Array<{ id: string }>;
+    const now = new Date().toISOString();
+    for (const tx of current) {
+      appendDecision({ transactionId: tx.id, categoryId: miscId, source: 'category_deleted', createdAt: now });
+    }
+    // Older decisions may still point at the category, and the foreign key on
+    // category_id forbids deleting it while they do. Those rows are no longer
+    // anyone's current category; repoint them at misc so the category can go.
     db.prepare('UPDATE categorization_decisions SET category_id = ? WHERE category_id = ?').run(
       miscId,
       id

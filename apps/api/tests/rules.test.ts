@@ -72,7 +72,7 @@ test('chooseCategoryFor falls back to defaults and detects salary keywords', () 
   assert.equal(row.name, 'Tulopuoli ja palkka');
 });
 
-test('upsertDecision replaces previous decision', () => {
+test('upsertDecision appends a decision and keeps the previous one', () => {
   const txId = 'tx-1';
   createTx(txId);
   const catA = db
@@ -86,12 +86,14 @@ test('upsertDecision replaces previous decision', () => {
   upsertDecision({ transactionId: txId, categoryId: catB.id, source: 'user' });
 
   const rows = db
-    .prepare('SELECT category_id, source FROM categorization_decisions WHERE transaction_id = ?')
+    .prepare('SELECT category_id, source FROM categorization_decisions WHERE transaction_id = ? ORDER BY rowid')
     .all(txId) as Array<any>;
 
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].category_id, catB.id);
-  assert.equal(rows[0].source, 'user');
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].category_id, catA.id);
+  assert.equal(rows[0].source, 'rule');
+  assert.equal(rows[1].category_id, catB.id);
+  assert.equal(rows[1].source, 'user');
 });
 
 test('upsertDecision does not create duplicate rule for same counterparty+category', () => {
