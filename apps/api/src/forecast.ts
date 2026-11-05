@@ -1,4 +1,5 @@
 import { db } from './db.js';
+import { ledgerTotals, today, type LedgerTotal } from './ledger.js';
 
 export type ForecastItem = { counterparty: string; amount: number };
 export type AnnualForecastItem = { counterparty: string; amount: number; month: number };
@@ -11,12 +12,21 @@ export type MonthlyForecast = {
   projectedTotal: number;
 };
 
-export function computeMonthlyForecast(targetMonthOffset: number): MonthlyForecast {
-  const targetDate = new Date();
-  targetDate.setDate(1);
-  targetDate.setMonth(targetDate.getMonth() + targetMonthOffset);
-  const targetMonth = targetDate.getMonth() + 1; // 1–12
-  const targetYear = targetDate.getFullYear();
+/** Spending per month (key YYYY-MM) for every month before `year`. */
+function monthTotalsBefore(year: number): LedgerTotal[] {
+  return ledgerTotals('month', { to: `${year - 1}-12-31` });
+}
+
+/** The forecast for the month `targetMonthOffset` months after `asOf`'s month. */
+export function computeMonthlyForecast(
+  targetMonthOffset: number,
+  asOf: string = today(),
+  months?: LedgerTotal[]
+): MonthlyForecast {
+  const [year, month] = asOf.split('-').map(Number);
+  const targetDate = new Date(Date.UTC(year, month - 1 + targetMonthOffset, 1));
+  const targetMonth = targetDate.getUTCMonth() + 1; // 1–12
+  const targetYear = targetDate.getUTCFullYear();
   const targetMonthStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
 
   const monthlyPatterns = db.prepare(`
@@ -44,20 +54,12 @@ export function computeMonthlyForecast(targetMonthOffset: number): MonthlyForeca
   }));
 
   const monthPad = String(targetMonth).padStart(2, '0');
-  const historicalRows = db.prepare(`
-    SELECT SUM(ABS(amount)) AS total
-    FROM normalized_transactions
-    WHERE strftime('%m', booking_date) = ?
-      AND strftime('%Y', booking_date) < ?
-      AND amount < 0
-      AND id NOT IN (
-        SELECT from_transaction_id FROM transfer_links
-        UNION SELECT to_transaction_id FROM transfer_links
-      )
-    GROUP BY strftime('%Y', booking_date)
-    ORDER BY booking_date DESC
-    LIMIT 3
-  `).all(monthPad, String(targetYear)) as Array<{ total: number }>;
+  // Spending in the same month of the three latest earlier years that have any.
+  const historicalRows = (months ?? monthTotalsBefore(targetYear))
+    .filter((m) => m.key!.endsWith(`-${monthPad}`) && m.key! < String(targetYear) && m.expense < 0)
+    .sort((a, b) => b.key!.localeCompare(a.key!))
+    .slice(0, 3)
+    .map((m) => ({ total: -m.expense }));
 
   const historicalAvg =
     historicalRows.length > 0
@@ -72,6 +74,9 @@ export function computeMonthlyForecast(targetMonthOffset: number): MonthlyForeca
   return { targetMonth: targetMonthStr, knownFixed, historicalAvg, annualItems, projectedTotal };
 }
 
-export function getForecast(): MonthlyForecast[] {
-  return [1, 2, 3].map((offset) => computeMonthlyForecast(offset));
+export function getForecast(asOf: string = today()): MonthlyForecast[] {
+  // Every month up to the end of this year covers all three targets' history.
+  const [year] = asOf.split('-').map(Number);
+  const months = monthTotalsBefore(year + 1);
+  return [1, 2, 3].map((offset) => computeMonthlyForecast(offset, asOf, months));
 }
