@@ -29,6 +29,8 @@ export type LedgerEntry = {
   accountId: string;
   /** Booking day, YYYY-MM-DD. */
   date: string;
+  /** Booking date as stored (ISO timestamp); `date` is its day. For output that must keep the stored form. */
+  bookedAt: string;
   amount: number;
   currency: string;
   counterparty: string | null;
@@ -124,7 +126,7 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
                      AND t.transaction_group_id IN (SELECT g FROM linked_groups))) AS is_transfer
          FROM normalized_transactions t
          WHERE ${where.join('\n           AND ')})
-       SELECT nt.id, nt.account_id, substr(nt.booking_date, 1, 10) AS day, nt.amount, nt.currency,
+       SELECT nt.id, nt.account_id, substr(nt.booking_date, 1, 10) AS day, nt.booking_date, nt.amount, nt.currency,
               nt.counterparty_name, nt.description, nt.transaction_group_id,
               cd.category_id, c.name AS category_name, nt.is_transfer
        FROM scoped nt
@@ -137,6 +139,7 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
       id: string;
       account_id: string;
       day: string;
+      booking_date: string;
       amount: number;
       currency: string;
       counterparty_name: string | null;
@@ -151,6 +154,7 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
     id: r.id,
     accountId: r.account_id,
     date: r.day,
+    bookedAt: r.booking_date,
     amount: Number(r.amount),
     currency: r.currency,
     counterparty: r.counterparty_name,

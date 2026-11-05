@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { db } from './db.js';
+import { daysBefore, ledgerEntries, today, type LedgerEntry } from './ledger.js';
 
 const SUBSCRIPTION_KEYWORDS = [
   'netflix', 'spotify', 'hbo', 'disney', 'apple', 'google', 'youtube',
@@ -13,40 +14,51 @@ function isSubscriptionLike(counterparty: string, amount: number): boolean {
   return Math.abs(amount) < 15;
 }
 
-export function detectPatterns(accountId: string): void {
-  const now = new Date().toISOString();
-  const sixMonthsAgo = new Date(Date.now() - 180 * 86400_000).toISOString().slice(0, 10);
+type Occurrence = { counterparty: string; amount: number; date: string };
 
-  const rows = db.prepare(`
-    SELECT counterparty_name, amount, booking_date
-    FROM normalized_transactions
-    WHERE account_id = ?
-      AND booking_date >= ?
-      AND amount < 0
-      AND counterparty_name IS NOT NULL
-      -- Exclude counterparties where ANY transaction is transfer-linked — prevents
-      -- intra-account transfer counterparties (e.g. "Siirto") from appearing as recurring spend.
-      AND counterparty_name NOT IN (
-        SELECT DISTINCT counterparty_name
-        FROM normalized_transactions
-        WHERE account_id = ?
-          AND id IN (
-            SELECT from_transaction_id FROM transfer_links
-            UNION SELECT to_transaction_id FROM transfer_links
-          )
-      )
-    ORDER BY counterparty_name, booking_date
-  `).all(accountId, sixMonthsAgo, accountId) as Array<{ counterparty_name: string; amount: number; booking_date: string }>;
+/**
+ * An account's countable expenses with a counterparty since `from`, ordered by
+ * counterparty, then booking date. Counterparties that ever took part in a
+ * transfer on this account are left out entirely, so own-account transfer
+ * counterparties (e.g. "Siirto") never look like recurring spend.
+ */
+function recurringCandidates(entries: LedgerEntry[], from: string): Occurrence[] {
+  const transferCounterparties = new Set(
+    entries.filter((e) => e.isTransfer && e.counterparty !== null).map((e) => e.counterparty)
+  );
+  return entries
+    .filter(
+      (e) =>
+        !e.isTransfer &&
+        e.date >= from &&
+        e.amount < 0 &&
+        e.counterparty !== null &&
+        !transferCounterparties.has(e.counterparty)
+    )
+    .map((e) => ({ counterparty: e.counterparty!, amount: e.amount, date: e.bookedAt }))
+    .sort((a, b) => binary(a.counterparty, b.counterparty) || binary(a.date, b.date));
+}
 
-  // Group by counterparty
-  const byCounterparty = new Map<string, Array<{ amount: number; date: string }>>();
+// SQLite's default (BINARY) text order, which the detection used to iterate in.
+const binary = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+function byCounterparty(rows: Occurrence[]) {
+  const groups = new Map<string, Array<{ amount: number; date: string }>>();
   for (const r of rows) {
-    const key = r.counterparty_name;
-    if (!byCounterparty.has(key)) byCounterparty.set(key, []);
-    byCounterparty.get(key)!.push({ amount: r.amount, date: r.booking_date });
+    if (!groups.has(r.counterparty)) groups.set(r.counterparty, []);
+    groups.get(r.counterparty)!.push({ amount: r.amount, date: r.date });
   }
+  return groups;
+}
 
-  for (const [counterparty, occurrences] of byCounterparty) {
+/** Detects recurring, annual and confirmation-worthy payments of one account as of `asOf` (default: today). */
+export function detectPatterns(accountId: string, asOf: string = today()): void {
+  const now = new Date().toISOString();
+  // Transfers are included only to find the counterparties to leave out.
+  const entries = ledgerEntries({ accounts: [accountId], to: asOf, includeTransfers: true });
+  const rows = recurringCandidates(entries, daysBefore(asOf, 180));
+
+  for (const [counterparty, occurrences] of byCounterparty(rows)) {
     if (occurrences.length < 2) continue;
 
     // Check interval consistency — sort by date
@@ -101,42 +113,28 @@ export function detectPatterns(accountId: string): void {
     }
   }
 
-  detectAnnualPatternsForAccount(accountId);
-  detectConfirmationCandidates(accountId);
+  const longHistory = recurringCandidates(entries, daysBefore(asOf, 1460));
+  detectAnnualPatternsForAccount(accountId, longHistory);
+  detectConfirmationCandidates(accountId, longHistory);
 }
 
 const ANNUAL_CONFIRMATION_THRESHOLD_EUR = 80;
 
-function detectAnnualPatternsForAccount(accountId: string): void {
+/** Counterparties with an active recurring pattern on the account; `typeFilter` narrows by pattern type. */
+function activeCounterparties(accountId: string, typeFilter = ''): Set<string | null> {
+  const rows = db
+    .prepare(`SELECT counterparty_name FROM recurring_patterns WHERE account_id = ? AND is_active = 1 ${typeFilter}`)
+    .all(accountId) as Array<{ counterparty_name: string | null }>;
+  return new Set(rows.map((r) => r.counterparty_name));
+}
+
+function detectAnnualPatternsForAccount(accountId: string, history: Occurrence[]): void {
   const now = new Date().toISOString();
-  const fourYearsAgo = new Date(Date.now() - 1460 * 86400_000).toISOString().slice(0, 10);
+  // Counterparties already detected as monthly/weekly are not annual.
+  const recurring = activeCounterparties(accountId, "AND pattern_type IN ('subscription', 'recurring')");
+  const rows = history.filter((r) => !recurring.has(r.counterparty));
 
-  const rows = db.prepare(`
-    SELECT counterparty_name, amount, booking_date
-    FROM normalized_transactions
-    WHERE account_id = ?
-      AND booking_date >= ?
-      AND amount < 0
-      AND counterparty_name IS NOT NULL
-      AND counterparty_name NOT IN (
-        SELECT DISTINCT counterparty_name FROM normalized_transactions
-        WHERE account_id = ?
-          AND id IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-      )
-      AND counterparty_name NOT IN (
-        SELECT counterparty_name FROM recurring_patterns
-        WHERE account_id = ? AND pattern_type IN ('subscription', 'recurring') AND is_active = 1
-      )
-    ORDER BY counterparty_name, booking_date
-  `).all(accountId, fourYearsAgo, accountId, accountId) as Array<{ counterparty_name: string; amount: number; booking_date: string }>;
-
-  const byCounterparty = new Map<string, Array<{ amount: number; date: string }>>();
-  for (const r of rows) {
-    if (!byCounterparty.has(r.counterparty_name)) byCounterparty.set(r.counterparty_name, []);
-    byCounterparty.get(r.counterparty_name)!.push({ amount: r.amount, date: r.booking_date });
-  }
-
-  for (const [counterparty, occurrences] of byCounterparty) {
+  for (const [counterparty, occurrences] of byCounterparty(rows)) {
     if (occurrences.length < 2) continue;
 
     const sorted = occurrences.sort((a, b) => a.date.localeCompare(b.date));
@@ -186,36 +184,14 @@ function detectAnnualPatternsForAccount(accountId: string): void {
   }
 }
 
-function detectConfirmationCandidates(accountId: string): void {
+function detectConfirmationCandidates(accountId: string, history: Occurrence[]): void {
   const now = new Date().toISOString();
-  const fourYearsAgo = new Date(Date.now() - 1460 * 86400_000).toISOString().slice(0, 10);
+  const patterned = activeCounterparties(accountId);
+  const rows = history.filter(
+    (r) => Math.abs(r.amount) >= ANNUAL_CONFIRMATION_THRESHOLD_EUR && !patterned.has(r.counterparty)
+  );
 
-  const rows = db.prepare(`
-    SELECT counterparty_name, amount, booking_date
-    FROM normalized_transactions
-    WHERE account_id = ?
-      AND booking_date >= ?
-      AND amount < 0
-      AND ABS(amount) >= ?
-      AND counterparty_name IS NOT NULL
-      AND counterparty_name NOT IN (
-        SELECT DISTINCT counterparty_name FROM normalized_transactions
-        WHERE account_id = ?
-          AND id IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-      )
-      AND counterparty_name NOT IN (
-        SELECT counterparty_name FROM recurring_patterns WHERE account_id = ? AND is_active = 1
-      )
-    ORDER BY counterparty_name, booking_date
-  `).all(accountId, fourYearsAgo, ANNUAL_CONFIRMATION_THRESHOLD_EUR, accountId, accountId) as Array<{ counterparty_name: string; amount: number; booking_date: string }>;
-
-  const byCounterparty = new Map<string, Array<{ amount: number; date: string }>>();
-  for (const r of rows) {
-    if (!byCounterparty.has(r.counterparty_name)) byCounterparty.set(r.counterparty_name, []);
-    byCounterparty.get(r.counterparty_name)!.push({ amount: r.amount, date: r.booking_date });
-  }
-
-  for (const [counterparty, occurrences] of byCounterparty) {
+  for (const [counterparty, occurrences] of byCounterparty(rows)) {
     if (occurrences.length !== 1) continue; // only true single-occurrence candidates
 
     const occ = occurrences[0];

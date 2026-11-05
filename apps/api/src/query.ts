@@ -1,40 +1,49 @@
 import { db } from "./db.js";
 import { getSettings } from "./settings.js";
 import { latestCategoryDecisionJoin } from "./sql/transactions.js";
+import { ledgerEntries } from "./ledger.js";
+
+type RecurringFlags = { daily: boolean; weekly: boolean; monthly: boolean };
+
+const NO_FLAGS: RecurringFlags = { daily: false, weekly: false, monthly: false };
+
+const flagKey = (counterparty: string, amount: number) => `${amount}\u0000${counterparty}`;
+
+/**
+ * How often each (counterparty, exact amount) recurs among countable
+ * transactions: at least three of them, stepping daily, weekly, or spread
+ * over three or more months.
+ */
+function recurringFlags(): Map<string, RecurringFlags> {
+  const days = new Map<string, string[]>();
+  for (const e of ledgerEntries()) {
+    if (e.counterparty === null) continue;
+    const key = flagKey(e.counterparty, e.amount);
+    if (!days.has(key)) days.set(key, []);
+    days.get(key)!.push(e.date); // oldest first
+  }
+  const flags = new Map<string, RecurringFlags>();
+  for (const [key, ds] of days) {
+    const n = ds.length;
+    if (n < 3) continue;
+    const steps = ds.slice(1).map((d, i) => (Date.parse(d) - Date.parse(ds[i])) / 86400_000);
+    const avg = steps.reduce((s, v) => s + v, 0) / steps.length;
+    const dailySteps = steps.filter((dd) => dd >= 0.5 && dd <= 1.5).length;
+    const weeklySteps = steps.filter((dd) => dd >= 6 && dd <= 8).length;
+    flags.set(key, {
+      daily: n >= 6 && avg >= 0.8 && avg <= 1.2 && dailySteps >= (n - 1) * 0.6,
+      weekly: n >= 5 && avg >= 5 && avg <= 9 && weeklySteps >= (n - 1) * 0.6,
+      monthly: new Set(ds.map((d) => d.slice(0, 7))).size >= 3,
+    });
+  }
+  return flags;
+}
 
 export function listTransactions() {
   const { payday, paydayFlexDays } = getSettings();
   const rows = db
     .prepare(
-      `WITH tx AS (
-         SELECT counterparty_name,
-                amount,
-                date(booking_date) AS d
-         FROM normalized_transactions
-         WHERE booking_date IS NOT NULL
-           AND counterparty_name IS NOT NULL
-           AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-       ),
-       diffs AS (
-         SELECT counterparty_name,
-                amount,
-                d,
-                (julianday(d) - julianday(LAG(d) OVER (PARTITION BY counterparty_name, amount ORDER BY d))) AS dd
-         FROM tx
-       ),
-       recurring AS (
-         SELECT counterparty_name,
-                amount,
-                COUNT(*) AS n,
-                COUNT(DISTINCT substr(d, 1, 7)) AS monthCnt,
-                AVG(dd) AS avgDiff,
-                SUM(CASE WHEN dd BETWEEN 0.5 AND 1.5 THEN 1 ELSE 0 END) AS dailySteps,
-                SUM(CASE WHEN dd BETWEEN 6.0 AND 8.0 THEN 1 ELSE 0 END) AS weeklySteps
-         FROM diffs
-         GROUP BY counterparty_name, amount
-         HAVING n >= 3
-       )
-       SELECT nt.id,
+      `SELECT nt.id,
               ? AS payday,
               ? AS paydayFlex,
               nt.booking_date AS bookingDate,
@@ -46,18 +55,6 @@ export function listTransactions() {
               (SELECT COUNT(*) FROM normalized_transactions ng WHERE ng.transaction_group_id = nt.transaction_group_id) AS groupSize,
               tl.from_transaction_id AS tlFrom,
               tl.to_transaction_id   AS tlTo,
-              CASE
-                WHEN rec.n >= 6 AND rec.avgDiff BETWEEN 0.8 AND 1.2 AND rec.dailySteps >= (rec.n - 1) * 0.6 THEN 1
-                ELSE 0
-              END AS recurringDaily,
-              CASE
-                WHEN rec.n >= 5 AND rec.avgDiff BETWEEN 5.0 AND 9.0 AND rec.weeklySteps >= (rec.n - 1) * 0.6 THEN 1
-                ELSE 0
-              END AS recurringWeekly,
-              CASE
-                WHEN rec.monthCnt >= 3 THEN 1
-                ELSE 0
-              END AS recurringMonthly,
               cd.category_id AS categoryId,
               c.name AS categoryName,
               a.id AS accountId,
@@ -68,40 +65,43 @@ export function listTransactions() {
        ${latestCategoryDecisionJoin()}
        LEFT JOIN categories c ON c.id = cd.category_id
        LEFT JOIN transfer_links tl ON tl.from_transaction_id = nt.id OR tl.to_transaction_id = nt.id
-       LEFT JOIN recurring rec ON rec.counterparty_name = nt.counterparty_name AND rec.amount = nt.amount
        ORDER BY nt.booking_date DESC
        LIMIT 200`
     )
     .all(payday, paydayFlexDays) as Array<Record<string, any>>;
 
-  return rows.map((row) => ({
-    id: row.id,
-    bookingDate: row.bookingDate,
-    amount: row.amount,
-    currency: row.currency,
-    counterpartyName: row.counterpartyName,
-    description: row.description,
-    transactionGroupId: row.transactionGroupId,
-    groupSize: row.transactionGroupId ? Number(row.groupSize) : null,
-    transfer:
-      row.tlFrom || row.tlTo
-        ? {
-            direction: row.tlFrom === row.id ? "out" : "in",
-            otherId: row.tlFrom === row.id ? row.tlTo : row.tlFrom,
-          }
-        : null,
-    categoryId: row.categoryId,
-    categoryName: row.categoryName,
-    recurringDaily: Boolean(row.recurringDaily),
-    recurringWeekly: Boolean(row.recurringWeekly),
-    recurringMonthly: Boolean(row.recurringMonthly),
-    isTransfer: Boolean(row.tlFrom || row.tlTo),
-    payday,
-    paydayFlex: paydayFlexDays,
-    account: {
-      id: row.accountId,
-      name: row.accountName,
-      iban: row.accountIban,
-    },
-  }));
+  const flags = recurringFlags();
+  return rows.map((row) => {
+    const rec = (row.counterpartyName !== null && flags.get(flagKey(row.counterpartyName, Number(row.amount)))) || NO_FLAGS;
+    return {
+      id: row.id,
+      bookingDate: row.bookingDate,
+      amount: row.amount,
+      currency: row.currency,
+      counterpartyName: row.counterpartyName,
+      description: row.description,
+      transactionGroupId: row.transactionGroupId,
+      groupSize: row.transactionGroupId ? Number(row.groupSize) : null,
+      transfer:
+        row.tlFrom || row.tlTo
+          ? {
+              direction: row.tlFrom === row.id ? "out" : "in",
+              otherId: row.tlFrom === row.id ? row.tlTo : row.tlFrom,
+            }
+          : null,
+      categoryId: row.categoryId,
+      categoryName: row.categoryName,
+      recurringDaily: rec.daily,
+      recurringWeekly: rec.weekly,
+      recurringMonthly: rec.monthly,
+      isTransfer: Boolean(row.tlFrom || row.tlTo),
+      payday,
+      paydayFlex: paydayFlexDays,
+      account: {
+        id: row.accountId,
+        name: row.accountName,
+        iban: row.accountIban,
+      },
+    };
+  });
 }
