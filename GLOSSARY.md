@@ -24,7 +24,12 @@ out of spending and income by default. If one copy of a duplicate group is
 linked, every copy is a transfer.
 
 **Category (of a transaction)** — the category of its most recent
-categorization decision, whether a rule, AI or the user made it.
+categorization decision, whether a rule, AI or the user made it. Decisions are
+history: a new one is appended and earlier ones are kept (never replaced), so
+anything that counts transactions must read only the latest decision.
+Re-stating the latest decision (same category, same source) appends nothing.
+Deleting a category appends a move to "Muut ja epäselvät" for its current
+transactions; older decisions that named it are repointed there too.
 
 **Balance (of an account, on a day)** — the latest balance snapshot on or
 before that day, plus balance adjustments dated on or before the snapshot.

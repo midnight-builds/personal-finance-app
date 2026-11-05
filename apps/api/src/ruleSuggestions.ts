@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import { db } from './db.js';
 import { getOpenAIApiKey } from './settings.js';
 import { aiCategorize } from './ai.js';
+import { appendDecision } from './rules.js';
+import { latestCategoryDecisionJoin } from './sql/transactions.js';
 
 export type RuleSuggestion = {
   id: string;
@@ -43,16 +45,13 @@ export function acceptRuleSuggestion(id: string): void {
   if (miscRow) {
     const matching = db.prepare(`
       SELECT nt.id FROM normalized_transactions nt
-      JOIN categorization_decisions cd ON cd.transaction_id = nt.id
+      ${latestCategoryDecisionJoin('nt', 'cd')}
       WHERE cd.category_id = ?
         AND LOWER(nt.counterparty_name) LIKE ?
     `).all(miscRow.id, `%${suggestion.pattern}%`) as Array<{ id: string }>;
 
     for (const tx of matching) {
-      db.prepare('DELETE FROM categorization_decisions WHERE transaction_id = ?').run(tx.id);
-      db.prepare(
-        'INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source, rule_id) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(crypto.randomUUID(), now, tx.id, suggestion.category_id, 'rule', null);
+      appendDecision({ transactionId: tx.id, categoryId: suggestion.category_id, source: 'rule', createdAt: now });
     }
   }
 
@@ -78,7 +77,7 @@ export async function generateRuleSuggestions(): Promise<void> {
   const candidates = db.prepare(`
     SELECT nt.counterparty_name, COUNT(*) AS cnt, AVG(nt.amount) AS avg_amount
     FROM normalized_transactions nt
-    JOIN categorization_decisions cd ON cd.transaction_id = nt.id
+    ${latestCategoryDecisionJoin('nt', 'cd')}
     WHERE cd.category_id = ?
       AND nt.counterparty_name IS NOT NULL
       AND nt.booking_date >= ?

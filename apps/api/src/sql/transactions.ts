@@ -17,12 +17,19 @@ export function isCanonicalGroupRow(tx = 'nt') {
     LIMIT 1))`;
 }
 
+/**
+ * ORDER BY terms that put a transaction's most recent categorization decision
+ * first. Decisions are kept as history; rowid breaks ties between decisions
+ * written within the same millisecond (the later insert wins).
+ */
+export const LATEST_DECISION_ORDER = 'created_at DESC, rowid DESC';
+
 /** LEFT JOIN of each transaction's most recent categorization decision as `as`. */
 export function latestCategoryDecisionJoin(tx = 'nt', as = 'cd') {
   return `LEFT JOIN categorization_decisions ${as} ON ${as}.id = (
     SELECT id FROM categorization_decisions
     WHERE transaction_id = ${tx}.id
-    ORDER BY created_at DESC
+    ORDER BY ${LATEST_DECISION_ORDER}
     LIMIT 1)`;
 }
 
