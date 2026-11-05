@@ -1,5 +1,5 @@
 import { db } from "./db.js";
-import { getAdjustmentSumForAccountAtOrBeforeDate } from "./balanceAdjustments.js";
+import { accountBalances, daysBefore, ledgerEntries, today, type LedgerScope } from "./ledger.js";
 
 export type AccountSignal = {
   id: string;
@@ -25,60 +25,16 @@ export type HouseholdSummary = {
  * Every account is listed. An account without any balance snapshot has
  * `balance: null` (unknown, not zero); `totalBalance` and `runwayMonths` then
  * cover known balances only and `isComplete` is false.
+ *
+ * "Monthly" net is the last 30 days up to and including `asOf`.
  */
-export function getSummary() {
-  const latestBalances = db
-    .prepare(
-      `SELECT a.id AS accountId,
-              a.name AS accountName,
-              b.balance,
-              b.currency,
-              b.date
-       FROM accounts a
-       LEFT JOIN (
-         SELECT bs.account_id, bs.balance, bs.currency, bs.date
-         FROM balance_snapshots bs
-         JOIN (
-           SELECT account_id, MAX(date) AS maxdate FROM balance_snapshots GROUP BY account_id
-         ) latest ON latest.account_id = bs.account_id AND latest.maxdate = bs.date
-         GROUP BY bs.account_id
-       ) b ON b.account_id = a.id
-       ORDER BY a.created_at ASC`
-    )
-    .all() as Array<any>;
+export function getSummary(asOf: string = today()) {
+  const balances = accountBalances(asOf);
+  const missingBalanceAccountCount = balances.filter((b) => b.balance === null).length;
+  const totalBalance = cents(balances.reduce((sum, b) => sum + (b.balance ?? 0), 0));
 
-  const accountsWithAdjustments = latestBalances.map((b) => {
-    if (b.date == null) return { ...b, adjustedBalance: null, adjustmentSum: 0 };
-    const baseBalance = Number(b.balance) || 0;
-    const adj = getAdjustmentSumForAccountAtOrBeforeDate(String(b.accountId), String(b.date));
-    return {
-      ...b,
-      adjustedBalance: baseBalance + adj,
-      adjustmentSum: adj,
-    };
-  });
-
-  const missingBalanceAccountCount = accountsWithAdjustments.filter((b) => b.adjustedBalance === null).length;
-  const totalBalance = accountsWithAdjustments.reduce((sum, b) => sum + (Number(b.adjustedBalance) || 0), 0);
-
-  const monthlyNetRow = db
-    .prepare(
-      `SELECT COALESCE(SUM(amount),0) AS net
-       FROM normalized_transactions
-       WHERE booking_date >= datetime('now', '-30 days')
-         AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)`
-    )
-    .get() as { net: number };
-
-  const monthlyNet = Number(monthlyNetRow.net || 0);
-
-  const monthlyNetAll = db
-    .prepare(
-      `SELECT COALESCE(SUM(amount),0) AS net
-       FROM normalized_transactions
-       WHERE booking_date >= datetime('now', '-30 days')`
-    )
-    .get() as { net: number };
+  const last30Days = { from: daysBefore(asOf, 30), to: asOf };
+  const monthlyNet = net(last30Days);
 
   let runwayMonths: number | null = null;
   if (monthlyNet < 0) {
@@ -90,45 +46,40 @@ export function getSummary() {
     isComplete: missingBalanceAccountCount === 0,
     missingBalanceAccountCount,
     monthlyNet,
-    monthlyNetWithTransfers: Number(monthlyNetAll.net || 0),
+    monthlyNetWithTransfers: net({ ...last30Days, includeTransfers: true }),
     runwayMonths,
-    accounts: accountsWithAdjustments.map((b) => ({
+    accounts: balances.map((b) => ({
       id: b.accountId,
       name: b.accountName,
-      balance: b.adjustedBalance === null ? null : Number(b.adjustedBalance),
-      currency: b.currency ?? null,
-      date: b.date ?? null,
+      balance: b.balance,
+      currency: b.currency,
+      date: b.date,
       // Optional debug info (harmless):
-      adjustmentSum: Number(b.adjustmentSum || 0),
+      adjustmentSum: b.adjustmentSum,
     })),
   };
 }
 
-export function getHouseholdSummary(): HouseholdSummary {
-  // Fetch all accounts with their latest adjusted balance
+const cents = (n: number) => Math.round(n * 100) / 100;
+
+function net(scope: LedgerScope): number {
+  return cents(ledgerEntries(scope).reduce((sum, e) => sum + e.amount, 0));
+}
+
+export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
+  const balanceOf = new Map(accountBalances(asOf).map((b) => [b.accountId, b]));
   const accountRows = db
     .prepare(
-      `SELECT a.id, a.name, a.account_subtype, a.owner_label,
-              b.balance AS rawBalance,
-              b.date AS snapshotDate
-       FROM accounts a
-       LEFT JOIN (
-         SELECT bs.account_id, bs.balance, bs.date
-         FROM balance_snapshots bs
-         JOIN (
-           SELECT account_id, MAX(date) AS maxdate FROM balance_snapshots GROUP BY account_id
-         ) latest ON latest.account_id = bs.account_id AND latest.maxdate = bs.date
-       ) b ON b.account_id = a.id
-       ORDER BY a.created_at ASC`
+      `SELECT id, name, account_subtype, owner_label
+       FROM accounts
+       ORDER BY created_at ASC, id ASC`
     )
-    .all() as Array<{
-      id: string;
-      name: string;
-      account_subtype: string;
-      owner_label: string | null;
-      rawBalance: number | null;
-      snapshotDate: string | null;
-    }>;
+    .all() as Array<{ id: string; name: string; account_subtype: string; owner_label: string | null }>;
+  // The snapshot itself, before user corrections: credit debt is what the bank reports.
+  const rawBalanceOf = (id: string) => {
+    const b = balanceOf.get(id);
+    return b?.balance == null ? 0 : cents(b.balance - b.adjustmentSum);
+  };
 
   // Fetch the 2 most recent balance snapshots per account for trend computation
   const snapshotsByAccount = new Map<string, number[]>();
@@ -149,11 +100,8 @@ export function getHouseholdSummary(): HouseholdSummary {
   }
 
   const accounts: AccountSignal[] = accountRows.map((acct) => {
-    const rawBalance = acct.rawBalance != null ? Number(acct.rawBalance) : 0;
-    const adj = acct.snapshotDate
-      ? getAdjustmentSumForAccountAtOrBeforeDate(acct.id, acct.snapshotDate)
-      : 0;
-    const adjustedBalance = rawBalance + adj;
+    // Unknown balance (no snapshot) counts as zero here.
+    const adjustedBalance = balanceOf.get(acct.id)?.balance ?? 0;
 
     // Trend: compare 2nd-most-recent vs most-recent
     const snapshots = snapshotsByAccount.get(acct.id) ?? [];
@@ -203,21 +151,21 @@ export function getHouseholdSummary(): HouseholdSummary {
     };
   });
 
-  const liquidAssets = accounts
+  const liquidAssets = cents(accounts
     .filter((a) => a.subtype === 'checking')
-    .reduce((sum, a) => sum + a.balance, 0);
+    .reduce((sum, a) => sum + a.balance, 0));
 
-  const totalSavings = accounts
+  const totalSavings = cents(accounts
     .filter((a) => a.subtype === 'savings')
-    .reduce((sum, a) => sum + a.balance, 0);
+    .reduce((sum, a) => sum + a.balance, 0));
 
   // Credit debt: sum of credit_card raw balances as positive
-  const creditDebt = accountRows
+  const creditDebt = cents(accountRows
     .filter((a) => a.account_subtype === 'credit_card')
     .reduce((sum, a) => {
-      const rawBalance = a.rawBalance != null ? Number(a.rawBalance) : 0;
+      const rawBalance = rawBalanceOf(a.id);
       return sum + Math.abs(rawBalance < 0 ? rawBalance : 0);
-    }, 0);
+    }, 0));
 
   // Monthly subscriptions: sum typical_amount from active subscription patterns
   const subRow = db
@@ -230,15 +178,7 @@ export function getHouseholdSummary(): HouseholdSummary {
   const monthlySubscriptions = Number(subRow.total || 0);
 
   // Monthly net spend (last 30 days, excluding transfers)
-  const monthlyNetRow = db
-    .prepare(
-      `SELECT COALESCE(SUM(amount), 0) AS net
-       FROM normalized_transactions
-       WHERE booking_date >= datetime('now', '-30 days')
-         AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)`
-    )
-    .get() as { net: number };
-  const monthlyNet = Number(monthlyNetRow.net || 0);
+  const monthlyNet = net({ from: daysBefore(asOf, 30), to: asOf });
 
   let runwayMonths: number | null = null;
   if (monthlyNet < 0) {
