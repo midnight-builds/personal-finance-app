@@ -127,7 +127,8 @@ test('monthly spike excludes known recurring monthly payments (and selects ids c
     'Food'
   );
 
-  const insights = getInsights();
+  // Months above are UTC months of the current date; ask about the same day.
+  const insights = getInsights(nowIso.slice(0, 10));
   const ms = insights.find((i) => i.id.startsWith('monthly-spike-'));
   assert.ok(ms, 'expected monthly spike insight');
 

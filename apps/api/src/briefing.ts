@@ -4,6 +4,7 @@ import { getOpenAIApiKey } from './settings.js';
 import { enhanceBriefingDescriptions } from './ai/briefingEnhancer.js';
 import { listPendingConfirmations } from './patternConfirmations.js';
 import { computeMonthlyForecast } from './forecast.js';
+import { accountBalances, daysBefore, ledgerEntries, ledgerTotals, today } from './ledger.js';
 
 type FindingInput = {
   finding_type: string;
@@ -73,73 +74,86 @@ function newRecurring(): FindingInput[] {
   }));
 }
 
-function oneOffImpact(): FindingInput[] {
-  const thirtyAgo = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
-  const ninetyAgo = new Date(Date.now() - 90 * 86400_000).toISOString().slice(0, 10);
-
-  // Baseline: average single-transaction amount for non-transfer, non-recurring txs in prior 60 days
-  const baselineRow = db.prepare(`
-    SELECT AVG(ABS(amount)) AS avg_amount
-    FROM normalized_transactions
-    WHERE booking_date BETWEEN ? AND ?
-      AND amount < 0
-      AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-      AND (counterparty_name IS NULL OR counterparty_name NOT IN (SELECT counterparty_name FROM recurring_patterns WHERE is_active = 1))
-  `).get(ninetyAgo, thirtyAgo) as { avg_amount: number | null };
-
-  const baseline = baselineRow.avg_amount ?? 100;
-  const threshold = baseline * 2;
-
-  const largeOnes = db.prepare(`
-    SELECT id, counterparty_name, amount, booking_date
-    FROM normalized_transactions
-    WHERE booking_date >= ?
-      AND amount < 0
-      AND ABS(amount) > ?
-      AND id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-      AND (counterparty_name IS NULL OR counterparty_name NOT IN (SELECT counterparty_name FROM recurring_patterns WHERE is_active = 1))
-    ORDER BY amount ASC
-    LIMIT 3
-  `).all(thirtyAgo, threshold) as Array<{ id: string; counterparty_name: string | null; amount: number; booking_date: string }>;
-
-  return largeOnes.map((tx) => ({
-    finding_type: 'one_off_impact',
-    title: `Kertaluonteinen hankinta: ${tx.counterparty_name ?? 'Tuntematon'} ${fmt(tx.amount)}`,
-    description: `Ostit ${tx.counterparty_name ?? 'tuntematon kauppias'} ${fmt(tx.amount)} (${tx.booking_date}). Tämä on yli 2× tyypillinen yksittäinen kulusi.`,
-    severity: (Math.abs(tx.amount) > threshold * 2 ? 'warn' : 'info') as 'warn' | 'info',
-    impact_eur: Math.abs(tx.amount),
-    transaction_ids: [tx.id],
-  }));
+/** Counterparties of active recurring patterns: their charges are not one-offs. */
+function recurringCounterparties(): Set<string> {
+  const rows = db.prepare(
+    'SELECT counterparty_name FROM recurring_patterns WHERE is_active = 1 AND counterparty_name IS NOT NULL'
+  ).all() as Array<{ counterparty_name: string }>;
+  return new Set(rows.map((r) => r.counterparty_name));
 }
 
-function savingsProgress(): FindingInput[] {
-  // Single query: get the last 4 balance snapshots for all savings accounts
+function oneOffImpact(asOf: string): FindingInput[] {
+  const recurring = recurringCounterparties();
+  const oneOffExpenses = (from: string, to: string) =>
+    ledgerEntries({ from, to }).filter(
+      (e) => e.amount < 0 && (e.counterparty === null || !recurring.has(e.counterparty))
+    );
+
+  // Baseline: average single-transaction amount for non-transfer, non-recurring txs in the 60 days before the last 30
+  const prior = oneOffExpenses(daysBefore(asOf, 90), daysBefore(asOf, 31));
+  const baseline = prior.length > 0 ? prior.reduce((s, e) => s + Math.abs(e.amount), 0) / prior.length : 100;
+  const threshold = baseline * 2;
+
+  const largeOnes = oneOffExpenses(daysBefore(asOf, 30), asOf)
+    .filter((e) => Math.abs(e.amount) > threshold)
+    .sort((a, b) => a.amount - b.amount)
+    .slice(0, 3);
+
+  // The description quotes the booking date as stored.
+  const bookingDate = db.prepare('SELECT booking_date FROM normalized_transactions WHERE id = ?');
+
+  return largeOnes.map((tx) => {
+    const { booking_date } = bookingDate.get(tx.id) as { booking_date: string };
+    return {
+      finding_type: 'one_off_impact',
+      title: `Kertaluonteinen hankinta: ${tx.counterparty ?? 'Tuntematon'} ${fmt(tx.amount)}`,
+      description: `Ostit ${tx.counterparty ?? 'tuntematon kauppias'} ${fmt(tx.amount)} (${booking_date}). Tämä on yli 2× tyypillinen yksittäinen kulusi.`,
+      severity: (Math.abs(tx.amount) > threshold * 2 ? 'warn' : 'info') as 'warn' | 'info',
+      impact_eur: Math.abs(tx.amount),
+      transaction_ids: [tx.id],
+    };
+  });
+}
+
+/**
+ * Ledger balances on the last four snapshot days up to `asOf` of each account
+ * of `subtype`, newest first, in account id order.
+ */
+function recentBalances(subtype: string, asOf: string): Map<string, { name: string; balances: number[] }> {
   const rows = db.prepare(`
-    SELECT a.id AS accountId, a.name AS accountName, bs.balance, bs.date
+    SELECT a.id AS accountId, a.name AS accountName, substr(bs.date, 1, 10) AS day
     FROM accounts a
     JOIN balance_snapshots bs ON bs.account_id = a.id
-    WHERE a.account_subtype = 'savings'
-      AND bs.date IN (
-        SELECT date FROM balance_snapshots
-        WHERE account_id = a.id
-        ORDER BY date DESC LIMIT 4
-      )
+    WHERE a.account_subtype = ? AND substr(bs.date, 1, 10) <= ?
     ORDER BY a.id, bs.date DESC
-  `).all() as Array<{ accountId: string; accountName: string; balance: number; date: string }>;
+  `).all(subtype, asOf) as Array<{ accountId: string; accountName: string; day: string }>;
 
-  // Group by account
-  const byAccount = new Map<string, { name: string; snapshots: Array<{ balance: number; date: string }> }>();
+  const balancesOn = new Map<string, Map<string, number | null>>();
+  const balanceOf = (accountId: string, day: string) => {
+    if (!balancesOn.has(day)) {
+      balancesOn.set(day, new Map(accountBalances(day).map((b) => [b.accountId, b.balance])));
+    }
+    return balancesOn.get(day)!.get(accountId) as number;
+  };
+
+  const byAccount = new Map<string, { name: string; days: string[]; balances: number[] }>();
   for (const r of rows) {
-    if (!byAccount.has(r.accountId)) byAccount.set(r.accountId, { name: r.accountName, snapshots: [] });
-    byAccount.get(r.accountId)!.snapshots.push({ balance: r.balance, date: r.date });
+    if (!byAccount.has(r.accountId)) byAccount.set(r.accountId, { name: r.accountName, days: [], balances: [] });
+    const acc = byAccount.get(r.accountId)!;
+    if (acc.days.length >= 4 || acc.days.includes(r.day)) continue;
+    acc.days.push(r.day);
+    acc.balances.push(balanceOf(r.accountId, r.day));
   }
+  return byAccount;
+}
 
+function savingsProgress(asOf: string): FindingInput[] {
   const findings: FindingInput[] = [];
-  for (const [, { name, snapshots }] of byAccount) {
-    if (snapshots.length < 2) continue;
-    const latest = snapshots[0].balance;
-    const prev = snapshots[snapshots.length - 1].balance;
-    const delta = latest - prev;
+  for (const [, { name, balances }] of recentBalances('savings', asOf)) {
+    if (balances.length < 2) continue;
+    const latest = balances[0];
+    const prev = balances[balances.length - 1];
+    const delta = Math.round((latest - prev) * 100) / 100;
     const trend = delta > 0 ? 'kasvanut' : delta < 0 ? 'laskenut' : 'pysynyt samana';
     const severity: 'info' | 'warn' = delta < 0 ? 'warn' : 'info';
     findings.push({
@@ -154,28 +168,9 @@ function savingsProgress(): FindingInput[] {
   return findings;
 }
 
-function creditHealth(): FindingInput[] {
-  const rows = db.prepare(`
-    SELECT a.id AS accountId, a.name AS accountName, bs.balance, bs.date
-    FROM accounts a
-    JOIN balance_snapshots bs ON bs.account_id = a.id
-    WHERE a.account_subtype = 'credit_card'
-      AND bs.date IN (
-        SELECT date FROM balance_snapshots
-        WHERE account_id = a.id
-        ORDER BY date DESC LIMIT 4
-      )
-    ORDER BY a.id, bs.date DESC
-  `).all() as Array<{ accountId: string; accountName: string; balance: number; date: string }>;
-
-  const byAccount = new Map<string, { name: string; snapshots: number[] }>();
-  for (const r of rows) {
-    if (!byAccount.has(r.accountId)) byAccount.set(r.accountId, { name: r.accountName, snapshots: [] });
-    byAccount.get(r.accountId)!.snapshots.push(r.balance);
-  }
-
+function creditHealth(asOf: string): FindingInput[] {
   const findings: FindingInput[] = [];
-  for (const [, { name, snapshots }] of byAccount) {
+  for (const [, { name, balances: snapshots }] of recentBalances('credit_card', asOf)) {
     // Need at least 4 snapshots for 3 consecutive months of comparison
     if (snapshots.length < 4) continue;
     // snapshots[0] = newest; growing debt = each newer snapshot is MORE negative (lower)
@@ -183,7 +178,7 @@ function creditHealth(): FindingInput[] {
     if (!growingDebt) continue;
     const latest = Math.abs(snapshots[0]);
     const oldest = Math.abs(snapshots[snapshots.length - 1]);
-    const delta = latest - oldest;
+    const delta = Math.round((latest - oldest) * 100) / 100;
     findings.push({
       finding_type: 'credit_health',
       title: `Luottokorttivelka kasvaa: ${name}`,
@@ -196,36 +191,26 @@ function creditHealth(): FindingInput[] {
   return findings;
 }
 
-function spendingAnomaly(): FindingInput[] {
-  const thirtyAgo = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
-  const ninetyAgo = new Date(Date.now() - 90 * 86400_000).toISOString().slice(0, 10);
+/** Spend (positive, cents) per category name of categorized purchases from `from` to `to`. */
+function spendByCategory(from: string, to: string): Map<string, number> {
+  const spend = new Map<string, number>();
+  for (const e of ledgerEntries({ from, to })) {
+    if (e.amount >= 0 || e.categoryName === null) continue;
+    spend.set(e.categoryName, (spend.get(e.categoryName) ?? 0) + Math.abs(e.amount) * 100);
+  }
+  return new Map([...spend].map(([cat, c]) => [cat, Math.round(c) / 100]));
+}
 
-  const rows = db.prepare(`
-    WITH recent AS (
-      SELECT c.name AS cat, SUM(ABS(nt.amount)) AS spend_30d
-      FROM normalized_transactions nt
-      JOIN categorization_decisions cd ON cd.transaction_id = nt.id
-      JOIN categories c ON c.id = cd.category_id
-      WHERE nt.booking_date >= ? AND nt.amount < 0
-        AND nt.id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-      GROUP BY c.name
-    ),
-    baseline AS (
-      SELECT c.name AS cat, SUM(ABS(nt.amount)) / 3.0 AS avg_30d
-      FROM normalized_transactions nt
-      JOIN categorization_decisions cd ON cd.transaction_id = nt.id
-      JOIN categories c ON c.id = cd.category_id
-      WHERE nt.booking_date BETWEEN ? AND ?
-        AND nt.amount < 0
-        AND nt.id NOT IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-      GROUP BY c.name
-    )
-    SELECT r.cat, r.spend_30d, b.avg_30d
-    FROM recent r JOIN baseline b ON r.cat = b.cat
-    WHERE r.spend_30d > b.avg_30d * 2 AND b.avg_30d > 20
-    ORDER BY (r.spend_30d - b.avg_30d) DESC
-    LIMIT 3
-  `).all(thirtyAgo, ninetyAgo, thirtyAgo) as Array<{ cat: string; spend_30d: number; avg_30d: number }>;
+function spendingAnomaly(asOf: string): FindingInput[] {
+  const recent = spendByCategory(daysBefore(asOf, 30), asOf);
+  const baseline = spendByCategory(daysBefore(asOf, 90), daysBefore(asOf, 31));
+
+  const rows = [...recent]
+    .filter(([cat]) => baseline.has(cat))
+    .map(([cat, spend_30d]) => ({ cat, spend_30d, avg_30d: baseline.get(cat)! / 3 }))
+    .filter((r) => r.spend_30d > r.avg_30d * 2 && r.avg_30d > 20)
+    .sort((a, b) => (b.spend_30d - b.avg_30d) - (a.spend_30d - a.avg_30d))
+    .slice(0, 3);
 
   return rows.map((r) => ({
     finding_type: 'spending_anomaly',
@@ -251,29 +236,19 @@ function pendingConfirmations(): FindingInput[] {
   }));
 }
 
-function monthlyForecast(): FindingInput[] {
+function monthlyForecast(asOf: string): FindingInput[] {
   const MONTHS = ['tammikuu', 'helmikuu', 'maaliskuu', 'huhtikuu', 'toukokuu', 'kesäkuu',
                   'heinäkuu', 'elokuu', 'syyskuu', 'lokakuu', 'marraskuu', 'joulukuu'];
 
-  const forecast = computeMonthlyForecast(1);
+  const forecast = computeMonthlyForecast(1, asOf);
   if (forecast.projectedTotal === 0) return [];
 
-  const threeMonthsAgo = new Date(Date.now() - 90 * 86400_000).toISOString().slice(0, 10);
-  const recentRow = db.prepare(`
-    SELECT AVG(monthly_total) AS avg_spend FROM (
-      SELECT SUM(ABS(amount)) AS monthly_total
-      FROM normalized_transactions
-      WHERE booking_date >= ? AND amount < 0
-        AND id NOT IN (
-          SELECT from_transaction_id FROM transfer_links
-          UNION SELECT to_transaction_id FROM transfer_links
-        )
-      GROUP BY strftime('%Y-%m', booking_date)
-      LIMIT 3
-    )
-  `).get(threeMonthsAgo) as { avg_spend: number | null };
-
-  const recentAvg = recentRow?.avg_spend ?? 0;
+  // Average spend of the first three calendar months touched by the last 90 days.
+  const spendByMonth = ledgerTotals('month', { from: daysBefore(asOf, 90), to: asOf })
+    .map((m) => -m.expense)
+    .filter((spend) => spend > 0)
+    .slice(0, 3);
+  const recentAvg = spendByMonth.length > 0 ? spendByMonth.reduce((s, x) => s + x, 0) / spendByMonth.length : 0;
   const isExpensive = recentAvg > 0 && forecast.projectedTotal >= recentAvg * 1.3;
 
   const [year, month] = forecast.targetMonth.split('-');
@@ -301,7 +276,7 @@ function monthlyForecast(): FindingInput[] {
 
 // ── Engine ────────────────────────────────────────────────────────
 
-const GENERATORS = [
+const GENERATORS: Array<(asOf: string) => FindingInput[]> = [
   subscriptionCreep,
   newRecurring,
   oneOffImpact,
@@ -314,7 +289,7 @@ const GENERATORS = [
 
 const SEVERITY_ORDER: Record<string, number> = { alert: 0, warn: 1, info: 2 };
 
-export async function runBriefing(importSessionId: string): Promise<string> {
+export async function runBriefing(importSessionId: string, asOf: string = today()): Promise<string> {
   const now = new Date().toISOString();
   const briefingId = crypto.randomUUID();
 
@@ -332,7 +307,7 @@ export async function runBriefing(importSessionId: string): Promise<string> {
 
   for (const generator of GENERATORS) {
     try {
-      const results = generator();
+      const results = generator(asOf);
       allFindings.push(...results);
     } catch (err) {
       console.error(`[briefing] generator ${generator.name} threw:`, err);
