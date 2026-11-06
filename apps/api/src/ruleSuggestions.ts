@@ -27,6 +27,9 @@ export function listPendingRuleSuggestions(): RuleSuggestion[] {
 export function acceptRuleSuggestion(id: string): void {
   const suggestion = db.prepare('SELECT * FROM rule_suggestions WHERE id = ?').get(id) as RuleSuggestion | undefined;
   if (!suggestion) throw new Error('not_found');
+  // A resolved suggestion (e.g. rejected when its category was deleted) must
+  // not turn into a rule, even if a stale UI still offers it.
+  if (suggestion.status !== 'pending') throw new Error('not_pending');
 
   const now = new Date().toISOString();
 

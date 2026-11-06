@@ -237,4 +237,11 @@ test('a category that has rule suggestions can be deleted; its pending ones are 
   // The name of the suggested category stays in the history.
   assert.equal(row(pending).category_name, 'Poistettava ehdotuksin');
   assert.equal(row(accepted).category_id, misc);
+
+  // A stale UI accepting the rejected suggestion must not create a misc rule.
+  const rules = () => Number((db.prepare('SELECT COUNT(*) AS n FROM category_rules').get() as { n: number }).n);
+  const before = rules();
+  assert.throws(() => acceptRuleSuggestion(pending), /not_pending/);
+  assert.equal(rules(), before);
+  assert.equal(row(pending).status, 'rejected');
 });
