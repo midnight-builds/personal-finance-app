@@ -164,6 +164,22 @@ test('creditHealth generator fires when credit card balance is growing', async (
   assert.equal(findings[0].severity, 'warn');
 });
 
+test('creditHealth does not fire for ordinary card use within a month', async () => {
+  const acct = mkAccount('credit_card');
+  const sess = mkSession();
+  // Paid off at every month end; four purchase days in a row this month.
+  for (const daysAgo of [95, 65, 35]) mkBalance(acct, 0, daysAgo);
+  mkBalance(acct, -100, 4);
+  mkBalance(acct, -200, 3);
+  mkBalance(acct, -300, 2);
+  mkBalance(acct, -400, 1);
+
+  const briefingId = await runBriefing(sess, FIXTURE_DAY);
+
+  const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'credit_health'").all(briefingId) as any[];
+  assert.equal(findings.length, 0, 'debt growing day by day within one month is not a 3-month trend');
+});
+
 test('spendingAnomaly generator fires when category spend doubles vs baseline', async () => {
   const acct = mkAccount();
   const sess = mkSession();
@@ -201,4 +217,60 @@ test('savingsProgress generator does not fire for savings account with only 1 ba
 
   const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'savings_progress'").all(briefingId) as any[];
   assert.equal(findings.length, 0, 'should not fire with fewer than 2 balance snapshots');
+});
+
+// Fixed-date fixtures for the review regressions below.
+function mkTxOn(accountId: string, sessionId: string, counterparty: string, amount: number, date: string, categoryId: string) {
+  const id = crypto.randomUUID();
+  const raw = crypto.randomUUID();
+  const now = new Date().toISOString();
+  db.prepare('INSERT INTO raw_transactions (id, created_at, import_session_id, data, booking_date, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(raw, now, sessionId, '{}', date, amount, 'EUR');
+  db.prepare('INSERT INTO normalized_transactions (id, created_at, raw_transaction_id, import_session_id, account_id, booking_date, transaction_date, amount, currency, counterparty_name, description, counterparty_iban, transaction_group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, now, raw, sessionId, accountId, date, date, amount, 'EUR', counterparty, null, null, null);
+  db.prepare('INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source) VALUES (?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), now, id, categoryId, 'rule');
+}
+
+function mkBalanceOn(accountId: string, balance: number, date: string) {
+  db.prepare('INSERT INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), new Date().toISOString(), accountId, date, balance, 'EUR');
+}
+
+const findingsOf = (briefingId: string, type: string) =>
+  db.prepare('SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = ?').all(briefingId, type) as any[];
+
+test('spendingAnomaly: a monthly bill is not counted twice on its due day', async () => {
+  const acct = mkAccount();
+  const sess = mkSession();
+  const cat = db.prepare('SELECT id FROM categories LIMIT 1').get() as { id: string };
+  for (let i = 0; i <= 12; i++) {
+    const date = new Date(Date.UTC(2025, 4 + i, 1)).toISOString().slice(0, 10); // 2025-05-01 … 2026-05-01
+    mkTxOn(acct, sess, 'Vuokranantaja', -800, date, cat.id);
+  }
+  // A 31-day window back from 2026-05-01 would hold both the April and the May rent.
+  const briefingId = await runBriefing(sess, '2026-05-01');
+  assert.deepEqual(findingsOf(briefingId, 'spending_anomaly').map((f) => f.title), []);
+});
+
+test('savingsProgress: an old snapshot is not reported as the last 30 days', async () => {
+  const acct = mkAccount('savings');
+  const sess = mkSession();
+  mkBalanceOn(acct, 900, '2024-12-02');
+  mkBalanceOn(acct, 1000, '2025-01-01');
+  const briefingId = await runBriefing(sess, '2026-11-06');
+  assert.equal(findingsOf(briefingId, 'savings_progress').length, 0);
+});
+
+test('creditHealth: debt growth is measured from a credit balance too', async () => {
+  const acct = mkAccount('credit_card');
+  const sess = mkSession();
+  mkBalanceOn(acct, 100, '2026-02-20');
+  mkBalanceOn(acct, -50, '2026-03-20');
+  mkBalanceOn(acct, -100, '2026-04-20');
+  mkBalanceOn(acct, -200, '2026-05-20');
+  const [f] = findingsOf(await runBriefing(sess, '2026-06-10'), 'credit_health');
+  assert.ok(f, 'month ends +100, -50, -100, -200 are three months of growing debt');
+  assert.equal(f.impact_eur, 300);
+  assert.deepEqual(JSON.parse(f.metadata), { currentDebt: 200 });
 });

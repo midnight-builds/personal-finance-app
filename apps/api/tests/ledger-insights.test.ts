@@ -123,31 +123,45 @@ test('briefing: one-off purchases are counted once and transfers are not purchas
   assert.ok(!names.some((n) => n.startsWith('Oma ')));
 });
 
-test('briefing: spending anomalies use the Ledger category totals', async () => {
-  const anomalies = (await briefing(ANCHOR)).filter((f) => f.finding_type === 'spending_anomaly');
+test('briefing: spending anomalies compare with the average over the history there is', async () => {
+  // September is the demo's grocery spike month; the history before it starts in June.
+  const asOf = '2026-09-30';
+  const baselineEnd = daysBefore(asOf, 30);
+  const covered = Math.round((Date.parse(baselineEnd) - Date.parse('2026-06-01')) / 86400000) + 1;
+  const anomalies = (await briefing(asOf)).filter((f) => f.finding_type === 'spending_anomaly');
   assert.ok(anomalies.length > 0);
-  const last30 = new Map(ledgerTotals('category', { from: daysBefore(ANCHOR, 30), to: ANCHOR }).map((t) => [t.label, t]));
+  const last30 = new Map(ledgerTotals('category', { from: daysBefore(asOf, 29), to: asOf }).map((t) => [t.label, t]));
+  const before = new Map(ledgerTotals('category', { to: baselineEnd }).map((t) => [t.label, t]));
   for (const f of anomalies) {
-    const m = JSON.parse(f.metadata!) as { category: string; spend30d: number };
+    const m = JSON.parse(f.metadata!) as { category: string; spend30d: number; avg30d: number };
     assert.equal(m.spend30d, -last30.get(m.category)!.expense);
+    assert.equal(m.avg30d, Math.round((-before.get(m.category)!.expense / covered) * 30 * 100) / 100);
+    assert.ok(m.spend30d > 2 * m.avg30d);
   }
 });
 
-test('briefing: savings progress over the last four snapshots', async () => {
-  // One snapshot per booking day: the last four are the July–October deposits.
+test('briefing: an ordinary month is not an anomaly', async () => {
+  // Every category spends about its usual amount in the 30 days to the anchor.
+  const anomalies = (await briefing(ANCHOR)).filter((f) => f.finding_type === 'spending_anomaly');
+  assert.deepEqual(anomalies.map((f) => f.title), []);
+});
+
+test('briefing: savings progress over the 30 days up to the latest snapshot', async () => {
+  // The latest snapshot is the October deposit; 30 days earlier the September one.
   const balances = savings.map((_, i) => sum([{ amount: DEMO_SAVINGS_OPENING }, ...savings.slice(0, i + 1)]));
-  const [latest, oldest] = [balances[balances.length - 1], balances[balances.length - 4]];
+  const [latest, monthAgo] = [balances[balances.length - 1], balances[balances.length - 2]];
   const [f] = (await briefing(ANCHOR)).filter((x) => x.finding_type === 'savings_progress');
-  assert.deepEqual(JSON.parse(f.metadata!), { currentBalance: latest, delta: sum([{ amount: latest }, { amount: -oldest }]) });
+  assert.deepEqual(JSON.parse(f.metadata!), { currentBalance: latest, delta: sum([{ amount: latest }, { amount: -monthAgo }]) });
+  assert.match(f.description, /viimeisen 30 päivän aikana/);
 });
 
 test('briefing: savings balances include corrections, like the summary', async () => {
   // Before the Ledger the briefing read raw snapshots and ignored corrections.
-  const septemberDeposit = savings[savings.length - 2].date;
-  createBalanceAdjustment({ accountId: savingsId, date: septemberDeposit, amount: 25, reason: 'test' });
+  const octoberDeposit = savings[savings.length - 1].date;
+  createBalanceAdjustment({ accountId: savingsId, date: octoberDeposit, amount: 25, reason: 'test' });
   const [f] = (await briefing(ANCHOR)).filter((x) => x.finding_type === 'savings_progress');
   const meta = JSON.parse(f.metadata!) as { currentBalance: number; delta: number };
   const summaryBalance = getSummary(ANCHOR).accounts.find((a) => a.id === savingsId)!.balance;
   assert.equal(meta.currentBalance, summaryBalance);
-  assert.equal(meta.delta, 925);
+  assert.equal(meta.delta, 325);
 });
