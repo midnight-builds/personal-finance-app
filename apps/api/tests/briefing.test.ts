@@ -164,6 +164,22 @@ test('creditHealth generator fires when credit card balance is growing', async (
   assert.equal(findings[0].severity, 'warn');
 });
 
+test('creditHealth does not fire for ordinary card use within a month', async () => {
+  const acct = mkAccount('credit_card');
+  const sess = mkSession();
+  // Paid off at every month end; four purchase days in a row this month.
+  for (const daysAgo of [95, 65, 35]) mkBalance(acct, 0, daysAgo);
+  mkBalance(acct, -100, 4);
+  mkBalance(acct, -200, 3);
+  mkBalance(acct, -300, 2);
+  mkBalance(acct, -400, 1);
+
+  const briefingId = await runBriefing(sess, FIXTURE_DAY);
+
+  const findings = db.prepare("SELECT * FROM insight_findings WHERE briefing_session_id = ? AND finding_type = 'credit_health'").all(briefingId) as any[];
+  assert.equal(findings.length, 0, 'debt growing day by day within one month is not a 3-month trend');
+});
+
 test('spendingAnomaly generator fires when category spend doubles vs baseline', async () => {
   const acct = mkAccount();
   const sess = mkSession();

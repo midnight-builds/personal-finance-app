@@ -115,51 +115,42 @@ function oneOffImpact(asOf: string): FindingInput[] {
   });
 }
 
-/**
- * Ledger balances on the last four snapshot days up to `asOf` of each account
- * of `subtype`, newest first, in account id order.
- */
-function recentBalances(subtype: string, asOf: string): Map<string, { name: string; balances: number[] }> {
-  const rows = db.prepare(`
-    SELECT a.id AS accountId, a.name AS accountName, substr(bs.date, 1, 10) AS day
-    FROM accounts a
-    JOIN balance_snapshots bs ON bs.account_id = a.id
-    WHERE a.account_subtype = ? AND substr(bs.date, 1, 10) <= ?
-    ORDER BY a.id, bs.date DESC
-  `).all(subtype, asOf) as Array<{ accountId: string; accountName: string; day: string }>;
-
-  const balancesOn = new Map<string, Map<string, number | null>>();
-  const balanceOf = (accountId: string, day: string) => {
-    if (!balancesOn.has(day)) {
-      balancesOn.set(day, new Map(accountBalances(day).map((b) => [b.accountId, b.balance])));
-    }
-    return balancesOn.get(day)!.get(accountId) as number;
+/** Accounts of a subtype and their balance on any day; balances are looked up once per day. */
+function balancesOf(subtype: string) {
+  const accounts = db
+    .prepare('SELECT id, name FROM accounts WHERE account_subtype = ? ORDER BY created_at ASC, id ASC')
+    .all(subtype) as Array<{ id: string; name: string }>;
+  const byDay = new Map<string, Map<string, { balance: number | null; date: string | null }>>();
+  const on = (accountId: string, day: string) => {
+    if (!byDay.has(day)) byDay.set(day, new Map(accountBalances(day).map((b) => [b.accountId, b])));
+    return byDay.get(day)!.get(accountId) ?? { balance: null, date: null };
   };
+  return { accounts, on };
+}
 
-  const byAccount = new Map<string, { name: string; days: string[]; balances: number[] }>();
-  for (const r of rows) {
-    if (!byAccount.has(r.accountId)) byAccount.set(r.accountId, { name: r.accountName, days: [], balances: [] });
-    const acc = byAccount.get(r.accountId)!;
-    if (acc.days.length >= 4 || acc.days.includes(r.day)) continue;
-    acc.days.push(r.day);
-    acc.balances.push(balanceOf(r.accountId, r.day));
-  }
-  return byAccount;
+/** Last day of the month `k` months before `asOf`'s month (k = 1: last month). */
+function monthEnd(asOf: string, k: number): string {
+  const [y, m] = asOf.split('-').map(Number);
+  return new Date(Date.UTC(y, m - k, 0)).toISOString().slice(0, 10);
 }
 
 function savingsProgress(asOf: string): FindingInput[] {
   const findings: FindingInput[] = [];
-  for (const [, { name, balances }] of recentBalances('savings', asOf)) {
-    if (balances.length < 2) continue;
-    const latest = balances[0];
-    const prev = balances[balances.length - 1];
-    const delta = Math.round((latest - prev) * 100) / 100;
+  const { accounts, on } = balancesOf('savings');
+  for (const { id, name } of accounts) {
+    // The 30 days up to the latest snapshot: imports may lag behind today.
+    const now = on(id, asOf);
+    if (now.balance === null || now.date === null) continue;
+    const before = on(id, daysBefore(now.date, 30));
+    if (before.balance === null) continue;
+    const latest = now.balance;
+    const delta = Math.round((latest - before.balance) * 100) / 100;
     const trend = delta > 0 ? 'kasvanut' : delta < 0 ? 'laskenut' : 'pysynyt samana';
     const severity: 'info' | 'warn' = delta < 0 ? 'warn' : 'info';
     findings.push({
       finding_type: 'savings_progress',
       title: `Säästötili ${name}: ${delta >= 0 ? '+' : ''}${fmt(delta)}`,
-      description: `Säästötilisi ${name} saldo on ${trend} ${fmt(Math.abs(delta))} seurantajaksolla. Nykyinen saldo: ${fmt(latest)}.`,
+      description: `Säästötilisi ${name} saldo on ${trend} ${fmt(Math.abs(delta))} viimeisen 30 päivän aikana. Nykyinen saldo: ${fmt(latest)}.`,
       severity,
       impact_eur: Math.abs(delta),
       metadata: { currentBalance: latest, delta },
@@ -170,19 +161,20 @@ function savingsProgress(asOf: string): FindingInput[] {
 
 function creditHealth(asOf: string): FindingInput[] {
   const findings: FindingInput[] = [];
-  for (const [, { name, balances: snapshots }] of recentBalances('credit_card', asOf)) {
-    // Need at least 4 snapshots for 3 consecutive months of comparison
-    if (snapshots.length < 4) continue;
-    // snapshots[0] = newest; growing debt = each newer snapshot is MORE negative (lower)
-    const growingDebt = snapshots.slice(0, -1).every((s, i) => s < snapshots[i + 1]);
-    if (!growingDebt) continue;
-    const latest = Math.abs(snapshots[0]);
-    const oldest = Math.abs(snapshots[snapshots.length - 1]);
-    const delta = Math.round((latest - oldest) * 100) / 100;
+  const { accounts, on } = balancesOf('credit_card');
+  for (const { id, name } of accounts) {
+    // Month-end balances of the last four months, oldest first. Debt is
+    // negative, so growing debt means each month ends lower than the last.
+    const ends = [4, 3, 2, 1].map((k) => on(id, monthEnd(asOf, k)).balance);
+    if (ends.some((b) => b === null)) continue;
+    const balances = ends as number[];
+    if (!balances.slice(1).every((b, i) => b < balances[i])) continue;
+    const latest = Math.abs(on(id, asOf).balance ?? balances[3]);
+    const delta = Math.round((Math.abs(balances[3]) - Math.abs(balances[0])) * 100) / 100;
     findings.push({
       finding_type: 'credit_health',
       title: `Luottokorttivelka kasvaa: ${name}`,
-      description: `Luottokorttisi ${name} velka on kasvanut 3 kuukautta peräkkäin. Nykyinen velka: ${fmt(latest)}.`,
+      description: `Luottokorttisi ${name} velka on kasvanut 3 kuukautta peräkkäin (kuukauden lopun saldot). Nykyinen velka: ${fmt(latest)}.`,
       severity: 'warn',
       impact_eur: delta,
       metadata: { currentDebt: latest },
@@ -201,13 +193,35 @@ function spendByCategory(from: string, to: string): Map<string, number> {
   return new Map([...spend].map(([cat, c]) => [cat, Math.round(c) / 100]));
 }
 
+/** Calendar days from `from` to `to`, both included. */
+const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1;
+
+/**
+ * A category's last 30 days against its normal 30 days. "Normal" is the
+ * average over the history before those 30 days, at most 24 months, scaled
+ * by the time the data actually covers; under 30 days of history is too
+ * little to call anything unusual.
+ */
 function spendingAnomaly(asOf: string): FindingInput[] {
+  const baselineEnd = daysBefore(asOf, 31);
+  const [y, m, d] = asOf.split('-').map(Number);
+  const earliest = new Date(Date.UTC(y - 2, m - 1, d)).toISOString().slice(0, 10);
+  const first = ledgerEntries({ to: baselineEnd })[0]?.date;
+  if (!first) return [];
+  const baselineStart = first > earliest ? first : earliest;
+  const coveredDays = daysBetween(baselineStart, baselineEnd);
+  if (coveredDays < 30) return [];
+
   const recent = spendByCategory(daysBefore(asOf, 30), asOf);
-  const baseline = spendByCategory(daysBefore(asOf, 90), daysBefore(asOf, 31));
+  const baseline = spendByCategory(baselineStart, baselineEnd);
 
   const rows = [...recent]
     .filter(([cat]) => baseline.has(cat))
-    .map(([cat, spend_30d]) => ({ cat, spend_30d, avg_30d: baseline.get(cat)! / 3 }))
+    .map(([cat, spend_30d]) => ({
+      cat,
+      spend_30d,
+      avg_30d: Math.round((baseline.get(cat)! / coveredDays) * 30 * 100) / 100,
+    }))
     .filter((r) => r.spend_30d > r.avg_30d * 2 && r.avg_30d > 20)
     .sort((a, b) => (b.spend_30d - b.avg_30d) - (a.spend_30d - a.avg_30d))
     .slice(0, 3);
@@ -217,7 +231,7 @@ function spendingAnomaly(asOf: string): FindingInput[] {
     title: `${r.cat}: ${fmt(r.spend_30d)} tässä kuussa`,
     description: `Kategoriassa "${r.cat}" kului ${fmt(r.spend_30d)} viimeisen 30 päivän aikana — yli 2× normaali (${fmt(r.avg_30d)}/kk).`,
     severity: 'warn' as const,
-    impact_eur: r.spend_30d - r.avg_30d,
+    impact_eur: Math.round((r.spend_30d - r.avg_30d) * 100) / 100,
     metadata: { category: r.cat, spend30d: r.spend_30d, avg30d: r.avg_30d },
   }));
 }
