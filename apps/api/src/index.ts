@@ -410,7 +410,8 @@ server.post<{ Params: { id: string } }>('/rule-suggestions/:id/accept', async (r
     acceptRuleSuggestion(id);
     return reply.send({ ok: true });
   } catch (err: any) {
-    return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });
+    const code = err.message === 'not_found' ? 404 : err.message === 'not_pending' ? 409 : 500;
+    return reply.code(code).send({ error: err.message });
   }
 });
 

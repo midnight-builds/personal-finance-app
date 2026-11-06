@@ -207,3 +207,41 @@ test('deleting a category looks as before: current members move to misc, others 
   assert.equal(listed(former.id).categoryId, food);
   assert.equal(ledgerEntries().find((e) => e.id === former.id)?.categoryId, food);
 });
+
+test('a category that has rule suggestions can be deleted; its pending ones are rejected', () => {
+  const misc = categoryId('Muut ja epäselvät');
+  const doomed = createCategory('Poistettava ehdotuksin').id;
+  const insert = db.prepare(
+    `INSERT INTO rule_suggestions (id, created_at, category_id, category_name, pattern, match_field, status)
+     VALUES (?, ?, ?, 'Poistettava ehdotuksin', ?, 'counterparty', ?)`
+  );
+  const pending = crypto.randomUUID();
+  const accepted = crypto.randomUUID();
+  insert.run(pending, new Date().toISOString(), doomed, 'pending-shop', 'pending');
+  insert.run(accepted, new Date().toISOString(), doomed, 'accepted-shop', 'accepted');
+
+  deleteCategory(doomed);
+
+  const row = (id: string) =>
+    db.prepare('SELECT category_id, category_name, status, resolved_at FROM rule_suggestions WHERE id = ?').get(id) as {
+      category_id: string;
+      category_name: string;
+      status: string;
+      resolved_at: string | null;
+    };
+  assert.equal(db.prepare('SELECT 1 FROM categories WHERE id = ?').get(doomed), undefined);
+  // A suggestion for a category that no longer exists cannot be accepted.
+  assert.equal(row(pending).status, 'rejected');
+  assert.ok(row(pending).resolved_at);
+  assert.equal(row(accepted).status, 'accepted');
+  // The name of the suggested category stays in the history.
+  assert.equal(row(pending).category_name, 'Poistettava ehdotuksin');
+  assert.equal(row(accepted).category_id, misc);
+
+  // A stale UI accepting the rejected suggestion must not create a misc rule.
+  const rules = () => Number((db.prepare('SELECT COUNT(*) AS n FROM category_rules').get() as { n: number }).n);
+  const before = rules();
+  assert.throws(() => acceptRuleSuggestion(pending), /not_pending/);
+  assert.equal(rules(), before);
+  assert.equal(row(pending).status, 'rejected');
+});

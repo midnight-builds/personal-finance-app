@@ -198,6 +198,14 @@ export function deleteCategory(id: string) {
       miscId,
       id
     );
+    // Rule suggestions reference the category too. A pending one can no longer
+    // be accepted, so it is rejected; all keep `category_name`, which records
+    // what was suggested, and point at misc only to satisfy the foreign key.
+    db.prepare(
+      `UPDATE rule_suggestions SET status = 'rejected', resolved_at = ?
+       WHERE category_id = ? AND status = 'pending'`
+    ).run(now, id);
+    db.prepare('UPDATE rule_suggestions SET category_id = ? WHERE category_id = ?').run(miscId, id);
     db.prepare('DELETE FROM category_rules WHERE category_id = ?').run(id);
     db.prepare('DELETE FROM categories WHERE id = ?').run(id);
     db.exec('COMMIT');
