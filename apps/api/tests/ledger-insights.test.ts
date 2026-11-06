@@ -126,11 +126,11 @@ test('briefing: one-off purchases are counted once and transfers are not purchas
 test('briefing: spending anomalies compare with the average over the history there is', async () => {
   // September is the demo's grocery spike month; the history before it starts in June.
   const asOf = '2026-09-30';
-  const baselineEnd = daysBefore(asOf, 31);
+  const baselineEnd = daysBefore(asOf, 30);
   const covered = Math.round((Date.parse(baselineEnd) - Date.parse('2026-06-01')) / 86400000) + 1;
   const anomalies = (await briefing(asOf)).filter((f) => f.finding_type === 'spending_anomaly');
   assert.ok(anomalies.length > 0);
-  const last30 = new Map(ledgerTotals('category', { from: daysBefore(asOf, 30), to: asOf }).map((t) => [t.label, t]));
+  const last30 = new Map(ledgerTotals('category', { from: daysBefore(asOf, 29), to: asOf }).map((t) => [t.label, t]));
   const before = new Map(ledgerTotals('category', { to: baselineEnd }).map((t) => [t.label, t]));
   for (const f of anomalies) {
     const m = JSON.parse(f.metadata!) as { category: string; spend30d: number; avg30d: number };

@@ -138,9 +138,10 @@ function savingsProgress(asOf: string): FindingInput[] {
   const findings: FindingInput[] = [];
   const { accounts, on } = balancesOf('savings');
   for (const { id, name } of accounts) {
-    // The 30 days up to the latest snapshot: imports may lag behind today.
+    // The 30 days up to the latest snapshot: imports may lag behind today,
+    // but a snapshot older than that says nothing about "the last 30 days".
     const now = on(id, asOf);
-    if (now.balance === null || now.date === null) continue;
+    if (now.balance === null || now.date === null || now.date < daysBefore(asOf, 45)) continue;
     const before = on(id, daysBefore(now.date, 30));
     if (before.balance === null) continue;
     const latest = now.balance;
@@ -169,8 +170,9 @@ function creditHealth(asOf: string): FindingInput[] {
     if (ends.some((b) => b === null)) continue;
     const balances = ends as number[];
     if (!balances.slice(1).every((b, i) => b < balances[i])) continue;
-    const latest = Math.abs(on(id, asOf).balance ?? balances[3]);
-    const delta = Math.round((Math.abs(balances[3]) - Math.abs(balances[0])) * 100) / 100;
+    // Debt is the negative part of a balance; a credit (positive) is no debt.
+    const latest = Math.max(0, -(on(id, asOf).balance ?? balances[3]));
+    const delta = Math.round((balances[0] - balances[3]) * 100) / 100;
     findings.push({
       finding_type: 'credit_health',
       title: `Luottokorttivelka kasvaa: ${name}`,
@@ -203,16 +205,18 @@ const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - D
  * little to call anything unusual.
  */
 function spendingAnomaly(asOf: string): FindingInput[] {
-  const baselineEnd = daysBefore(asOf, 31);
+  // Exactly 30 days, asOf included: a 31st day can hold a monthly bill twice.
+  const recentStart = daysBefore(asOf, 29);
+  const baselineEnd = daysBefore(asOf, 30);
   const [y, m, d] = asOf.split('-').map(Number);
   const earliest = new Date(Date.UTC(y - 2, m - 1, d)).toISOString().slice(0, 10);
-  const first = ledgerEntries({ to: baselineEnd })[0]?.date;
+  const first = ledgerEntries({ from: earliest, to: baselineEnd })[0]?.date;
   if (!first) return [];
   const baselineStart = first > earliest ? first : earliest;
   const coveredDays = daysBetween(baselineStart, baselineEnd);
   if (coveredDays < 30) return [];
 
-  const recent = spendByCategory(daysBefore(asOf, 30), asOf);
+  const recent = spendByCategory(recentStart, asOf);
   const baseline = spendByCategory(baselineStart, baselineEnd);
 
   const rows = [...recent]
