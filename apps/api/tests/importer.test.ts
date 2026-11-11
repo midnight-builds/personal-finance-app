@@ -127,7 +127,7 @@ test('links transfers across accounts with opposite amounts', async () => {
       date: '2026/01/10',
       amount: '-100,00',
       payee: 'Friend',
-      payer: 'FI-DEBIT-IBAN',
+      payer: 'FI11 1111 1111 1111 11',
     }),
   ];
   const inRecords = [
@@ -135,14 +135,14 @@ test('links transfers across accounts with opposite amounts', async () => {
       date: '2026/01/10',
       amount: '100,00',
       payer: 'Me',
-      payee: 'FI-SAV-IBAN',
+      payee: 'FI22 2222 2222 2222 22',
     }),
   ];
 
   await processImport({
     records: outRecords,
     checksum: checksum(Buffer.from('out')),
-    filename: 'Debit FI-DEBIT-IBAN.csv',
+    filename: 'Debit FI11 1111 1111 1111 11.csv',
     sourceBank: 'Nordea',
     format: 'CSV',
   });
@@ -150,7 +150,7 @@ test('links transfers across accounts with opposite amounts', async () => {
   await processImport({
     records: inRecords,
     checksum: checksum(Buffer.from('in')),
-    filename: 'Savings FI-SAV-IBAN.csv',
+    filename: 'Savings FI22 2222 2222 2222 22.csv',
     sourceBank: 'Nordea',
     format: 'CSV',
   });

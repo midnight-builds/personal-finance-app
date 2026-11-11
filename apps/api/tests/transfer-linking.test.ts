@@ -143,3 +143,61 @@ test('a failed import leaves nothing behind', async () => {
   }
   assert.deepEqual(['accounts', 'import_sessions', 'raw_transactions', 'normalized_transactions'].map(count), before);
 });
+
+// Uploads name no account: the importer infers it from the file, as the routes do.
+function upload(filename: string, rows: Array<Row & { own?: string }>) {
+  const records = rows.map((r) => ({
+    ...record(r),
+    // A real export fills the account's own side too: payer when paying, payee when paid.
+    ...(r.own ? (r.amount < 0 ? { Maksaja: r.own } : { Maksunsaaja: r.own }) : {}),
+  }));
+  return processImport({
+    records,
+    checksum: checksum(Buffer.from(`${n++}${JSON.stringify(records)}`)),
+    filename,
+    sourceBank: 'nordea',
+    format: 'csv',
+  });
+}
+const accountOf = (importResult: { accountId: string }) =>
+  db.prepare('SELECT name, iban FROM accounts WHERE id = ?').get(importResult.accountId) as { name: string; iban: string | null };
+
+test('a credit card repayment from checking is a transfer', async () => {
+  // Checking carries IBANs; the card export has none and its account no IBAN.
+  await importRows(CHECKING, [
+    { date: '2026-10-01', amount: -950, other: FRIEND, name: 'Vuokranantaja' },
+    { date: '2026-10-20', amount: -500, other: 'FI99 9999 9999 9999 99', name: 'Nordea Rahoitus' },
+  ]);
+  await upload('Luottokortti.csv', [{ date: '2026-10-21', amount: 500, other: '', name: 'Maksu, kiitos' }]);
+  assert.equal(links().length, 1);
+  assert.equal(links()[0].confidence, 70);
+});
+
+test('a savings export fed only from checking is filed under savings', async () => {
+  // Every row names both accounts once: only the own side tells which file this is.
+  const savings = await upload('Tapahtumat.csv', [
+    { date: '2026-10-16', amount: 100, other: CHECKING, own: SAVINGS },
+    { date: '2026-09-16', amount: 100, other: CHECKING, own: SAVINGS },
+    { date: '2026-09-20', amount: -30, other: CHECKING, own: SAVINGS },
+  ]);
+  assert.equal(accountOf(savings).iban, SAVINGS.replace(/\s+/g, ''));
+  const checking = await upload('Tapahtumat.csv', [
+    { date: '2026-10-16', amount: -100, other: SAVINGS, own: CHECKING },
+    { date: '2026-09-16', amount: -100, other: SAVINGS, own: CHECKING },
+    { date: '2026-09-20', amount: 30, other: SAVINGS, own: CHECKING },
+  ]);
+  assert.equal(accountOf(checking).iban, CHECKING.replace(/\s+/g, ''));
+  assert.equal(links().length, 3);
+  assert.deepEqual(ledgerEntries(), []);
+});
+
+test('an export finds its account whether or not the IBAN has spaces', async () => {
+  const first = await importRows(CHECKING, [{ date: '2026-10-01', amount: -10, other: 'Kauppa', name: 'Kauppa' }]);
+  const second = await upload('Tapahtumat.csv', [{ date: '2026-10-02', amount: -10, other: 'Kauppa', name: 'Kauppa', own: CHECKING }]);
+  assert.equal(second.accountId, first.accountId);
+});
+
+test('the account name comes from the file name before the IBAN', async () => {
+  const res = await upload(`Käyttötili ${CHECKING}.csv`, [{ date: '2026-10-01', amount: -10, other: 'Kauppa', name: 'Kauppa' }]);
+  assert.deepEqual({ ...accountOf(res) }, { name: 'Käyttötili', iban: CHECKING.replace(/\s+/g, '') });
+});

@@ -8,6 +8,7 @@ import { detectPatterns } from './patterns.js';
 import { runBriefing } from './briefing.js';
 import { generateRuleSuggestions } from './ruleSuggestions.js';
 import { canonicalGroupOrder, isCanonicalGroupRow } from './sql/transactions.js';
+import { daysBefore } from './ledger.js';
 
 export type ImportResult = {
   importSessionId: string;
@@ -89,8 +90,11 @@ function getField(record: Record<string, unknown>, key: string): RecordValue {
 }
 
 function ensureAccount(accountName: string, accountIban: string, now: string): string {
+  // IBANs are compared without spaces or case: exports and older rows differ.
   const accountRow = accountIban
-    ? (db.prepare('SELECT * FROM accounts WHERE iban = ?').get(accountIban) as any)
+    ? (db
+        .prepare("SELECT * FROM accounts WHERE REPLACE(UPPER(iban), ' ', '') = ? ORDER BY created_at ASC LIMIT 1")
+        .get(accountIban.replace(/\s+/g, '').toUpperCase()) as any)
     : (db.prepare('SELECT * FROM accounts WHERE name = ?').get(accountName) as any);
 
   const accountId = accountRow?.id ?? createId();
@@ -103,17 +107,23 @@ function ensureAccount(accountName: string, accountIban: string, now: string): s
   return accountId;
 }
 
+/**
+ * The account's own IBAN as the export names it: the payer of an outgoing
+ * row, the payee of an incoming one. The other field names the other party,
+ * which on a savings account fed from checking is the checking account in
+ * every row — so counting both fields could file savings under checking.
+ */
 function extractIbanCandidates(records: Record<string, unknown>[]): string[] {
   const candidates: string[] = [];
-  const fields = ['Maksaja', 'Maksunsaaja', 'Maksaja ', 'Maksunsaaja '];
   for (const record of records) {
-    for (const field of fields) {
+    const amount = parseAmount(getField(record, 'Määrä'));
+    if (amount === null || amount === 0) continue;
+    const own = amount < 0 ? ['Maksaja', 'Maksaja '] : ['Maksunsaaja', 'Maksunsaaja '];
+    for (const field of own) {
       const raw = getField(record, field);
       if (!raw || typeof raw !== 'string') continue;
-      const compact = raw.replace(/\\s+/g, '');
-      if (compact.startsWith('FI') && compact.length >= 10) {
-        candidates.push(compact);
-      }
+      const compact = raw.replace(/\s+/g, '').toUpperCase();
+      if (looksLikeIban(compact)) candidates.push(compact);
     }
   }
   return candidates;
@@ -137,7 +147,7 @@ function mostFrequent(arr: string[]): string | null {
 }
 
 function accountNameFromFilename(filename: string, accountIban: string | null): string {
-  const match = filename.match(/^(.*?)\\s*(FI[0-9 ]{6,})/i);
+  const match = filename.match(/^(.*?)\s*(FI[0-9 ]{6,})/i);
   if (match && match[1].trim()) {
     return match[1].trim();
   }
@@ -149,7 +159,8 @@ function accountNameFromFilename(filename: string, accountIban: string | null): 
 
 function inferAccount(records: Record<string, unknown>[], filename: string) {
   const ibanCandidates = extractIbanCandidates(records);
-  const accountIban = mostFrequent(ibanCandidates);
+  const fromFilename = filename.match(/FI[0-9 ]{6,}/i)?.[0].replace(/\s+/g, '').toUpperCase() ?? null;
+  const accountIban = mostFrequent(ibanCandidates) ?? fromFilename;
   const accountName = accountNameFromFilename(filename, accountIban);
   return { accountIban: accountIban ?? '', accountName };
 }
@@ -310,7 +321,8 @@ function linkTransfers(ids: string[]) {
     `SELECT c.id, c.account_id, c.counterparty_iban, a.iban AS account_iban,
             ABS(julianday(substr(c.booking_date, 1, 10)) - julianday(substr(?, 1, 10))) AS dist
      FROM normalized_transactions c JOIN accounts a ON a.id = c.account_id
-     WHERE c.account_id != ? AND c.amount = ? AND c.booking_date IS NOT NULL
+     WHERE c.account_id != ? AND c.amount = ?
+       AND c.booking_date >= ? AND c.booking_date < ?
        AND ABS(julianday(substr(c.booking_date, 1, 10)) - julianday(substr(?, 1, 10))) <= 2
        AND ${isCanonicalGroupRow('c')} AND NOT ${isLinked('c')}
      ORDER BY dist ASC, ${canonicalGroupOrder('c')}`
@@ -334,9 +346,11 @@ function linkTransfers(ids: string[]) {
     const ownIbanAsNone = (s: LinkSide) =>
       normIban(s.counterparty_iban) === normIban(s.account_iban) ? { ...s, counterparty_iban: null } : s;
     Object.assign(row, ownIbanAsNone(row));
-    const candidates = (candidatesOf.all(row.booking_date, row.account_id, -row.amount, row.booking_date) as LinkSide[]).map(
-      ownIbanAsNone
-    );
+    // Plain string bounds (booking_date is an ISO timestamp) keep its index usable.
+    const day = row.booking_date.slice(0, 10);
+    const candidates = (
+      candidatesOf.all(row.booking_date, row.account_id, -row.amount, daysBefore(day, 2), daysBefore(day, -3), row.booking_date) as LinkSide[]
+    ).map(ownIbanAsNone);
 
     const pointsAt = (from: LinkSide, to: LinkSide) =>
       from.counterparty_iban !== null && normIban(from.counterparty_iban) === normIban(to.account_iban);
@@ -344,12 +358,15 @@ function linkTransfers(ids: string[]) {
       from.counterparty_iban !== null && normIban(from.counterparty_iban) !== normIban(to.account_iban);
 
     const proven = candidates.filter((c) => pointsAt(row, c) || pointsAt(c, row));
-    const plausible = candidates.filter(
-      (c) =>
-        !pointsElsewhere(row, c) &&
-        !pointsElsewhere(c, row) &&
-        !carriesIbans(row.account_id) &&
-        !carriesIbans(c.account_id)
+    const plausible = candidates.filter((c) =>
+      // An account without an IBAN (a credit card) cannot be named by one: a
+      // card repayment from checking names the card issuer's IBAN or none.
+      !row.account_iban || !c.account_iban
+        ? true
+        : !pointsElsewhere(row, c) &&
+          !pointsElsewhere(c, row) &&
+          !carriesIbans(row.account_id) &&
+          !carriesIbans(c.account_id)
     );
 
     let match: LinkSide | undefined;
