@@ -4,9 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import multipart from '@fastify/multipart';
 import { initDb, seedDefaultCategories, db } from './db.js';
-import { checksum, parseCsv, parseXlsx, processImport } from './importer.js';
 import { listTransactions } from './query.js';
 import { listCategories, upsertDecision, createCategory, renameCategory, deleteCategory } from './rules.js';
 import { getSummary, getHouseholdSummary } from './summary.js';
@@ -34,12 +32,6 @@ await server.register(cors, {
   origin: true,
 });
 
-await server.register(multipart, {
-  limits: {
-    fileSize: 50 * 1024 * 1024,
-  },
-});
-
 server.get('/health', async () => {
   return { status: 'ok' };
 });
@@ -64,57 +56,6 @@ server.get('/backup', async (_request, reply) => {
       // best-effort cleanup
     }
   }
-});
-
-async function readUpload(request: any) {
-  const parts = request.parts();
-  let fileBuffer: Buffer | null = null;
-  let fileName = '';
-
-  for await (const part of parts) {
-    if (part.type === 'file') {
-      fileBuffer = await part.toBuffer();
-      fileName = part.filename;
-    }
-  }
-
-  if (!fileBuffer) {
-    return { error: 'file_missing' } as const;
-  }
-
-  return { fileBuffer, fileName } as const;
-}
-
-server.post('/imports/nordea/csv', async (request, reply) => {
-  const upload = await readUpload(request);
-  if ('error' in upload) return reply.code(400).send({ error: upload.error });
-
-  const records = parseCsv(upload.fileBuffer);
-  const result = await processImport({
-    records,
-    checksum: checksum(upload.fileBuffer),
-    filename: upload.fileName,
-    sourceBank: 'Nordea',
-    format: 'CSV',
-  });
-
-  return reply.send(result);
-});
-
-server.post('/imports/nordea/xlsx', async (request, reply) => {
-  const upload = await readUpload(request);
-  if ('error' in upload) return reply.code(400).send({ error: upload.error });
-
-  const records = parseXlsx(upload.fileBuffer);
-  const result = await processImport({
-    records,
-    checksum: checksum(upload.fileBuffer),
-    filename: upload.fileName,
-    sourceBank: 'Nordea',
-    format: 'XLSX',
-  });
-
-  return reply.send(result);
 });
 
 server.get('/transactions', async () => listTransactions());
