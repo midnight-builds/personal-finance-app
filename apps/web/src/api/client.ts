@@ -1,10 +1,12 @@
 // Typed API client for finance app
 import type {
+  AccountSubtype,
   CreateFeatureProposalResponse,
   FeatureProposal,
   FeatureProposalAction,
   FeatureProposalInput,
   FeatureProposalUpdate,
+  ImportPreview,
 } from '@finance-app/shared';
 // All fetch functions use /api as base; Vite proxies to http://127.0.0.1:3001
 
@@ -181,6 +183,8 @@ export type ImportResult = {
   skippedCount: number;
   overlapDetected: boolean;
   alreadyImportedCount: number;
+  duplicateCount: number;
+  transferCount: number;
   briefingSessionId?: string;
 };
 
@@ -460,20 +464,50 @@ export async function getRecurringPatterns(): Promise<RecurringPattern[]> {
 // Import
 // ============================================================================
 
-export async function importCsv(file: File): Promise<ImportResult> {
+/** A rejected upload: `code` is the API error code, e.g. `account_required`. */
+export class ImportRequestError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, status: number) {
+    super(code);
+    this.code = code;
+    this.status = status;
+  }
+}
+
+/** Where an upload goes: an existing account, or a new one. */
+export type ImportChoice =
+  | { accountId: string }
+  | { newAccount: { name: string; subtype: AccountSubtype } };
+
+async function postUpload<T>(path: string, file: File, fields: Record<string, string>): Promise<T> {
   const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(key, value);
   form.append('file', file);
-  const res = await safeFetch(`${API}/imports/nordea/csv`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error(`importCsv failed: ${res.statusText}`);
+  const res = await safeFetch(`${API}${path}`, { method: 'POST', body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new ImportRequestError(err.error ?? res.statusText, res.status);
+  }
   return res.json();
 }
 
-export async function importXlsx(file: File): Promise<ImportResult> {
-  const form = new FormData();
-  form.append('file', file);
-  const res = await safeFetch(`${API}/imports/nordea/xlsx`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error(`importXlsx failed: ${res.statusText}`);
-  return res.json();
+/** What importing `file` would do; writes nothing. `as` picks the account the numbers are for. */
+export function previewImport(file: File, as?: { accountId: string } | 'new'): Promise<ImportPreview> {
+  const fields: Record<string, string> =
+    as === 'new' ? { asNewAccount: '1' } : as ? { accountId: as.accountId } : {};
+  return postUpload('/imports/nordea/preview', file, fields);
+}
+
+/** Imports `file` (CSV or XLSX by extension) into the chosen account. */
+export function importFile(file: File, choice: ImportChoice): Promise<ImportResult> {
+  const format = file.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : 'csv';
+  const fields: Record<string, string> =
+    'accountId' in choice
+      ? { accountId: choice.accountId }
+      : { newAccountName: choice.newAccount.name, newAccountSubtype: choice.newAccount.subtype };
+  return postUpload(`/imports/nordea/${format}`, file, fields);
 }
 
 // ============================================================================

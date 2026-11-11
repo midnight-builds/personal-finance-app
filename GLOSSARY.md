@@ -31,6 +31,23 @@ Re-stating the latest decision (same category, same source) appends nothing.
 Deleting a category appends a move to "Muut ja epäselvät" for its current
 transactions; older decisions that named it are repointed there too.
 
+**Import preview** — what importing a file would do, computed before anything
+is written: the guessed target account, and for the chosen target the rows
+that would be grouped as duplicates, transfers, gaps and balance breaks. Its
+counts come from a dry run.
+
+**Dry run** — the real import pipeline run inside a transaction that is
+always rolled back, so its counts equal what the import then does and nothing
+(not even the event log) is kept.
+
+**Target account** — the account an import goes into: chosen by the user, or
+inferred from the export's own IBAN. An export without one (a credit card)
+needs the user's choice.
+
+**Balance break** — a day where the previous day's running balance (Saldo)
+plus the day's amounts does not give the day's last Saldo: rows are missing
+from the export in between.
+
 **Balance (of an account, on a day)** — the latest balance snapshot on or
 before that day, plus balance adjustments dated on or before the snapshot.
 Unknown (null), not zero, when there is no snapshot yet.

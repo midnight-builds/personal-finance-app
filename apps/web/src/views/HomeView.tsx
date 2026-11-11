@@ -1,9 +1,11 @@
 import { useCallback, useMemo, useState, useEffect } from 'react';
 import { API, formatDate, formatAmount, showToast } from '../utils';
-import { getHouseholdSummary, importCsv, importXlsx } from '../api/client';
+import { getHouseholdSummary } from '../api/client';
 import type { HouseholdSummary } from '../api/client';
 import CfoStatePanel from '../components/CfoStatePanel';
 import ImportPrompt from '../components/ImportPrompt';
+import ImportDialog from '../components/ImportDialog';
+import type { ImportOutcome } from '../components/ImportDialog';
 import BriefingPanel from '../components/BriefingPanel';
 import RuleSuggestionsPanel from '../components/RuleSuggestionsPanel';
 import ForecastPanel from '../components/ForecastPanel';
@@ -70,7 +72,7 @@ export default function HomeView({
   refreshAll,
   setToast,
 }: HomeViewProps) {
-  const [file, setFile] = useState<File | null>(null);
+  const [importFiles, setImportFiles] = useState<File[] | null>(null);
   const [status, setStatus] = useState('');
   const [showTransfers, setShowTransfers] = useState(false);
   const [txFilterIds, setTxFilterIds] = useState<string[] | null>(null);
@@ -106,36 +108,26 @@ export default function HomeView({
     return s;
   }
 
-  const handleImportFile = async (selectedFile: File) => {
-    setStatus('Ladataan...');
-    try {
-      const payload = selectedFile.name.toLowerCase().endsWith('.xlsx')
-        ? await importXlsx(selectedFile)
-        : await importCsv(selectedFile);
-      const overlapNote = payload.overlapDetected
-        ? ` (päällekkäinen importti havaittu, ${payload.alreadyImportedCount} riviä aiemmin)`
-        : '';
-      const skippedNote = payload.skippedCount ? `, ${payload.skippedCount} riviä ohitettiin` : '';
-      const format = selectedFile.name.toLowerCase().endsWith('.xlsx') ? 'XLSX' : 'CSV';
-      const msg = `Import ok (${format}): ${payload.normalizedCount} riviä${overlapNote}${skippedNote}`;
-      setStatus(msg);
-      showToast(setToast, msg);
-      await refreshAll();
-      await loadHousehold();
-      setBriefingRefreshKey((k) => k + 1);
-    } catch {
-      setStatus('Import epäonnistui.');
-      showToast(setToast, 'Import epäonnistui', 4000);
-    }
+  const afterImport = async () => {
+    await refreshAll();
+    await loadHousehold();
+    setBriefingRefreshKey((k) => k + 1);
   };
 
-  const onSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!file) {
-      setStatus('Valitse CSV tai XLSX -tiedosto.');
-      return;
-    }
-    await handleImportFile(file);
+  const onImportDialogClosed = (outcomes: ImportOutcome[]) => {
+    setImportFiles(null);
+    const imported = outcomes.filter((o) => o.status === 'imported').length;
+    if (outcomes.length === 0) return;
+    const msg = `Tuotu ${imported}/${outcomes.length} tiedostoa`;
+    setStatus(msg);
+    showToast(setToast, msg);
+  };
+
+  const pickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    // Cleared so that picking the same file again opens the dialog again.
+    e.target.value = '';
+    if (files.length > 0) setImportFiles(files);
   };
 
   const changeCategory = async (id: string, categoryId: string) => {
@@ -238,9 +230,12 @@ export default function HomeView({
       {householdSummary && householdSummary.dataAgeDays > 7 && (
         <ImportPrompt
           dataAgeDays={householdSummary.dataAgeDays}
-          onImport={handleImportFile}
+          onFiles={setImportFiles}
           status={status}
         />
+      )}
+      {importFiles && (
+        <ImportDialog files={importFiles} onClose={onImportDialogClosed} onImported={() => void afterImport()} />
       )}
       {householdSummary && (
         <CfoStatePanel summary={householdSummary} />
@@ -262,16 +257,9 @@ export default function HomeView({
           <p className="lede">CSV/XLSX sisään → analyysi ulos. OpenAI-tyylinen nopeus ja selkeys.</p>
           <div className="actions">
             <label className="upload">
-              <input
-                type="file"
-                accept=".csv,.xlsx"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              />
-              {file ? `Valittu: ${file.name}` : 'Valitse CSV/XLSX'}
+              <input type="file" accept=".csv,.xlsx" multiple onChange={pickFiles} />
+              Tuo tiliotteita (CSV/XLSX)
             </label>
-            <button type="button" onClick={onSubmit} disabled={!file}>
-              Tuo & analysoi
-            </button>
             <span className="muted">{status}</span>
           </div>
         </div>
