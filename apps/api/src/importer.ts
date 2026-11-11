@@ -7,7 +7,8 @@ import { chooseCategoryFor, upsertDecision } from './rules.js';
 import { detectPatterns } from './patterns.js';
 import { runBriefing } from './briefing.js';
 import { generateRuleSuggestions } from './ruleSuggestions.js';
-import { canonicalGroupOrder } from './sql/transactions.js';
+import { canonicalGroupOrder, isCanonicalGroupRow } from './sql/transactions.js';
+import { daysBefore } from './ledger.js';
 
 export type ImportResult = {
   importSessionId: string;
@@ -89,8 +90,11 @@ function getField(record: Record<string, unknown>, key: string): RecordValue {
 }
 
 function ensureAccount(accountName: string, accountIban: string, now: string): string {
+  // IBANs are compared without spaces or case: exports and older rows differ.
   const accountRow = accountIban
-    ? (db.prepare('SELECT * FROM accounts WHERE iban = ?').get(accountIban) as any)
+    ? (db
+        .prepare("SELECT * FROM accounts WHERE REPLACE(UPPER(iban), ' ', '') = ? ORDER BY created_at ASC LIMIT 1")
+        .get(accountIban.replace(/\s+/g, '').toUpperCase()) as any)
     : (db.prepare('SELECT * FROM accounts WHERE name = ?').get(accountName) as any);
 
   const accountId = accountRow?.id ?? createId();
@@ -103,17 +107,23 @@ function ensureAccount(accountName: string, accountIban: string, now: string): s
   return accountId;
 }
 
+/**
+ * The account's own IBAN as the export names it: the payer of an outgoing
+ * row, the payee of an incoming one. The other field names the other party,
+ * which on a savings account fed from checking is the checking account in
+ * every row — so counting both fields could file savings under checking.
+ */
 function extractIbanCandidates(records: Record<string, unknown>[]): string[] {
   const candidates: string[] = [];
-  const fields = ['Maksaja', 'Maksunsaaja', 'Maksaja ', 'Maksunsaaja '];
   for (const record of records) {
-    for (const field of fields) {
+    const amount = parseAmount(getField(record, 'Määrä'));
+    if (amount === null || amount === 0) continue;
+    const own = amount < 0 ? ['Maksaja', 'Maksaja '] : ['Maksunsaaja', 'Maksunsaaja '];
+    for (const field of own) {
       const raw = getField(record, field);
       if (!raw || typeof raw !== 'string') continue;
-      const compact = raw.replace(/\\s+/g, '');
-      if (compact.startsWith('FI') && compact.length >= 10) {
-        candidates.push(compact);
-      }
+      const compact = raw.replace(/\s+/g, '').toUpperCase();
+      if (looksLikeIban(compact)) candidates.push(compact);
     }
   }
   return candidates;
@@ -137,7 +147,7 @@ function mostFrequent(arr: string[]): string | null {
 }
 
 function accountNameFromFilename(filename: string, accountIban: string | null): string {
-  const match = filename.match(/^(.*?)\\s*(FI[0-9 ]{6,})/i);
+  const match = filename.match(/^(.*?)\s*(FI\d{2}(?: ?\d{4}){3} ?\d{2})/i);
   if (match && match[1].trim()) {
     return match[1].trim();
   }
@@ -149,7 +159,8 @@ function accountNameFromFilename(filename: string, accountIban: string | null): 
 
 function inferAccount(records: Record<string, unknown>[], filename: string) {
   const ibanCandidates = extractIbanCandidates(records);
-  const accountIban = mostFrequent(ibanCandidates);
+  const fromFilename = filename.match(/FI\d{2}(?: ?\d{4}){3} ?\d{2}/i)?.[0].replace(/\s+/g, '').toUpperCase() ?? null;
+  const accountIban = mostFrequent(ibanCandidates) ?? fromFilename;
   const accountName = accountNameFromFilename(filename, accountIban);
   return { accountIban: accountIban ?? '', accountName };
 }
@@ -267,33 +278,121 @@ function dedupeInserted(ids: string[]) {
   }
 }
 
+/** True when `x` or a duplicate of it is already one side of a transfer. */
+function isLinked(x: string) {
+  return `(${x}.id IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
+    OR (${x}.transaction_group_id IS NOT NULL AND ${x}.transaction_group_id IN (
+      SELECT n.transaction_group_id FROM normalized_transactions n
+      JOIN transfer_links l ON n.id IN (l.from_transaction_id, l.to_transaction_id)
+      WHERE n.transaction_group_id IS NOT NULL)))`;
+}
+
+const normIban = (iban: string | null) => (iban ? iban.replace(/\s+/g, '').toUpperCase() : null);
+
+type LinkSide = {
+  id: string;
+  account_id: string;
+  counterparty_iban: string | null;
+  account_iban: string | null;
+  dist?: number;
+};
+
+/**
+ * Pairs each new transaction with the other side of a transfer between own
+ * accounts: the opposite amount on another account within two days. Each
+ * transaction (and its duplicates) is in at most one transfer.
+ *
+ * Nordea exports name the other account's IBAN on a transfer, and a
+ * merchant's name on a card payment. So:
+ * - an IBAN pointing at the candidate's account is proof, and the best one;
+ * - an IBAN pointing elsewhere rules the candidate out;
+ * - without IBANs, an account whose export carries them elsewhere is not
+ *   transferring (e.g. a purchase on one card and a refund on another);
+ * - otherwise the closest day wins, and a tie between accounts is left
+ *   unlinked rather than guessed.
+ */
 function linkTransfers(ids: string[]) {
+  const sideOf = db.prepare(
+    `SELECT t.id, t.account_id, t.booking_date, t.amount, t.counterparty_iban, a.iban AS account_iban
+     FROM normalized_transactions t JOIN accounts a ON a.id = t.account_id
+     WHERE t.id = ? AND t.booking_date IS NOT NULL AND ${isCanonicalGroupRow('t')} AND NOT ${isLinked('t')}`
+  );
+  const candidatesOf = db.prepare(
+    `SELECT c.id, c.account_id, c.counterparty_iban, a.iban AS account_iban,
+            ABS(julianday(substr(c.booking_date, 1, 10)) - julianday(substr(?, 1, 10))) AS dist
+     FROM normalized_transactions c JOIN accounts a ON a.id = c.account_id
+     WHERE c.account_id != ? AND c.amount = ?
+       AND c.booking_date >= ? AND c.booking_date < ?
+       AND ABS(julianday(substr(c.booking_date, 1, 10)) - julianday(substr(?, 1, 10))) <= 2
+       AND ${isCanonicalGroupRow('c')} AND NOT ${isLinked('c')}
+     ORDER BY dist ASC, ${canonicalGroupOrder('c')}`
+  );
+  const carriesIbansStmt = db.prepare(
+    'SELECT 1 FROM normalized_transactions WHERE account_id = ? AND counterparty_iban IS NOT NULL LIMIT 1'
+  );
+  const carries = new Map<string, boolean>();
+  const carriesIbans = (accountId: string) => {
+    if (!carries.has(accountId)) carries.set(accountId, carriesIbansStmt.get(accountId) !== undefined);
+    return carries.get(accountId)!;
+  };
+  const insertLink = db.prepare(
+    'INSERT INTO transfer_links (id, created_at, from_transaction_id, to_transaction_id, confidence) VALUES (?, ?, ?, ?, ?)'
+  );
+
   for (const id of ids) {
-    const row = db
-      .prepare(
-        'SELECT id, account_id, booking_date, amount FROM normalized_transactions WHERE id = ?'
-      )
-      .get(id) as any;
-    if (!row) continue;
-    const opposite = db
-      .prepare(
-        `SELECT id, booking_date\n         FROM normalized_transactions\n         WHERE account_id != ?\n           AND amount = ?\n           AND ABS(julianday(booking_date) - julianday(?)) <= 2\n         LIMIT 1`
-      )
-      .get(row.account_id, -row.amount, row.booking_date) as any;
-    if (!opposite) continue;
+    const row = sideOf.get(id) as (LinkSide & { booking_date: string; amount: number }) | undefined;
+    if (!row || row.amount === 0) continue;
+    // An export naming the account's own IBAN as the other party says nothing about it.
+    const ownIbanAsNone = (s: LinkSide) =>
+      normIban(s.counterparty_iban) === normIban(s.account_iban) ? { ...s, counterparty_iban: null } : s;
+    Object.assign(row, ownIbanAsNone(row));
+    // Plain string bounds (booking_date is an ISO timestamp) keep its index usable.
+    const day = row.booking_date.slice(0, 10);
+    const candidates = (
+      candidatesOf.all(row.booking_date, row.account_id, -row.amount, daysBefore(day, 2), daysBefore(day, -3), row.booking_date) as LinkSide[]
+    ).map(ownIbanAsNone);
 
-    const existing = db
-      .prepare(
-        'SELECT id FROM transfer_links WHERE (from_transaction_id = ? AND to_transaction_id = ?) OR (from_transaction_id = ? AND to_transaction_id = ?)'
-      )
-      .get(row.id, opposite.id, opposite.id, row.id) as any;
-    if (existing) continue;
+    const pointsAt = (from: LinkSide, to: LinkSide) =>
+      from.counterparty_iban !== null && normIban(from.counterparty_iban) === normIban(to.account_iban);
+    const pointsElsewhere = (from: LinkSide, to: LinkSide) =>
+      from.counterparty_iban !== null && normIban(from.counterparty_iban) !== normIban(to.account_iban);
 
-    const fromId = row.amount < 0 ? row.id : opposite.id;
-    const toId = row.amount < 0 ? opposite.id : row.id;
-    db.prepare(
-      'INSERT INTO transfer_links (id, created_at, from_transaction_id, to_transaction_id, confidence) VALUES (?, ?, ?, ?, ?)'
-    ).run(createId(), new Date().toISOString(), fromId, toId, 90);
+    const proven = candidates.filter((c) => pointsAt(row, c) || pointsAt(c, row));
+    // An account without an IBAN (a credit card) cannot be named by one. The
+    // one transfer it takes part in is a repayment: money into the card from
+    // an account that pays it like a bill, to the issuer's IBAN. A purchase
+    // on the card, or a card-less purchase on checking, is not one.
+    const isRepayment = (into: LinkSide & { amount?: number }, from: LinkSide & { amount?: number }) =>
+      !into.account_iban &&
+      !!from.account_iban &&
+      (into.amount ?? 0) > 0 &&
+      (!carriesIbans(from.account_id) || from.counterparty_iban !== null);
+    const plausible = candidates.filter((c) => {
+      const cand = { ...c, amount: -row.amount };
+      if (!row.account_iban || !c.account_iban) return isRepayment(row, cand) || isRepayment(cand, row);
+      return (
+        !pointsElsewhere(row, c) &&
+        !pointsElsewhere(c, row) &&
+        !carriesIbans(row.account_id) &&
+        !carriesIbans(c.account_id)
+      );
+    });
+
+    let match: LinkSide | undefined;
+    let confidence: number;
+    if (proven.length > 0) {
+      match = proven[0];
+      confidence = 95;
+    } else {
+      match = plausible[0];
+      confidence = 70;
+      if (match && plausible.some((c) => c.dist === match!.dist && c.account_id !== match!.account_id)) continue;
+    }
+    if (!match) continue;
+
+    const fromId = row.amount < 0 ? row.id : match.id;
+    const toId = row.amount < 0 ? match.id : row.id;
+    insertLink.run(createId(), new Date().toISOString(), fromId, toId, confidence);
   }
 }
 
@@ -318,46 +417,50 @@ export async function processImport(options: {
     .get(overlapKey) as { id: string; row_count: number } | undefined;
 
   const now = new Date().toISOString();
-  const accountId = ensureAccount(accountName, accountIban, now);
-
   const importSessionId = createId();
-  db.prepare(
-    'INSERT INTO import_sessions (id, created_at, source_bank, format, file_checksum, row_count, overlap_key) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(importSessionId, now, sourceBank, format, checksum, rowCount, overlapKey);
-
-  logEvent({
-    type: 'import.start',
-    scope: importSessionId,
-    message: `Import ${format} ${sourceBank} rows=${rowCount}`,
-    payload: { checksum, rowCount, overlapDetected: Boolean(overlapRow) },
-  });
-
+  let accountId = '';
   let normalizedCount = 0;
   let skippedCount = 0;
   const insertedIds: string[] = [];
 
-  const insertRaw = db.prepare(
-    'INSERT INTO raw_transactions (id, created_at, import_session_id, data, booking_date, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  );
-
-  const insertNormalized = db.prepare(
-    'INSERT INTO normalized_transactions (id, created_at, raw_transaction_id, import_session_id, account_id, booking_date, transaction_date, amount, currency, counterparty_name, description, counterparty_iban, transaction_group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  const insertBalance = db.prepare(
-    'INSERT OR REPLACE INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES (?, ?, ?, ?, ?, ?)'
-  );
-
-  // A day's snapshot is its closing balance: the Saldo of the day's last row
-  // in time. Nordea lists newest first, so then that is the day's first row in
-  // the file. An export whose dates ascend is read the other way round.
-  const bookedDates = records
-    .map((r) => parseDate(getField(r, 'Kirjauspäivä')))
-    .filter((d): d is string => d !== null);
-  const newestFirst = bookedDates.length === 0 || bookedDates[0] >= bookedDates[bookedDates.length - 1];
-  const closingBalances = new Map<string, { saldo: number; currency: string }>();
-
+  // One transaction up to COMMIT: a failed or interrupted import leaves no
+  // account, session or rows behind, and never rows that are not yet grouped
+  // with their duplicates or linked as transfers.
   db.exec('BEGIN');
   try {
+    accountId = ensureAccount(accountName, accountIban, now);
+
+    db.prepare(
+      'INSERT INTO import_sessions (id, created_at, source_bank, format, file_checksum, row_count, overlap_key) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(importSessionId, now, sourceBank, format, checksum, rowCount, overlapKey);
+
+    logEvent({
+      type: 'import.start',
+      scope: importSessionId,
+      message: `Import ${format} ${sourceBank} rows=${rowCount}`,
+      payload: { checksum, rowCount, overlapDetected: Boolean(overlapRow) },
+    });
+
+    const insertRaw = db.prepare(
+      'INSERT INTO raw_transactions (id, created_at, import_session_id, data, booking_date, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
+
+    const insertNormalized = db.prepare(
+      'INSERT INTO normalized_transactions (id, created_at, raw_transaction_id, import_session_id, account_id, booking_date, transaction_date, amount, currency, counterparty_name, description, counterparty_iban, transaction_group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    const insertBalance = db.prepare(
+      'INSERT OR REPLACE INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+
+    // A day's snapshot is its closing balance: the Saldo of the day's last row
+    // in time. Nordea lists newest first, so then that is the day's first row in
+    // the file. An export whose dates ascend is read the other way round.
+    const bookedDates = records
+      .map((r) => parseDate(getField(r, 'Kirjauspäivä')))
+      .filter((d): d is string => d !== null);
+    const newestFirst = bookedDates.length === 0 || bookedDates[0] >= bookedDates[bookedDates.length - 1];
+    const closingBalances = new Map<string, { saldo: number; currency: string }>();
+
     for (const record of records) {
       const bookingDate = parseDate(getField(record, 'Kirjauspäivä'));
       const amount = parseAmount(getField(record, 'Määrä'));
@@ -441,16 +544,16 @@ export async function processImport(options: {
       insertBalance.run(createId(), now, accountId, day, saldo, currency);
     }
 
+    // Post-processing: group duplicates, then link transfers between their canonical rows.
+    dedupeInserted(insertedIds);
+    linkTransfers(insertedIds);
+
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     logEvent({ type: 'import.error', scope: importSessionId, message: 'Import failed', payload: { error: String(error) } });
     throw error;
   }
-
-  // Post-processing: dedupe and transfer linking
-  dedupeInserted(insertedIds);
-  linkTransfers(insertedIds);
 
   // Hook patterns and briefing into import pipeline
   let briefingSessionId: string | undefined;
