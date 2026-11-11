@@ -500,13 +500,18 @@ export function previewImport(file: File, as?: { accountId: string } | 'new'): P
   return postUpload('/imports/nordea/preview', file, fields);
 }
 
-/** Imports `file` (CSV or XLSX by extension) into the chosen account. */
-export function importFile(file: File, choice: ImportChoice): Promise<ImportResult> {
+/**
+ * Imports `file` (CSV or XLSX by extension) into the chosen account.
+ * `allowIbanMismatch`: the user confirmed a target although the file's own
+ * IBAN belongs to another account (409 otherwise).
+ */
+export function importFile(file: File, choice: ImportChoice, opts: { allowIbanMismatch?: boolean } = {}): Promise<ImportResult> {
   const format = file.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : 'csv';
   const fields: Record<string, string> =
     'accountId' in choice
       ? { accountId: choice.accountId }
       : { newAccountName: choice.newAccount.name, newAccountSubtype: choice.newAccount.subtype };
+  if (opts.allowIbanMismatch) fields.allowIbanMismatch = '1';
   return postUpload(`/imports/nordea/${format}`, file, fields);
 }
 

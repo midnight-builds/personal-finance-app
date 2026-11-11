@@ -128,3 +128,47 @@ test('import dialog: no guess means the user must choose; a new account is sent 
   await dialog.getByRole('button', { name: 'Sulje', exact: true }).last().click();
   await expect(dialog).toBeHidden();
 });
+
+test('import dialog: an IBAN that belongs elsewhere needs an explicit yes; a failed preview blocks the import', async ({ page }) => {
+  await stubBase(page);
+  const CHECKING = { id: 'chk', name: 'Käyttötili', iban: 'FI1111111111111111', subtype: 'checking', firstDate: '2026-09-01', lastDate: '2026-09-30', transactionCount: 40 };
+  const imports: Record<string, string>[] = [];
+  await page.route('**/imports/nordea/preview', (route) => {
+    const fields = fieldsOf(route.request());
+    if (fields.accountId === 'card-1') return route.fulfill(json({ error: 'internal_error' }, 500));
+    return route.fulfill(
+      json({
+        file: { ...fileInfo('Tili.csv'), ownIban: 'FI2222222222222222', ownIbanAccount: null },
+        accounts: [CHECKING, CARD],
+        guess: fields.accountId ? null : { accountId: null, reason: 'none', newAccount: { name: 'Tili 2222', subtype: 'checking' } },
+        analysis: analysis({ accountId: fields.accountId ?? null, ibanMismatch: fields.accountId === 'chk' }),
+      })
+    );
+  });
+  await page.route('**/imports/nordea/csv', (route) => {
+    imports.push(fieldsOf(route.request()));
+    return route.fulfill(
+      json({ importSessionId: 's', accountId: 'chk', normalizedCount: 3, rawCount: 3, skippedCount: 0, overlapDetected: false, alreadyImportedCount: 0, duplicateCount: 0, transferCount: 0 })
+    );
+  });
+
+  await page.goto('/');
+  await page.locator('.hero input[type=file]').setInputFiles([csv('Tili.csv')]);
+  const dialog = page.getByRole('dialog', { name: 'Tuo tiliotteet' });
+  const confirm = dialog.getByRole('button', { name: 'Tuo tiedosto' });
+
+  // A failing preview: no numbers, an error, nothing to confirm.
+  await dialog.getByLabel('Kohdetili').selectOption('card-1');
+  await expect(dialog.getByRole('alert')).toBeVisible();
+  await expect(dialog.getByText('tapahtumaa on jo tuotu')).toHaveCount(0);
+  await expect(confirm).toBeDisabled();
+
+  // The checking account has another IBAN: the checkbox gates the import.
+  await dialog.getByLabel('Kohdetili').selectOption('chk');
+  await expect(dialog.getByText('Tiedoston IBAN (FI2222222222222222) on eri kuin tilin Käyttötili', { exact: false })).toBeVisible();
+  await expect(confirm).toBeDisabled();
+  await dialog.getByLabel('Tuo silti tälle tilille').check();
+  await confirm.click();
+  await expect(dialog.getByText('Valmis')).toBeVisible();
+  expect(imports).toEqual([{ accountId: 'chk', allowIbanMismatch: '1' }]);
+});

@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AccountSubtype, ImportPreview, ImportPreviewAccount } from '@finance-app/shared';
+import type {
+  AccountSubtype,
+  DataGap,
+  ImportPreviewAccount,
+  ImportPreviewAnalysis,
+  ImportPreviewFile,
+  ImportPreviewGuess,
+} from '@finance-app/shared';
 import { ImportRequestError, importFile, previewImport } from '../api/client';
 import type { ImportChoice, ImportResult } from '../api/client';
 
@@ -43,6 +50,9 @@ function errorText(err: unknown) {
         return 'Valittua tiliä ei enää löydy — valitse tili uudelleen.';
       case 'account_required':
         return 'Tiedostosta ei tunnistettu tiliä — valitse tili.';
+      case 'iban_mismatch':
+      case 'iban_in_use':
+        return 'Tiedoston IBAN kuuluu toiselle tilille — vahvista valinta ruksilla, jos tili on silti oikea.';
       case 'invalid_request':
         return 'Tiedot ovat puutteelliset — tarkista tilin nimi ja tyyppi.';
     }
@@ -62,13 +72,17 @@ type StepProps = {
 
 /** One file of the queue: preview, choice of account, confirm. */
 function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
-  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  // From the first preview: the file, the accounts and the guess. Later
+  // previews name the target, so they carry no guess; only the analysis changes.
+  const [base, setBase] = useState<{ file: ImportPreviewFile; accounts: ImportPreviewAccount[]; guess: ImportPreviewGuess } | null>(null);
+  const [analysis, setAnalysis] = useState<ImportPreviewAnalysis | null>(null);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState('');
   const [choice, setChoice] = useState<Choice>(null);
   const [newName, setNewName] = useState('');
   const [newSubtype, setNewSubtype] = useState<AccountSubtype>('checking');
+  const [ibanConfirmed, setIbanConfirmed] = useState(false);
   // Only the latest preview request may update the view.
   const requestSeq = useRef(0);
 
@@ -77,13 +91,15 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
     return previewImport(file, as).then(
       (p) => {
         if (seq !== requestSeq.current) return null;
-        setPreview(p);
+        setAnalysis(p.analysis);
         setError('');
         setLoading(false);
         return p;
       },
       (err) => {
         if (seq !== requestSeq.current) return null;
+        // No numbers for this choice: nothing to confirm until a preview succeeds.
+        setAnalysis(null);
         setError(errorText(err));
         setLoading(false);
         return null;
@@ -93,7 +109,10 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
 
   useEffect(() => {
     requestPreview().then((p) => {
-      if (!p) return;
+      if (!p?.guess) return;
+      setBase({ file: p.file, accounts: p.accounts, guess: p.guess });
+      // The analysis is for the guess, or for a new account when there is none:
+      // shown only once the user has a choice.
       setChoice(p.guess.accountId ? { kind: 'existing', accountId: p.guess.accountId } : null);
       setNewName(p.guess.newAccount.name);
       setNewSubtype(p.guess.newAccount.subtype);
@@ -103,6 +122,9 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
   }, []);
 
   const onSelect = (value: string) => {
+    setIbanConfirmed(false);
+    setAnalysis(null);
+    setError('');
     if (value === '') {
       setChoice(null);
       return;
@@ -117,35 +139,9 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
     }
   };
 
-  const confirm = async () => {
-    if (!preview || !choice) return;
-    const target: ImportChoice =
-      choice.kind === 'existing'
-        ? { accountId: choice.accountId }
-        : { newAccount: { name: newName.trim(), subtype: newSubtype } };
-    const targetName =
-      choice.kind === 'existing' ? preview.accounts.find((a) => a.id === choice.accountId)?.name ?? '' : newName.trim();
-    setImporting(true);
-    onBusyChange(true);
-    setError('');
-    try {
-      const result = await importFile(file, target);
-      const parts = [`${result.normalizedCount} riviä tilille ${targetName}`];
-      if (result.duplicateCount) parts.push(`${result.duplicateCount} oli jo tuotu`);
-      if (result.transferCount) parts.push(`${result.transferCount} siirtoa`);
-      if (result.skippedCount) parts.push(`${result.skippedCount} ohitettu`);
-      onDone({ filename: file.name, status: 'imported', message: `Tuotu: ${parts.join(', ')}` }, result);
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setImporting(false);
-      onBusyChange(false);
-    }
-  };
-
   const skip = () => onDone({ filename: file.name, status: 'skipped', message: 'Ohitettu' });
 
-  if (!preview) {
+  if (!base) {
     return (
       <div className="import-step" aria-busy={loading}>
         <h3>{file.name}</h3>
@@ -160,35 +156,83 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
     );
   }
 
-  const { file: f, guess, accounts, analysis: a } = preview;
+  const { file: f, guess, accounts } = base;
+  const a = analysis;
   const guessedName = accounts.find((acc) => acc.id === guess.accountId)?.name;
   const target = choice?.kind === 'existing' ? accounts.find((acc) => acc.id === choice.accountId) : undefined;
   const selectValue = choice === null ? '' : choice.kind === 'new' ? 'new' : choice.accountId;
-  const canConfirm = !!choice && !loading && !importing && (choice.kind === 'existing' || newName.trim() !== '');
+
+  // The file's own IBAN points elsewhere: importing needs an explicit yes.
+  let ibanWarning = '';
+  if (choice?.kind === 'existing' && a?.ibanMismatch && target) {
+    ibanWarning = `Tiedoston IBAN (${f.ownIban}) on eri kuin tilin ${target.name} IBAN (${target.iban}).`;
+  } else if (choice?.kind === 'new' && f.ownIbanAccount) {
+    ibanWarning = `Tiedoston IBAN (${f.ownIban}) kuuluu jo tilille ${f.ownIbanAccount.name}.`;
+  }
+
+  const canConfirm =
+    !!choice &&
+    !!a &&
+    !loading &&
+    !importing &&
+    (choice.kind === 'existing' || newName.trim() !== '') &&
+    (!ibanWarning || ibanConfirmed);
+
+  const confirm = async () => {
+    if (!choice || !canConfirm) return;
+    const target: ImportChoice =
+      choice.kind === 'existing'
+        ? { accountId: choice.accountId }
+        : { newAccount: { name: newName.trim(), subtype: newSubtype } };
+    const targetName =
+      choice.kind === 'existing' ? accounts.find((acc) => acc.id === choice.accountId)?.name ?? '' : newName.trim();
+    setImporting(true);
+    onBusyChange(true);
+    setError('');
+    try {
+      const result = await importFile(file, target, { allowIbanMismatch: ibanConfirmed });
+      const parts = [`${result.normalizedCount} riviä tilille ${targetName}`];
+      if (result.duplicateCount) parts.push(`${result.duplicateCount} oli jo tuotu`);
+      if (result.transferCount) parts.push(`${result.transferCount} siirtoa`);
+      if (result.skippedCount) parts.push(`${result.skippedCount} ohitettu`);
+      onDone({ filename: file.name, status: 'imported', message: `Tuotu: ${parts.join(', ')}` }, result);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setImporting(false);
+      onBusyChange(false);
+    }
+  };
 
   let guessText: string;
   if (guess.reason === 'iban') guessText = `Tunnistettu IBANista: ${guessedName}`;
   else if (guess.reason === 'overlap') guessText = `${guess.overlapCount} päällekkäistä tapahtumaa tilin ${guessedName} kanssa`;
   else guessText = 'Tiliä ei tunnistettu — valitse tili';
 
+  const notes: string[] = [];
   const warnings: string[] = [];
-  if (a.ibanMismatch && target) warnings.push(`Tiedoston IBAN (${f.ownIban}) on eri kuin tilin ${target.name} IBAN (${target.iban}).`);
-  if (a.gapBefore) {
-    warnings.push(`${a.gapBefore.days} päivää puuttuu ennen tätä tiedostoa (${fiDate(a.gapBefore.from)}–${fiDate(a.gapBefore.to)}).`);
-  }
-  if (a.gapAfter) {
-    warnings.push(
-      `${a.gapAfter.days} päivää puuttuu tämän tiedoston ja tilin aiempien tietojen välistä (${fiDate(a.gapAfter.from)}–${fiDate(a.gapAfter.to)}).`
-    );
-  }
-  for (const b of a.balanceBreaks) {
-    warnings.push(`Saldo ei täsmää ${fiDayMonth(b.date)}: puuttuu ${eur.format(b.difference)} (odotettu ${eur.format(b.expected)}, tiedostossa ${eur.format(b.actual)}).`);
-  }
-  if (a.openingMismatch) {
-    const o = a.openingMismatch;
-    warnings.push(
-      `Tiedoston alkusaldo ${eur.format(o.actual)} ei täsmää tilin saldoon ${eur.format(o.expected)} ennen ${fiDate(o.date)} — ero ${eur.format(o.difference)}.`
-    );
+  if (a) {
+    const range = (g: DataGap) => `${fiDate(g.from)}–${fiDate(g.to)}`;
+    const gapText = (g: DataGap, where: string) => {
+      if (g.balance === 'matches') {
+        notes.push(`${g.days} päivää ilman tapahtumia ${where} (${range(g)}), saldo täsmää — mitään ei puutu.`);
+      } else if (g.balance === 'differs') {
+        warnings.push(`${g.days} päivää puuttuu ${where} (${range(g)}): saldoissa on eroa ${eur.format(g.difference ?? 0)}.`);
+      } else {
+        warnings.push(`${g.days} päivää puuttuu ${where} (${range(g)}).`);
+      }
+    };
+    if (a.gapBefore) gapText(a.gapBefore, 'ennen tätä tiedostoa');
+    if (a.gapAfter) gapText(a.gapAfter, 'tämän tiedoston ja tilin aiempien tietojen välistä');
+    for (const b of a.balanceBreaks) {
+      warnings.push(`Saldo ei täsmää ${fiDayMonth(b.date)}: puuttuu ${eur.format(b.difference)} (odotettu ${eur.format(b.expected)}, tiedostossa ${eur.format(b.actual)}).`);
+    }
+    if (a.openingMismatch) {
+      const o = a.openingMismatch;
+      warnings.push(
+        `Tiedoston alkusaldo ${eur.format(o.actual)} ei täsmää tilin saldoon ${eur.format(o.expected)} ennen ${fiDate(o.date)} — ero ${eur.format(o.difference)}.`
+      );
+    }
   }
 
   return (
@@ -243,11 +287,12 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
           <p className="muted">Valitse kohdetili, niin näet päällekkäisyydet ja aukot.</p>
         ) : loading ? (
           <p className="muted">Lasketaan…</p>
-        ) : (
+        ) : a ? (
           <>
             <ul className="import-facts">
               <li>
                 <strong>{a.duplicates}</strong> tapahtumaa on jo tuotu (päällekkäin), <strong>{a.newRows}</strong> uutta
+                {f.pendingCount > 0 && ` · ${f.pendingCount} varausta erikseen`}
                 {a.overlap && ` · päällekkäin ${fiDate(a.overlap.from)}–${fiDate(a.overlap.to)}`}
               </li>
               {a.transfers > 0 && <li>{a.transfers} siirtoa omien tilien välillä tunnistettu</li>}
@@ -255,6 +300,9 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
                 <li key={q.from}>
                   Hiljainen jakso {fiDate(q.from)}–{fiDate(q.to)}: {q.days} päivää ilman tapahtumia
                 </li>
+              ))}
+              {notes.map((n) => (
+                <li key={n}>{n}</li>
               ))}
               {!f.hasRunningBalance && <li className="muted">Tiedostossa ei ole saldoa, joten puuttuvia rivejä ei voi tarkistaa saldosta.</li>}
             </ul>
@@ -266,8 +314,23 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
               </ul>
             )}
           </>
-        )}
+        ) : null}
       </div>
+
+      {ibanWarning && (
+        <div className="import-warnings import-iban-warning">
+          <p>{ibanWarning}</p>
+          <label className="import-checkbox">
+            <input
+              type="checkbox"
+              checked={ibanConfirmed}
+              onChange={(e) => setIbanConfirmed(e.target.checked)}
+              disabled={importing}
+            />
+            Tuo silti tälle tilille
+          </label>
+        </div>
+      )}
 
       {error && <p className="import-error" role="alert">{error}</p>}
 

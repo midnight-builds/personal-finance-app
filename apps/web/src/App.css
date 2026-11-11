@@ -982,3 +982,17 @@ label {
   gap: 10px;
   flex-wrap: wrap;
 }
+
+.import-iban-warning {
+  display: grid;
+  gap: 8px;
+  padding-left: 12px;
+}
+
+.import-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  font-weight: 600;
+}
