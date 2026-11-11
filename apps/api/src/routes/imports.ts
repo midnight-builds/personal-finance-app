@@ -66,6 +66,7 @@ export const importRoutes: FastifyPluginAsync = async (app) => {
         sourceBank: 'Nordea',
         format: format.toUpperCase(),
         target,
+        allowIbanMismatch: importTargetFieldsSchema.parse(upload.fields).allowIbanMismatch === '1',
       });
     });
   }

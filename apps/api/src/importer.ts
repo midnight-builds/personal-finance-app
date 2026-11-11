@@ -200,7 +200,7 @@ function looksLikeIban(value: string | null | undefined): boolean {
   return /^FI[0-9 ]{6,}$/i.test(value.trim());
 }
 
-function chooseCounterparty(record: Record<string, unknown>, amount: number): { name: string | null; iban: string | null } {
+export function chooseCounterparty(record: Record<string, unknown>, amount: number): { name: string | null; iban: string | null } {
   const nameFields = [
     getField(record, 'Nimi'),
     getField(record, 'Otsikko'),
@@ -430,6 +430,12 @@ export type ImportOptions = {
   accountIban?: string;
   /** The user's choice: an existing account (never renamed or re-IBANed), or a new one. */
   target?: ImportTarget;
+  /**
+   * The user confirmed a target although the file's own IBAN belongs to
+   * another account (existing target with a different IBAN, or a new account
+   * while the IBAN is already taken). Without it those are refused.
+   */
+  allowIbanMismatch?: boolean;
 };
 
 /** What the import's transactional part did, or in a dry run would do. */
@@ -479,6 +485,10 @@ function planAccount(options: ImportOptions): AccountPlan {
       | { id: string; iban: string | null }
       | undefined;
     if (!row) throw new DomainError('account_not_found', 404);
+    const own = inferAccount(options.records, options.filename).accountIban;
+    if (!options.allowIbanMismatch && own && row.iban && compactIban(row.iban) !== own) {
+      throw DomainError.conflict('iban_mismatch');
+    }
     return { kind: 'existing', accountId: row.id, iban: row.iban };
   }
   const inferred = inferAccount(options.records, options.filename);
@@ -486,7 +496,9 @@ function planAccount(options: ImportOptions): AccountPlan {
     const name = target.newAccount.name.trim();
     if (!name) throw new DomainError('account_name_required', 400);
     if (accountNameTaken(name)) throw DomainError.conflict('account_name_exists');
-    const iban = inferred.accountIban && !accountIdByIban(inferred.accountIban) ? inferred.accountIban : null;
+    const holder = inferred.accountIban ? accountIdByIban(inferred.accountIban) : null;
+    if (holder && !options.allowIbanMismatch) throw DomainError.conflict('iban_in_use');
+    const iban = inferred.accountIban && !holder ? inferred.accountIban : null;
     return { kind: 'new', name, subtype: target.newAccount.subtype, iban };
   }
   const accountIban = options.accountIban ?? inferred.accountIban;

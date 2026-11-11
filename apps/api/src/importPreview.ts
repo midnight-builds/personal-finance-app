@@ -1,13 +1,15 @@
 // Import preview: what an upload would do, before anything is written.
 //
-// Counts that depend on the database (duplicates, transfers) come from a dry
-// run of the real import pipeline (`dryRunImport`), so they are exactly what
-// the import then does. Checks of the file itself (gaps, quiet periods, the
+// Counts that depend on the database (duplicates, transfers) come from one dry
+// run of the real import pipeline (`dryRunImport`) for the target, so they are
+// exactly what the import then does. Guessing the target uses plain reads. Checks of the file itself (gaps, quiet periods, the
 // running balance) are pure functions over the parsed rows plus Ledger reads.
 import {
+  GAP_WITHOUT_BALANCE_MIN_DAYS,
   QUIET_PERIOD_MIN_DAYS,
   type AccountSubtype,
   type BalanceBreak,
+  type DataGap,
   type DayRange,
   type ImportPreview,
   type ImportPreviewAccount,
@@ -17,21 +19,21 @@ import {
 } from '@finance-app/shared';
 import { db } from './db.js';
 import { DomainError } from './http/errors.js';
-import { accountBalances, daysBefore } from './ledger.js';
+import { accountBalances, daysBefore, ledgerEntries } from './ledger.js';
 import {
   accountIdByIban,
   accountNameTaken,
+  chooseCounterparty,
   dryRunImport,
   getField,
   inferAccount,
   isNewestFirst,
   parseAmount,
   parseDate,
-  type ImportTarget,
 } from './importer.js';
 import { isCanonicalGroupRow } from './sql/transactions.js';
 
-type BookedRow = { day: string; amount: number; saldo: number | null };
+type BookedRow = { day: string; amount: number; saldo: number | null; counterparty: string | null };
 
 const cents = (n: number) => Math.round(n * 100);
 const euros = (c: number) => c / 100;
@@ -55,7 +57,12 @@ export function bookedRowsInTimeOrder(records: Record<string, unknown>[]): Booke
     const date = parseDate(getField(record, 'Kirjauspäivä'));
     const amount = parseAmount(getField(record, 'Määrä'));
     if (!date || amount === null) continue;
-    rows.push({ day: date.slice(0, 10), amount, saldo: parseAmount(getField(record, 'Saldo')) });
+    rows.push({
+      day: date.slice(0, 10),
+      amount,
+      saldo: parseAmount(getField(record, 'Saldo')),
+      counterparty: chooseCounterparty(record, amount).name || null,
+    });
   }
   if (isNewestFirst(records)) rows.reverse();
   // Stable: a file that is not strictly ordered still reads day by day.
@@ -78,6 +85,12 @@ function suggestSubtype(filename: string, ownIban: string | null): AccountSubtyp
   if (!ownIban) return 'credit_card';
   if (/s[äa][äa]st[öo]|savings/i.test(filename)) return 'savings';
   return 'checking';
+}
+
+function accountRef(id: string | null): { id: string; name: string } | null {
+  if (!id) return null;
+  const row = db.prepare('SELECT id, name FROM accounts WHERE id = ?').get(id) as { id: string; name: string } | undefined;
+  return row ?? null;
 }
 
 export function summarizeFile(records: Record<string, unknown>[], filename: string): ImportPreviewFile {
@@ -104,6 +117,7 @@ export function summarizeFile(records: Record<string, unknown>[], filename: stri
     firstDate: days[0] ?? null,
     lastDate: days[days.length - 1] ?? null,
     ownIban,
+    ownIbanAccount: ownIban ? accountRef(accountIdByIban(ownIban)) : null,
     suggestedName: suggestName(filename, ownIban),
     hasRunningBalance,
   };
@@ -138,55 +152,143 @@ export function quietPeriods(rows: BookedRow[], minDays = QUIET_PERIOD_MIN_DAYS)
   return out;
 }
 
+type Day = { day: string; rows: BookedRow[]; sum: number };
+
+function byDay(rows: BookedRow[]): Day[] {
+  const days: Day[] = [];
+  for (const r of rows) {
+    const last = days[days.length - 1];
+    if (last?.day === r.day) {
+      last.rows.push(r);
+      last.sum += cents(r.amount);
+    } else days.push({ day: r.day, rows: [r], sum: cents(r.amount) });
+  }
+  return days;
+}
+
+/** The one value of `values` not paired with a value of `others` (multisets), if exactly one. */
+function unpaired(values: number[], others: number[]): number | null {
+  const left = new Map<number, number>();
+  for (const o of others) left.set(o, (left.get(o) ?? 0) + 1);
+  const rest = values.filter((v) => {
+    const n = left.get(v) ?? 0;
+    if (n > 0) left.set(v, n - 1);
+    return n === 0;
+  });
+  return rest.length === 1 ? rest[0] : null;
+}
+
+/**
+ * A day's balance before and after its rows (cents), whatever their order in
+ * the file. The rows form a chain: each row's balance before it (Saldo −
+ * amount) is another row's Saldo, except the day's opening; each Saldo is
+ * another row's balance before, except the day's close. Falls back to the
+ * file order when the chain is ambiguous or broken.
+ */
+function dayEnds(d: Day): { opening: number; close: number } {
+  const saldos = d.rows.map((r) => cents(r.saldo!));
+  const before = d.rows.map((r) => cents(r.saldo!) - cents(r.amount));
+  return {
+    opening: unpaired(before, saldos) ?? before[0],
+    close: unpaired(saldos, before) ?? saldos[saldos.length - 1],
+  };
+}
+
+const hasSaldo = (d: Day) => d.rows.every((r) => r.saldo !== null);
+
+/** The file's balance before its first booked row (cents), or null without Saldo. */
+export function fileOpening(rows: BookedRow[]): number | null {
+  const first = byDay(rows)[0];
+  return first && hasSaldo(first) ? dayEnds(first).opening : null;
+}
+
+/** The file's balance after its last booked row (cents), or null without Saldo. */
+export function fileClosing(rows: BookedRow[]): number | null {
+  const days = byDay(rows);
+  const last = days[days.length - 1];
+  return last && hasSaldo(last) ? dayEnds(last).close : null;
+}
+
 /**
  * Nordea's Saldo is a running balance. Day by day, the previous day's closing
- * balance plus the day's amounts must give the day's closing balance (its
- * last row's Saldo); a difference means rows are missing in between. The
- * first day starts from the balance implied by its first row.
+ * balance plus the day's amounts must be the Saldo of one of the day's rows
+ * (which one depends on the order within the day, which exports do not
+ * guarantee). Otherwise rows are missing in between; the check then goes on
+ * from the day's own closing balance, so one gap is reported once.
  */
 export function balanceBreaks(rows: BookedRow[]): BalanceBreak[] {
-  const withSaldo = rows.filter((r) => r.saldo !== null);
-  if (withSaldo.length === 0 || withSaldo.length !== rows.length) return [];
+  if (rows.length === 0 || rows.some((r) => r.saldo === null)) return [];
+  const days = byDay(rows);
   const out: BalanceBreak[] = [];
-  let close = cents(rows[0].saldo! - rows[0].amount);
-  for (let i = 0; i < rows.length; ) {
-    const day = rows[i].day;
-    let sum = 0;
-    let last = rows[i];
-    for (; i < rows.length && rows[i].day === day; i++) {
-      sum += cents(rows[i].amount);
-      last = rows[i];
+  let close = dayEnds(days[0]).opening;
+  for (const d of days) {
+    const expected = close + d.sum;
+    if (d.rows.some((r) => cents(r.saldo!) === expected)) {
+      close = expected;
+      continue;
     }
-    const expected = close + sum;
-    const actual = cents(last.saldo!);
-    if (expected !== actual) out.push({ date: day, expected: euros(expected), actual: euros(actual), difference: euros(actual - expected) });
+    const actual = dayEnds(d).close;
+    out.push({ date: d.day, expected: euros(expected), actual: euros(actual), difference: euros(actual - expected) });
     close = actual;
   }
   return out;
 }
 
+/** The account's balance at the end of `day` (cents), only if a snapshot is from that very day. */
+function closingOn(accountId: string, day: string): number | null {
+  const b = accountBalances(day).find((x) => x.accountId === accountId);
+  return b && b.balance !== null && b.date === day ? cents(b.balance) : null;
+}
+
+/** The account's balance before its rows of `day` (cents). */
+function openingOn(accountId: string, day: string): number | null {
+  const close = closingOn(accountId, day);
+  if (close === null) return null;
+  const sum = ledgerEntries({ accounts: [accountId], from: day, to: day, includeTransfers: true }).reduce(
+    (s, e) => s + cents(e.amount),
+    0
+  );
+  return close - sum;
+}
+
+/**
+ * Days without data between `from` and `to`. When both balances are known,
+ * they tell whether rows are missing or the days were merely quiet.
+ */
+function dataGap(from: string, to: string, balanceBefore: number | null, balanceAfter: number | null): DataGap | null {
+  const range = between(from, to);
+  if (!range) return null;
+  if (balanceBefore !== null && balanceAfter !== null) {
+    const difference = balanceAfter - balanceBefore;
+    return { ...range, balance: difference === 0 ? 'matches' : 'differs', difference: difference === 0 ? null : euros(difference) };
+  }
+  return range.days >= GAP_WITHOUT_BALANCE_MIN_DAYS ? { ...range, balance: 'unknown', difference: null } : null;
+}
+
 function analyze(
-  records: Record<string, unknown>[],
+  rows: BookedRow[],
   file: ImportPreviewFile,
   account: ImportPreviewAccount | null,
-  dry: { normalizedCount: number; duplicateCount: number; overlap: { from: string; to: string } | null; transferCount: number }
+  dry: { duplicateCount: number; overlap: { from: string; to: string } | null; transferCount: number }
 ): ImportPreviewAnalysis {
-  const rows = bookedRowsInTimeOrder(records);
-  let gapBefore: DayRange | null = null;
-  let gapAfter: DayRange | null = null;
+  let gapBefore: DataGap | null = null;
+  let gapAfter: DataGap | null = null;
   let openingMismatch: ImportPreviewAnalysis['openingMismatch'] = null;
+  const opening = fileOpening(rows);
 
   if (account?.firstDate && account.lastDate && file.firstDate && file.lastDate) {
-    if (account.lastDate < file.firstDate) gapBefore = between(account.lastDate, file.firstDate);
-    if (file.lastDate < account.firstDate) gapAfter = between(file.lastDate, account.firstDate);
+    if (account.lastDate < file.firstDate) {
+      gapBefore = dataGap(account.lastDate, file.firstDate, closingOn(account.id, account.lastDate), opening);
+    }
+    if (file.lastDate < account.firstDate) {
+      gapAfter = dataGap(file.lastDate, account.firstDate, fileClosing(rows), openingOn(account.id, account.firstDate));
+    }
 
-    // Only when the account's data reaches the day before the file starts:
-    // after a gap the balance is expected to differ by the missing rows.
+    // Only when the account's data reaches the day before the file starts
+    // (a gap is reported above, with its own balance check).
     const dayBefore = daysBefore(file.firstDate, 1);
-    const first = rows[0];
-    if (account.firstDate <= dayBefore && account.lastDate >= dayBefore && first?.saldo != null) {
+    if (account.firstDate <= dayBefore && account.lastDate >= dayBefore && opening !== null) {
       const existing = accountBalances(dayBefore).find((b) => b.accountId === account.id)?.balance ?? null;
-      const opening = cents(first.saldo - first.amount);
       if (existing !== null && cents(existing) !== opening) {
         openingMismatch = {
           date: file.firstDate,
@@ -202,7 +304,7 @@ function analyze(
   return {
     accountId: account?.id ?? null,
     duplicates: dry.duplicateCount,
-    newRows: dry.normalizedCount - dry.duplicateCount,
+    newRows: file.bookedCount - dry.duplicateCount,
     overlap: dry.overlap,
     transfers: dry.transferCount,
     gapBefore,
@@ -212,6 +314,66 @@ function analyze(
     openingMismatch,
     ibanMismatch: Boolean(file.ownIban && accountIban && file.ownIban !== accountIban),
   };
+}
+
+/** Rows needed before a file is guessed to repeat an account. */
+export const OVERLAP_GUESS_MIN_ROWS = 3;
+
+/**
+ * How many of the file's rows an IBAN-less account already has, by the
+ * duplicate rule (same day, amount and counterparty, paired one-to-one), and
+ * whether that is an overlap rather than a coincidence: an overlapping export
+ * repeats most of the account's rows in the shared period and most of its own
+ * rows there, and more than a couple. Plain SQL reads, no dry run.
+ */
+function overlapScore(account: ImportPreviewAccount, rows: BookedRow[], file: ImportPreviewFile) {
+  if (!account.firstDate || !account.lastDate || !file.firstDate || !file.lastDate) return null;
+  const from = file.firstDate > account.firstDate ? file.firstDate : account.firstDate;
+  const to = file.lastDate < account.lastDate ? file.lastDate : account.lastDate;
+  if (from > to) return null;
+  const existing = db
+    .prepare(
+      `SELECT substr(t.booking_date, 1, 10) AS day, t.amount, t.counterparty_name AS counterparty
+       FROM normalized_transactions t
+       WHERE t.account_id = ? AND t.booking_date IS NOT NULL
+         AND t.booking_date >= ? AND t.booking_date < ? AND ${isCanonicalGroupRow('t')}`
+    )
+    .all(account.id, from, daysBefore(to, -1)) as Array<{ day: string; amount: number; counterparty: string | null }>;
+  const key = (day: string, amount: number, counterparty: string | null) => `${day}|${cents(amount)}|${counterparty ?? ''}`;
+  const left = new Map<string, number>();
+  for (const e of existing) left.set(key(e.day, e.amount, e.counterparty), (left.get(key(e.day, e.amount, e.counterparty)) ?? 0) + 1);
+  const inRange = rows.filter((r) => r.day >= from && r.day <= to);
+  let matched = 0;
+  for (const r of inRange) {
+    const k = key(r.day, r.amount, r.counterparty);
+    const n = left.get(k) ?? 0;
+    if (n > 0) {
+      left.set(k, n - 1);
+      matched += 1;
+    }
+  }
+  const overlaps =
+    matched >= OVERLAP_GUESS_MIN_ROWS && matched * 2 >= existing.length && matched * 2 >= inRange.length;
+  return overlaps ? matched : null;
+}
+
+function guessTarget(rows: BookedRow[], file: ImportPreviewFile, accounts: ImportPreviewAccount[], newAccount: ImportPreviewGuess['newAccount']): ImportPreviewGuess {
+  if (file.ownIban) {
+    return file.ownIbanAccount
+      ? { accountId: file.ownIbanAccount.id, reason: 'iban', newAccount }
+      : { accountId: null, reason: 'none', newAccount };
+  }
+  // No IBAN (a credit card): the IBAN-less account this file overlaps. A tie
+  // is left to the user.
+  const scores = accounts
+    .filter((a) => !a.iban)
+    .map((a) => ({ id: a.id, n: overlapScore(a, rows, file) }))
+    .filter((s): s is { id: string; n: number } => s.n !== null)
+    .sort((a, b) => b.n - a.n);
+  if (scores.length > 0 && (scores.length === 1 || scores[0].n > scores[1].n)) {
+    return { accountId: scores[0].id, reason: 'overlap', overlapCount: scores[0].n, newAccount };
+  }
+  return { accountId: null, reason: 'none', newAccount };
 }
 
 export type PreviewInput = {
@@ -225,46 +387,33 @@ export type PreviewInput = {
   asNewAccount?: boolean;
 };
 
-/** What importing this file would do. Writes nothing. */
+/**
+ * What importing this file would do. Writes nothing. Without a named target
+ * it also guesses one, and the numbers are for the guess. Exactly one dry run.
+ */
 export function previewImport(input: PreviewInput): ImportPreview {
   const { records, checksum, filename, format } = input;
   const file = summarizeFile(records, filename);
   const accounts = previewAccounts();
-  const dryRun = (target: ImportTarget) => dryRunImport({ records, checksum, filename, sourceBank: 'Nordea', format, target });
-
+  const rows = bookedRowsInTimeOrder(records);
   const newAccount = { name: file.suggestedName, subtype: suggestSubtype(filename, file.ownIban) };
-  let guess: ImportPreviewGuess = { accountId: null, reason: 'none', newAccount };
-  if (file.ownIban) {
-    const id = accountIdByIban(file.ownIban);
-    if (id) guess = { accountId: id, reason: 'iban', newAccount };
-  } else {
-    // No IBAN (a credit card): the account whose rows this file repeats most.
-    // A real overlapping export repeats most of the account's rows in its
-    // date range; a coincidence (the same coffee on two cards) repeats a few,
-    // so more than half are required. A tie is left to the user.
-    const inRange = db.prepare(
-      `SELECT COUNT(*) AS n FROM normalized_transactions t
-       WHERE t.account_id = ? AND t.booking_date IS NOT NULL
-         AND substr(t.booking_date, 1, 10) BETWEEN ? AND ? AND ${isCanonicalGroupRow('t')}`
-    );
-    const scores = accounts
-      .filter((a) => !a.iban && a.transactionCount > 0 && file.firstDate && file.lastDate)
-      .map((a) => ({
-        id: a.id,
-        n: dryRun({ accountId: a.id }).duplicateCount,
-        range: Number((inRange.get(a.id, file.firstDate, file.lastDate) as { n: number }).n),
-      }))
-      .filter((s) => s.n > 0 && s.n * 2 > s.range)
-      .sort((a, b) => b.n - a.n);
-    if (scores.length > 0 && (scores.length === 1 || scores[0].n > scores[1].n)) {
-      guess = { accountId: scores[0].id, reason: 'overlap', overlapCount: scores[0].n, newAccount };
-    }
-  }
 
   if (input.accountId && !accounts.some((a) => a.id === input.accountId)) throw new DomainError('account_not_found', 404);
-  const targetId = input.asNewAccount ? null : (input.accountId ?? guess.accountId);
+  const named = input.accountId !== undefined || input.asNewAccount === true;
+  const guess = named ? null : guessTarget(rows, file, accounts, newAccount);
+  const targetId = input.asNewAccount ? null : (input.accountId ?? guess?.accountId ?? null);
   const target = targetId ? accounts.find((a) => a.id === targetId)! : null;
-  const dry = dryRun(target ? { accountId: target.id } : { newAccount });
 
-  return { file, accounts, guess, analysis: analyze(records, file, target, dry) };
+  const dry = dryRunImport({
+    records,
+    checksum,
+    filename,
+    sourceBank: 'Nordea',
+    format,
+    target: target ? { accountId: target.id } : { newAccount },
+    // The preview shows the mismatch; the import asks for confirmation.
+    allowIbanMismatch: true,
+  });
+
+  return { file, accounts, guess, analysis: analyze(rows, file, target, dry) };
 }

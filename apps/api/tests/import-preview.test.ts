@@ -7,7 +7,7 @@ import type { ImportPreview } from '@finance-app/shared';
 import { db } from '../src/db.js';
 import { DEMO_CHECKING_IBAN, DEMO_SAVINGS_IBAN, demoExports } from '../src/demo/demoData.js';
 import { checksum, processImport } from '../src/importer.js';
-import { balanceBreaks, bookedRowsInTimeOrder, quietPeriods } from '../src/importPreview.js';
+import { balanceBreaks, bookedRowsInTimeOrder, fileOpening, quietPeriods } from '../src/importPreview.js';
 import { ledgerEntries } from '../src/ledger.js';
 import { routes } from '../src/routes/index.js';
 import { resetDb } from './setup/resetDb.js';
@@ -108,6 +108,13 @@ const accounts = () => db.prepare('SELECT id, name, iban, account_subtype FROM a
   account_subtype: string;
 }>;
 
+const CARD4: Row[] = [
+  { date: '2026-10-02', amount: -12.5, name: 'Kahvila Papu' },
+  { date: '2026-10-05', amount: -80, name: 'Kauppa Oy' },
+  { date: '2026-10-07', amount: -31, name: 'Apteekki' },
+  { date: '2026-10-09', amount: -23.9, name: 'Ravintola' },
+];
+
 const CARD_ROWS: Row[] = [
   { date: '2026-10-02', amount: -12.5, name: 'Kahvila Papu' },
   { date: '2026-10-05', amount: -80, name: 'Kauppa Oy' },
@@ -135,18 +142,18 @@ test('dry-run duplicates and transfers are what the import then does', async () 
 
   // The overlapping second checking export: the month in both files is grouped.
   const p2 = await preview(`Käyttötili ${DEMO_CHECKING_IBAN}.csv`, second.records);
-  assert.equal(p2.guess.reason, 'iban');
+  assert.equal(p2.guess?.reason, 'iban');
   assert.ok(p2.analysis.duplicates > 0);
-  const r2 = await upload(`Käyttötili ${DEMO_CHECKING_IBAN}.csv`, second.records, { accountId: p2.guess.accountId! });
+  const r2 = await upload(`Käyttötili ${DEMO_CHECKING_IBAN}.csv`, second.records, { accountId: p2.guess!.accountId! });
   assert.equal(r2.statusCode, 200, r2.body);
   assert.equal(r2.json().duplicateCount, p2.analysis.duplicates);
   assert.equal(r2.json().transferCount, p2.analysis.transfers);
-  assert.equal(p2.analysis.newRows, r2.json().normalizedCount - r2.json().duplicateCount);
+  assert.equal(p2.analysis.newRows, r2.json().normalizedCount - r2.json().duplicateCount); // no pending rows in the demo
 
   // The savings export: its deposits link to the checking withdrawals.
   const ps = await preview(`Säästötili ${DEMO_SAVINGS_IBAN}.csv`, savings.records);
-  assert.equal(ps.guess.reason, 'none');
-  assert.equal(ps.guess.newAccount.subtype, 'savings');
+  assert.equal(ps.guess?.reason, 'none');
+  assert.equal(ps.guess?.newAccount.subtype, 'savings');
   assert.equal(ps.analysis.accountId, null);
   assert.ok(ps.analysis.transfers > 0);
   const rs = await upload(`Säästötili ${DEMO_SAVINGS_IBAN}.csv`, savings.records);
@@ -158,15 +165,16 @@ test('dry-run duplicates and transfers are what the import then does', async () 
 test('the guess: by IBAN, by overlap with an IBAN-less account, or none', async () => {
   await importDirect(nordea([{ date: '2026-10-01', amount: -10, name: 'Kauppa' }], { own: CHECKING }), 'Käyttötili', CHECKING);
   const byIban = await preview('Tapahtumat.csv', nordea([{ date: '2026-10-03', amount: -5, name: 'Kauppa' }], { own: CHECKING }));
-  assert.equal(byIban.guess.reason, 'iban');
-  assert.equal(byIban.guess.accountId, accounts()[0].id);
+  assert.equal(byIban.guess?.reason, 'iban');
+  assert.equal(byIban.guess?.accountId, accounts()[0].id);
   assert.equal(byIban.file.ownIban, CHECKING.replace(/\s+/g, ''));
-  assert.equal(byIban.analysis.accountId, byIban.guess.accountId);
-  // The user may still pick "new account": the numbers follow the choice, the guess stays.
+  assert.deepEqual(byIban.file.ownIbanAccount, { id: accounts()[0].id, name: 'Käyttötili' });
+  assert.equal(byIban.analysis.accountId, byIban.guess?.accountId);
+  // A named target ("new account" here) skips the guess; the client keeps the first one.
   const asNew = await preview('Tapahtumat.csv', nordea([{ date: '2026-10-01', amount: -10, name: 'Kauppa' }], { own: CHECKING }), {
     asNewAccount: '1',
   });
-  assert.equal(asNew.guess.reason, 'iban');
+  assert.equal(asNew.guess, null);
   assert.equal(asNew.analysis.accountId, null);
   assert.equal(asNew.analysis.duplicates, 0);
 
@@ -175,29 +183,63 @@ test('the guess: by IBAN, by overlap with an IBAN-less account, or none', async 
     newAccountName: 'Kortti A',
     newAccountSubtype: 'credit_card',
   });
-  const cardB = await upload('b.csv', nordea(CARD_ROWS.slice(0, 2)), { newAccountName: 'Kortti B', newAccountSubtype: 'credit_card' });
+  const cardB = await upload('b.csv', nordea(CARD4.slice(0, 3)), { newAccountName: 'Kortti B', newAccountSubtype: 'credit_card' });
   assert.equal(cardA.statusCode, 200, cardA.body);
   assert.equal(cardB.statusCode, 200, cardB.body);
-  const byOverlap = await preview('Luottokortti.csv', nordea(CARD_ROWS));
-  assert.equal(byOverlap.guess.reason, 'overlap');
-  assert.equal(byOverlap.guess.accountId, cardB.json().accountId);
-  assert.equal(byOverlap.guess.overlapCount, 2);
-  assert.equal(byOverlap.analysis.duplicates, 2);
+  const byOverlap = await preview('Luottokortti.csv', nordea(CARD4));
+  assert.equal(byOverlap.guess?.reason, 'overlap');
+  assert.equal(byOverlap.guess?.accountId, cardB.json().accountId);
+  assert.equal(byOverlap.guess?.overlapCount, 3);
+  assert.equal(byOverlap.analysis.duplicates, 3);
   assert.equal(byOverlap.analysis.newRows, 1);
 
-  // One identical purchase among a card's many rows in the same period is a coincidence, not an overlap.
-  const coincidence = await preview('Toinen kortti.csv', nordea([
-    { date: '2026-10-02', amount: -12.5, name: 'Kahvila Papu' },
-    { date: '2026-10-07', amount: -31, name: 'Apteekki' },
-  ]));
-  assert.equal(coincidence.guess.reason, 'none');
+  // Fewer than three repeated rows is never a guess.
+  const two = await preview('Luottokortti.csv', nordea(CARD4.slice(0, 2)));
+  assert.equal(two.guess?.reason, 'none');
 
   const none = await preview('Luottokortti.csv', nordea([{ date: '2026-09-01', amount: -7, name: 'Kioski' }]));
-  assert.equal(none.guess.reason, 'none');
-  assert.equal(none.guess.accountId, null);
-  assert.deepEqual(none.guess.newAccount, { name: 'Luottokortti', subtype: 'credit_card' });
+  assert.equal(none.guess?.reason, 'none');
+  assert.equal(none.guess?.accountId, null);
+  assert.deepEqual(none.guess?.newAccount, { name: 'Luottokortti', subtype: 'credit_card' });
   assert.equal(none.accounts.length, 3);
-  assert.equal(none.accounts.find((a) => a.name === 'Kortti B')?.transactionCount, 2);
+  assert.equal(none.accounts.find((a) => a.name === 'Kortti B')?.transactionCount, 3);
+});
+
+/** Card A's month: 29 purchases, one of them the same monthly fee card B pays the same day. */
+function monthOfCardA(month: string): Row[] {
+  const rows: Row[] = [{ date: `${month}-01`, amount: -2.5, name: 'Kuukausimaksu' }];
+  for (let d = 2; rows.length < 29; d++) rows.push({ date: `${month}-${String(d).padStart(2, '0')}`, amount: -(10 + d), name: `Kauppa ${d}` });
+  return rows;
+}
+
+test('one shared monthly fee is a coincidence, not an overlap (review scenario)', async () => {
+  // Card B: the fee on 09-01 and 10-01 and nothing else.
+  const cardB = await upload(
+    'b.csv',
+    nordea([
+      { date: '2026-09-01', amount: -2.5, name: 'Kuukausimaksu' },
+      { date: '2026-10-01', amount: -2.5, name: 'Kuukausimaksu' },
+    ]),
+    { newAccountName: 'Kortti B', newAccountSubtype: 'credit_card' }
+  );
+  assert.equal(cardB.statusCode, 200, cardB.body);
+
+  // Card A's first October export: must not be filed under B.
+  const october = await preview('Luottokortti.csv', nordea(monthOfCardA('2026-10')));
+  assert.equal(october.guess?.reason, 'none');
+  assert.equal(october.guess?.accountId, null);
+  assert.equal(october.analysis.accountId, null);
+
+  // Card A now exists; its older September export overlaps neither A nor (really) B.
+  const a = await upload('a.csv', nordea(monthOfCardA('2026-10')), { newAccountName: 'Kortti A', newAccountSubtype: 'credit_card' });
+  assert.equal(a.statusCode, 200, a.body);
+  const september = await preview('Luottokortti.csv', nordea(monthOfCardA('2026-09')));
+  assert.equal(september.guess?.reason, 'none');
+
+  // Re-exporting October is recognised as card A.
+  const again = await preview('Luottokortti.csv', nordea(monthOfCardA('2026-10')));
+  assert.equal(again.guess?.reason, 'overlap');
+  assert.equal(again.guess?.accountId, a.json().accountId);
 });
 
 test('two credit cards with identical purchases stay separate', async () => {
@@ -259,8 +301,15 @@ test('a new account: 409 on a taken name, takes the file IBAN only when free', a
 
   const fresh = await upload(`x ${OTHER}.csv`, nordea(CARD_ROWS, { own: OTHER }), { newAccountName: 'Uusi', newAccountSubtype: 'savings' });
   assert.equal(fresh.statusCode, 200, fresh.body);
-  // The IBAN is already the checking account's: the new account gets none.
-  const dupIban = await upload('y.csv', nordea(CARD_ROWS, { own: CHECKING }), { newAccountName: 'Toinen', newAccountSubtype: 'checking' });
+  // The IBAN is already the checking account's: refused unless confirmed, then the new account gets none.
+  const refused = await upload('y.csv', nordea(CARD_ROWS, { own: CHECKING }), { newAccountName: 'Toinen', newAccountSubtype: 'checking' });
+  assert.equal(refused.statusCode, 409);
+  assert.equal(refused.json().error, 'iban_in_use');
+  const dupIban = await upload('y.csv', nordea(CARD_ROWS, { own: CHECKING }), {
+    newAccountName: 'Toinen',
+    newAccountSubtype: 'checking',
+    allowIbanMismatch: '1',
+  });
   assert.equal(dupIban.statusCode, 200, dupIban.body);
   assert.deepEqual(
     accounts().map((a) => [a.name, a.iban, a.account_subtype]),
@@ -276,24 +325,37 @@ test('a new account: 409 on a taken name, takes the file IBAN only when free', a
   assert.equal(halfField.json().error, 'invalid_request');
 });
 
-test('gaps before and after the account’s data', async () => {
+test('gaps before and after the account’s data, checked against the balance', async () => {
+  // Account: 1000 → 990 (03-01) → 980 (03-31, a Tuesday).
   await importDirect(
     nordea(
       [
         { date: '2026-03-01', amount: -10, name: 'Kauppa' },
         { date: '2026-03-31', amount: -10, name: 'Kauppa' },
       ],
-      { own: CHECKING }
+      { own: CHECKING, opening: 1000 }
     ),
     'Käyttötili',
     CHECKING
   );
-  const later = await preview('t.csv', nordea([{ date: '2026-05-01', amount: -5, name: 'Kauppa' }], { own: CHECKING }));
-  assert.deepEqual(later.analysis.gapBefore, { from: '2026-04-01', to: '2026-04-30', days: 30 });
+  // A month later, starting from a different balance: rows are missing.
+  const later = await preview('t.csv', nordea([{ date: '2026-05-01', amount: -5, name: 'Kauppa' }], { own: CHECKING, opening: 900 }));
+  assert.deepEqual(later.analysis.gapBefore, { from: '2026-04-01', to: '2026-04-30', days: 30, balance: 'differs', difference: -80 });
   assert.equal(later.analysis.gapAfter, null);
 
-  const earlier = await preview('t.csv', nordea([{ date: '2026-02-20', amount: -5, name: 'Kauppa' }], { own: CHECKING }));
-  assert.deepEqual(earlier.analysis.gapAfter, { from: '2026-02-21', to: '2026-02-28', days: 8 });
+  // Two quiet days, the balance carries over: nothing missing.
+  const quiet = await preview('t.csv', nordea([{ date: '2026-04-03', amount: -5, name: 'Kauppa' }], { own: CHECKING, opening: 980 }));
+  assert.deepEqual(quiet.analysis.gapBefore, { from: '2026-04-01', to: '2026-04-02', days: 2, balance: 'matches', difference: null });
+
+  // Without Saldo: a short gap is not reported, a week or more is.
+  const short = await preview('t.csv', nordea([{ date: '2026-04-03', amount: -5, name: 'Kauppa' }], { own: CHECKING, noSaldo: true }));
+  assert.equal(short.analysis.gapBefore, null);
+  const long = await preview('t.csv', nordea([{ date: '2026-04-08', amount: -5, name: 'Kauppa' }], { own: CHECKING, noSaldo: true }));
+  assert.deepEqual(long.analysis.gapBefore, { from: '2026-04-01', to: '2026-04-07', days: 7, balance: 'unknown', difference: null });
+
+  // An older file ending at 995, while the account opens at 1000 on 03-01.
+  const earlier = await preview('t.csv', nordea([{ date: '2026-02-20', amount: -5, name: 'Kauppa' }], { own: CHECKING, opening: 1000 }));
+  assert.deepEqual(earlier.analysis.gapAfter, { from: '2026-02-21', to: '2026-02-28', days: 8, balance: 'differs', difference: 5 });
   assert.equal(earlier.analysis.gapBefore, null);
 
   const touching = await preview('t.csv', nordea([{ date: '2026-04-01', amount: -5, name: 'Kauppa' }], { own: CHECKING }));
@@ -327,6 +389,24 @@ test('balance breaks: a missing row shows where and how much', async () => {
   const p = await preview('t.csv', nordea(rows, { drop: [1] }));
   assert.deepEqual(p.analysis.balanceBreaks, [{ date: '2026-03-12', expected: 968, actual: 922.8, difference: -45.2 }]);
   assert.equal(p.file.hasRunningBalance, true);
+
+  // The order of a day's rows in the file does not matter: swap the two 03-12 rows.
+  const shuffled = nordea(rows);
+  [shuffled[1], shuffled[2]] = [shuffled[2], shuffled[1]];
+  assert.deepEqual(balanceBreaks(bookedRowsInTimeOrder(shuffled)), []);
+  const shuffledFirstDay = nordea([
+    { date: '2026-03-10', amount: -20, name: 'Kauppa' },
+    { date: '2026-03-10', amount: -30, name: 'Kauppa' },
+    { date: '2026-03-11', amount: -5, name: 'Kahvila' },
+  ]);
+  [shuffledFirstDay[1], shuffledFirstDay[2]] = [shuffledFirstDay[2], shuffledFirstDay[1]];
+  const firstDayRows = bookedRowsInTimeOrder(shuffledFirstDay);
+  assert.deepEqual(balanceBreaks(firstDayRows), []);
+  assert.equal(fileOpening(firstDayRows), 100000);
+  // A missing row on a shuffled day is reported once, not again on the next day.
+  const missing = nordea(rows, { drop: [1] });
+  [missing[1], missing[2]] = [missing[2], missing[1]];
+  assert.deepEqual(balanceBreaks(bookedRowsInTimeOrder(missing)), p.analysis.balanceBreaks);
 
   // Oldest-first exports read the same way.
   assert.deepEqual(balanceBreaks(bookedRowsInTimeOrder(nordea(rows, { drop: [1] }).reverse())), p.analysis.balanceBreaks);
@@ -375,12 +455,22 @@ test('file summary and IBAN mismatch', async () => {
       firstDate: '2026-10-02',
       lastDate: '2026-10-09',
       ownIban: OTHER.replace(/\s+/g, ''),
+      ownIbanAccount: null,
       suggestedName: 'Matkakortti',
       hasRunningBalance: true,
     }
   );
   assert.equal(p.analysis.ibanMismatch, true);
-  assert.equal(p.guess.reason, 'none');
+  assert.equal(p.guess, null);
+  // Pending and skipped rows are not "new".
+  assert.equal(p.analysis.newRows, 3);
+
+  // Importing into an account with another IBAN needs confirmation.
+  const refused = await upload(`Matkakortti ${OTHER}.csv`, records, { accountId: id });
+  assert.equal(refused.statusCode, 409);
+  assert.equal(refused.json().error, 'iban_mismatch');
+  const confirmed = await upload(`Matkakortti ${OTHER}.csv`, records, { accountId: id, allowIbanMismatch: '1' });
+  assert.equal(confirmed.statusCode, 200, confirmed.body);
 
   const same = await preview('t.csv', nordea(CARD_ROWS, { own: CHECKING }));
   assert.equal(same.analysis.ibanMismatch, false);

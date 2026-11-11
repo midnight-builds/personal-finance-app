@@ -19,6 +19,11 @@ export const importTargetFieldsSchema = z
     accountId: z.string().trim().min(1).optional(),
     newAccountName: z.string().trim().min(1).max(80).optional(),
     newAccountSubtype: z.enum(ACCOUNT_SUBTYPES).optional(),
+    /**
+     * "1": import even though the file's own IBAN belongs to another account
+     * (409 `iban_mismatch` / `iban_in_use` otherwise).
+     */
+    allowIbanMismatch: z.enum(['1']).optional(),
   })
   .refine((v) => !(v.accountId && v.newAccountName), { message: 'account_id_and_new_account_are_exclusive' })
   .refine((v) => !v.newAccountName || v.newAccountSubtype, {
@@ -51,6 +56,8 @@ export type ImportPreviewFile = {
   lastDate: string | null;
   /** The account's own IBAN as the export names it (rows, then file name), compact. */
   ownIban: string | null;
+  /** The account that already holds `ownIban`, if any. */
+  ownIbanAccount: { id: string; name: string } | null;
   suggestedName: string;
   /** The export carries Nordea's running balance (Saldo). */
   hasRunningBalance: boolean;
@@ -80,8 +87,23 @@ export type ImportPreviewGuess = {
 
 export type DayRange = { from: string; to: string; days: number };
 
+/** Days without data between an account's rows and a file. */
+export type DataGap = DayRange & {
+  /**
+   * Does the running balance carry over the gap? 'matches': nothing is
+   * missing, the days were just quiet (e.g. a weekend). 'differs': rows are
+   * missing, `difference` is their sum. 'unknown': no Saldo to compare (only
+   * reported from GAP_WITHOUT_BALANCE_MIN_DAYS days).
+   */
+  balance: 'matches' | 'differs' | 'unknown';
+  difference: number | null;
+};
+
+/** Without a balance to compare, shorter gaps are ordinary quiet days. */
+export const GAP_WITHOUT_BALANCE_MIN_DAYS = 7;
+
 export type BalanceBreak = {
-  /** Day of the row whose Saldo does not follow from the previous row. */
+  /** Day whose rows' Saldo does not follow from the previous day's balance. */
   date: string;
   expected: number;
   actual: number;
@@ -94,13 +116,14 @@ export type ImportPreviewAnalysis = {
   accountId: string | null;
   /** Rows the import would group with already imported rows. */
   duplicates: number;
+  /** Booked rows that are not duplicates; pending rows ("Varaus") are not counted. */
   newRows: number;
   overlap: { from: string; to: string } | null;
   /** Rows the import would link as transfers between own accounts. */
   transfers: number;
   /** Days missing between the account's existing data and this file. */
-  gapBefore: DayRange | null;
-  gapAfter: DayRange | null;
+  gapBefore: DataGap | null;
+  gapAfter: DataGap | null;
   quietPeriods: DayRange[];
   balanceBreaks: BalanceBreak[];
   /** The file's implied opening balance vs. the account's balance the day before. */
@@ -111,6 +134,10 @@ export type ImportPreviewAnalysis = {
 export type ImportPreview = {
   file: ImportPreviewFile;
   accounts: ImportPreviewAccount[];
-  guess: ImportPreviewGuess;
+  /**
+   * Only when the request named no target (`accountId` / `asNewAccount`):
+   * the client asks once and keeps it while the user changes the target.
+   */
+  guess: ImportPreviewGuess | null;
   analysis: ImportPreviewAnalysis;
 };
