@@ -43,7 +43,7 @@ export const importRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/imports/nordea/preview', async (request) => {
     const upload = await readUpload(request);
-    const { accountId } = importPreviewFieldsSchema.parse(upload.fields);
+    const { accountId, asNewAccount } = importPreviewFieldsSchema.parse(upload.fields);
     const xlsx = isXlsx(upload.fileName);
     return previewImport({
       records: xlsx ? parseXlsx(upload.fileBuffer) : parseCsv(upload.fileBuffer),
@@ -51,6 +51,7 @@ export const importRoutes: FastifyPluginAsync = async (app) => {
       filename: upload.fileName,
       format: xlsx ? 'XLSX' : 'CSV',
       accountId,
+      asNewAccount: asNewAccount === '1',
     });
   });
 

@@ -27,8 +27,16 @@ export const importTargetFieldsSchema = z
   });
 export type ImportTargetFields = z.output<typeof importTargetFieldsSchema>;
 
-/** Preview fields: only an existing account can be previewed as the target. */
-export const importPreviewFieldsSchema = z.object({ accountId: z.string().trim().min(1).optional() });
+/**
+ * Preview fields: the numbers are for `accountId`, or for a new account when
+ * `asNewAccount` is "1"; with neither, for the guess (a new account if none).
+ */
+export const importPreviewFieldsSchema = z
+  .object({
+    accountId: z.string().trim().min(1).optional(),
+    asNewAccount: z.enum(['1']).optional(),
+  })
+  .refine((v) => !(v.accountId && v.asNewAccount), { message: 'account_id_and_new_account_are_exclusive' });
 
 export type ImportPreviewFile = {
   filename: string;

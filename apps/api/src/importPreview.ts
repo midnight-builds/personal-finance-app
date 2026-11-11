@@ -221,6 +221,8 @@ export type PreviewInput = {
   format: string;
   /** Preview as an import into this existing account instead of the guess. */
   accountId?: string;
+  /** Preview as an import into a new account instead of the guess. */
+  asNewAccount?: boolean;
 };
 
 /** What importing this file would do. Writes nothing. */
@@ -237,11 +239,22 @@ export function previewImport(input: PreviewInput): ImportPreview {
     if (id) guess = { accountId: id, reason: 'iban', newAccount };
   } else {
     // No IBAN (a credit card): the account whose rows this file repeats most.
-    // A tie is left to the user rather than guessed.
+    // A real overlapping export repeats most of the account's rows in its
+    // date range; a coincidence (the same coffee on two cards) repeats a few,
+    // so more than half are required. A tie is left to the user.
+    const inRange = db.prepare(
+      `SELECT COUNT(*) AS n FROM normalized_transactions t
+       WHERE t.account_id = ? AND t.booking_date IS NOT NULL
+         AND substr(t.booking_date, 1, 10) BETWEEN ? AND ? AND ${isCanonicalGroupRow('t')}`
+    );
     const scores = accounts
-      .filter((a) => !a.iban && a.transactionCount > 0)
-      .map((a) => ({ id: a.id, n: dryRun({ accountId: a.id }).duplicateCount }))
-      .filter((s) => s.n > 0)
+      .filter((a) => !a.iban && a.transactionCount > 0 && file.firstDate && file.lastDate)
+      .map((a) => ({
+        id: a.id,
+        n: dryRun({ accountId: a.id }).duplicateCount,
+        range: Number((inRange.get(a.id, file.firstDate, file.lastDate) as { n: number }).n),
+      }))
+      .filter((s) => s.n > 0 && s.n * 2 > s.range)
       .sort((a, b) => b.n - a.n);
     if (scores.length > 0 && (scores.length === 1 || scores[0].n > scores[1].n)) {
       guess = { accountId: scores[0].id, reason: 'overlap', overlapCount: scores[0].n, newAccount };
@@ -249,7 +262,7 @@ export function previewImport(input: PreviewInput): ImportPreview {
   }
 
   if (input.accountId && !accounts.some((a) => a.id === input.accountId)) throw new DomainError('account_not_found', 404);
-  const targetId = input.accountId ?? guess.accountId;
+  const targetId = input.asNewAccount ? null : (input.accountId ?? guess.accountId);
   const target = targetId ? accounts.find((a) => a.id === targetId)! : null;
   const dry = dryRun(target ? { accountId: target.id } : { newAccount });
 

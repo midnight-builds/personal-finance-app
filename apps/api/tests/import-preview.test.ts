@@ -161,6 +161,14 @@ test('the guess: by IBAN, by overlap with an IBAN-less account, or none', async 
   assert.equal(byIban.guess.reason, 'iban');
   assert.equal(byIban.guess.accountId, accounts()[0].id);
   assert.equal(byIban.file.ownIban, CHECKING.replace(/\s+/g, ''));
+  assert.equal(byIban.analysis.accountId, byIban.guess.accountId);
+  // The user may still pick "new account": the numbers follow the choice, the guess stays.
+  const asNew = await preview('Tapahtumat.csv', nordea([{ date: '2026-10-01', amount: -10, name: 'Kauppa' }], { own: CHECKING }), {
+    asNewAccount: '1',
+  });
+  assert.equal(asNew.guess.reason, 'iban');
+  assert.equal(asNew.analysis.accountId, null);
+  assert.equal(asNew.analysis.duplicates, 0);
 
   // Two cards; the file repeats card B's rows.
   const cardA = await upload('a.csv', nordea([{ date: '2026-10-02', amount: -99, name: 'Muu kauppa' }]), {
@@ -176,6 +184,13 @@ test('the guess: by IBAN, by overlap with an IBAN-less account, or none', async 
   assert.equal(byOverlap.guess.overlapCount, 2);
   assert.equal(byOverlap.analysis.duplicates, 2);
   assert.equal(byOverlap.analysis.newRows, 1);
+
+  // One identical purchase among a card's many rows in the same period is a coincidence, not an overlap.
+  const coincidence = await preview('Toinen kortti.csv', nordea([
+    { date: '2026-10-02', amount: -12.5, name: 'Kahvila Papu' },
+    { date: '2026-10-07', amount: -31, name: 'Apteekki' },
+  ]));
+  assert.equal(coincidence.guess.reason, 'none');
 
   const none = await preview('Luottokortti.csv', nordea([{ date: '2026-09-01', amount: -7, name: 'Kioski' }]));
   assert.equal(none.guess.reason, 'none');
