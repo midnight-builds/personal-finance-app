@@ -147,7 +147,7 @@ function mostFrequent(arr: string[]): string | null {
 }
 
 function accountNameFromFilename(filename: string, accountIban: string | null): string {
-  const match = filename.match(/^(.*?)\s*(FI[0-9 ]{6,})/i);
+  const match = filename.match(/^(.*?)\s*(FI\d{2}(?: ?\d{4}){3} ?\d{2})/i);
   if (match && match[1].trim()) {
     return match[1].trim();
   }
@@ -159,7 +159,7 @@ function accountNameFromFilename(filename: string, accountIban: string | null): 
 
 function inferAccount(records: Record<string, unknown>[], filename: string) {
   const ibanCandidates = extractIbanCandidates(records);
-  const fromFilename = filename.match(/FI[0-9 ]{6,}/i)?.[0].replace(/\s+/g, '').toUpperCase() ?? null;
+  const fromFilename = filename.match(/FI\d{2}(?: ?\d{4}){3} ?\d{2}/i)?.[0].replace(/\s+/g, '').toUpperCase() ?? null;
   const accountIban = mostFrequent(ibanCandidates) ?? fromFilename;
   const accountName = accountNameFromFilename(filename, accountIban);
   return { accountIban: accountIban ?? '', accountName };
@@ -358,16 +358,25 @@ function linkTransfers(ids: string[]) {
       from.counterparty_iban !== null && normIban(from.counterparty_iban) !== normIban(to.account_iban);
 
     const proven = candidates.filter((c) => pointsAt(row, c) || pointsAt(c, row));
-    const plausible = candidates.filter((c) =>
-      // An account without an IBAN (a credit card) cannot be named by one: a
-      // card repayment from checking names the card issuer's IBAN or none.
-      !row.account_iban || !c.account_iban
-        ? true
-        : !pointsElsewhere(row, c) &&
-          !pointsElsewhere(c, row) &&
-          !carriesIbans(row.account_id) &&
-          !carriesIbans(c.account_id)
-    );
+    // An account without an IBAN (a credit card) cannot be named by one. The
+    // one transfer it takes part in is a repayment: money into the card from
+    // an account that pays it like a bill, to the issuer's IBAN. A purchase
+    // on the card, or a card-less purchase on checking, is not one.
+    const isRepayment = (into: LinkSide & { amount?: number }, from: LinkSide & { amount?: number }) =>
+      !into.account_iban &&
+      !!from.account_iban &&
+      (into.amount ?? 0) > 0 &&
+      (!carriesIbans(from.account_id) || from.counterparty_iban !== null);
+    const plausible = candidates.filter((c) => {
+      const cand = { ...c, amount: -row.amount };
+      if (!row.account_iban || !c.account_iban) return isRepayment(row, cand) || isRepayment(cand, row);
+      return (
+        !pointsElsewhere(row, c) &&
+        !pointsElsewhere(c, row) &&
+        !carriesIbans(row.account_id) &&
+        !carriesIbans(c.account_id)
+      );
+    });
 
     let match: LinkSide | undefined;
     let confidence: number;

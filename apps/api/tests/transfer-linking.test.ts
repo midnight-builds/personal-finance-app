@@ -65,9 +65,22 @@ test('a card purchase and a refund of the same amount are not a transfer', async
     { date: '2026-10-01', amount: -950, other: FRIEND, name: 'Vuokranantaja' },
     { date: '2026-10-10', amount: -20, other: 'Kauppa Oy', name: 'Kauppa Oy' },
   ]);
+  // Both the card that has an IBAN and a real card export that has none.
   await importRows(CARD, [{ date: '2026-10-11', amount: 20, other: 'Kauppa Oy', name: 'Kauppa Oy' }]);
+  await upload('Luottokortti.csv', [{ date: '2026-10-11', amount: 20, other: 'Kauppa Oy', name: 'Kauppa Oy' }]);
   assert.deepEqual(links(), []);
-  assert.equal(ledgerEntries().filter((e) => e.counterparty === 'Kauppa Oy').length, 2);
+  assert.equal(ledgerEntries().filter((e) => e.counterparty === 'Kauppa Oy').length, 3);
+});
+
+test('a card purchase paid back by a friend is not a transfer', async () => {
+  await importRows(CHECKING, [{ date: '2026-10-10', amount: 40, other: FRIEND, name: 'Kaveri' }]);
+  await upload('Luottokortti.csv', [{ date: '2026-10-10', amount: -40, other: 'Ravintola', name: 'Ravintola' }]);
+  assert.deepEqual(links(), []);
+});
+
+test('an IBAN in the file name stops at the IBAN', async () => {
+  const res = await upload(`Tapahtumat ${SAVINGS} 2026 10.csv`, [{ date: '2026-10-01', amount: 5, other: 'Korko', name: 'Korko' }]);
+  assert.equal(accountOf(res).iban, SAVINGS.replace(/\s+/g, ''));
 });
 
 test('an IBAN pointing elsewhere rules a pair out', async () => {
