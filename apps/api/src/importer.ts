@@ -9,6 +9,9 @@ import { runBriefing } from './briefing.js';
 import { generateRuleSuggestions } from './ruleSuggestions.js';
 import { canonicalGroupOrder, isCanonicalGroupRow } from './sql/transactions.js';
 import { daysBefore } from './ledger.js';
+import { DomainError } from './http/errors.js';
+import { dayEnds, type SaldoRow } from './saldoChain.js';
+import type { AccountSubtype } from '@finance-app/shared';
 
 export type ImportResult = {
   importSessionId: string;
@@ -18,6 +21,10 @@ export type ImportResult = {
   skippedCount: number;
   overlapDetected: boolean;
   alreadyImportedCount: number;
+  /** Rows grouped with already imported rows (overlap with earlier exports). */
+  duplicateCount: number;
+  /** Rows linked as one side of a transfer between own accounts. */
+  transferCount: number;
   briefingSessionId?: string;
 };
 
@@ -82,7 +89,7 @@ function createId(): string {
   return crypto.randomUUID();
 }
 
-function getField(record: Record<string, unknown>, key: string): RecordValue {
+export function getField(record: Record<string, unknown>, key: string): RecordValue {
   if (record[key] !== undefined && record[key] !== null) return record[key] as RecordValue;
   const bomKey = `\ufeff${key}`;
   if (record[bomKey] !== undefined && record[bomKey] !== null) return record[bomKey] as RecordValue;
@@ -157,7 +164,19 @@ function accountNameFromFilename(filename: string, accountIban: string | null): 
   return 'Nordea tili';
 }
 
-function inferAccount(records: Record<string, unknown>[], filename: string) {
+/**
+ * Nordea lists newest first; some exports ascend. Decided by the first and
+ * last booked dates of the file (all on one day reads as newest first).
+ */
+export function isNewestFirst(records: Record<string, unknown>[]): boolean {
+  const bookedDates = records
+    .map((r) => parseDate(getField(r, 'Kirjauspäivä')))
+    .filter((d): d is string => d !== null);
+  return bookedDates.length === 0 || bookedDates[0] >= bookedDates[bookedDates.length - 1];
+}
+
+/** The export's own IBAN (compact; '' when none) and a name for its account. */
+export function inferAccount(records: Record<string, unknown>[], filename: string) {
   const ibanCandidates = extractIbanCandidates(records);
   const fromFilename = filename.match(/FI\d{2}(?: ?\d{4}){3} ?\d{2}/i)?.[0].replace(/\s+/g, '').toUpperCase() ?? null;
   const accountIban = mostFrequent(ibanCandidates) ?? fromFilename;
@@ -182,7 +201,7 @@ function looksLikeIban(value: string | null | undefined): boolean {
   return /^FI[0-9 ]{6,}$/i.test(value.trim());
 }
 
-function chooseCounterparty(record: Record<string, unknown>, amount: number): { name: string | null; iban: string | null } {
+export function chooseCounterparty(record: Record<string, unknown>, amount: number): { name: string | null; iban: string | null } {
   const nameFields = [
     getField(record, 'Nimi'),
     getField(record, 'Otsikko'),
@@ -396,39 +415,147 @@ function linkTransfers(ids: string[]) {
   }
 }
 
-export async function processImport(options: {
+/** Where an import goes, as the user chose it. */
+export type ImportTarget =
+  | { accountId: string }
+  | { newAccount: { name: string; subtype: AccountSubtype } };
+
+export type ImportOptions = {
   records: Record<string, unknown>[];
   checksum: string;
   filename: string;
-  accountName?: string;
-  accountIban?: string;
   sourceBank: string;
   format: string;
-}): Promise<ImportResult> {
-  const { records, checksum, filename, sourceBank, format } = options;
-  const inferred = inferAccount(records, filename);
-  const accountName = options.accountName ?? inferred.accountName;
+  /** Internal callers (demo seed, tests): the account with this IBAN, else this name; created if missing. */
+  accountName?: string;
+  accountIban?: string;
+  /** The user's choice: an existing account (never renamed or re-IBANed), or a new one. */
+  target?: ImportTarget;
+  /**
+   * The user confirmed a target although the file's own IBAN belongs to
+   * another account (existing target with a different IBAN, or a new account
+   * while the IBAN is already taken). Without it those are refused.
+   */
+  allowIbanMismatch?: boolean;
+};
+
+/** What the import's transactional part did, or in a dry run would do. */
+export type ImportCounts = {
+  importSessionId: string;
+  accountId: string;
+  normalizedCount: number;
+  skippedCount: number;
+  /** Rows of this import grouped with already imported rows. */
+  duplicateCount: number;
+  /** Day range of those rows. */
+  overlap: { from: string; to: string } | null;
+  /** Rows of this import linked as one side of a transfer. */
+  transferCount: number;
+  overlapDetected: boolean;
+  alreadyImportedCount: number;
+};
+
+type AccountPlan =
+  | { kind: 'existing'; accountId: string; iban: string | null }
+  | { kind: 'new'; name: string; subtype: AccountSubtype; iban: string | null }
+  | { kind: 'ensure'; name: string; iban: string };
+
+const compactIban = (iban: string) => iban.replace(/\s+/g, '').toUpperCase();
+
+/** The account holding `iban` (compared without spaces or case), if any. */
+export function accountIdByIban(iban: string): string | null {
+  const row = db
+    .prepare("SELECT id FROM accounts WHERE REPLACE(UPPER(iban), ' ', '') = ? ORDER BY created_at ASC LIMIT 1")
+    .get(compactIban(iban)) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+export function accountNameTaken(name: string): boolean {
+  return db.prepare('SELECT 1 FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))').get(name) !== undefined;
+}
+
+/**
+ * Decides the account before anything is written. Without a target the
+ * export must name its own IBAN: an IBAN-less export (a credit card) could
+ * otherwise land on another card's account and its purchases dedupe away.
+ */
+function planAccount(options: ImportOptions): AccountPlan {
+  const { target } = options;
+  if (target && 'accountId' in target) {
+    const row = db.prepare('SELECT id, iban FROM accounts WHERE id = ?').get(target.accountId) as
+      | { id: string; iban: string | null }
+      | undefined;
+    if (!row) throw new DomainError('account_not_found', 404);
+    const own = inferAccount(options.records, options.filename).accountIban;
+    // The file's own IBAN is someone else's: the account's IBAN differs, or
+    // another account holds it (also when this account has none).
+    const holder = own ? accountIdByIban(own) : null;
+    const mismatch = own && ((row.iban && compactIban(row.iban) !== own) || (holder && holder !== row.id));
+    if (!options.allowIbanMismatch && mismatch) {
+      throw DomainError.conflict('iban_mismatch');
+    }
+    return { kind: 'existing', accountId: row.id, iban: row.iban };
+  }
+  const inferred = inferAccount(options.records, options.filename);
+  if (target && 'newAccount' in target) {
+    const name = target.newAccount.name.trim();
+    if (!name) throw new DomainError('account_name_required', 400);
+    if (accountNameTaken(name)) throw DomainError.conflict('account_name_exists');
+    const holder = inferred.accountIban ? accountIdByIban(inferred.accountIban) : null;
+    if (holder && !options.allowIbanMismatch) throw DomainError.conflict('iban_in_use');
+    const iban = inferred.accountIban && !holder ? inferred.accountIban : null;
+    return { kind: 'new', name, subtype: target.newAccount.subtype, iban };
+  }
   const accountIban = options.accountIban ?? inferred.accountIban;
+  if (!accountIban && options.accountName === undefined) throw new DomainError('account_required', 400);
+  return { kind: 'ensure', name: options.accountName ?? inferred.accountName, iban: accountIban };
+}
+
+function resolveAccount(plan: AccountPlan, now: string): { accountId: string; iban: string | null } {
+  if (plan.kind === 'existing') return { accountId: plan.accountId, iban: plan.iban };
+  if (plan.kind === 'ensure') return { accountId: ensureAccount(plan.name, plan.iban, now), iban: plan.iban || null };
+  const accountId = createId();
+  db.prepare('INSERT INTO accounts (id, created_at, name, iban, type, account_subtype) VALUES (?, ?, ?, ?, ?, ?)').run(
+    accountId,
+    now,
+    plan.name,
+    plan.iban,
+    'bank',
+    plan.subtype
+  );
+  return { accountId, iban: plan.iban };
+}
+
+/**
+ * The import's transactional part, all synchronous: node:sqlite shares one
+ * connection, so an `await` before COMMIT/ROLLBACK would let another request
+ * run inside this transaction. A dry run takes the very same path and rolls
+ * back, so its counts are exactly what the import would do.
+ */
+function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): ImportCounts {
+  const { records, checksum, sourceBank, format } = options;
   const rowCount = records.length;
-  const overlapKey = `${checksum}:${rowCount}:${accountIban}`;
-
-  const overlapRow = db
-    .prepare('SELECT id, row_count FROM import_sessions WHERE overlap_key = ?')
-    .get(overlapKey) as { id: string; row_count: number } | undefined;
-
   const now = new Date().toISOString();
   const importSessionId = createId();
   let accountId = '';
   let normalizedCount = 0;
   let skippedCount = 0;
+  let overlapRow: { id: string; row_count: number } | undefined;
   const insertedIds: string[] = [];
+  let counts: Pick<ImportCounts, 'duplicateCount' | 'overlap' | 'transferCount'>;
 
   // One transaction up to COMMIT: a failed or interrupted import leaves no
   // account, session or rows behind, and never rows that are not yet grouped
-  // with their duplicates or linked as transfers.
+  // with their duplicates or linked as transfers. BEGIN is outside the try: if
+  // it fails, there is no transaction of ours to roll back.
   db.exec('BEGIN');
   try {
-    accountId = ensureAccount(accountName, accountIban, now);
+    const account = resolveAccount(plan, now);
+    accountId = account.accountId;
+    const overlapKey = `${checksum}:${rowCount}:${account.iban || accountId}`;
+    overlapRow = db
+      .prepare('SELECT id, row_count FROM import_sessions WHERE overlap_key = ?')
+      .get(overlapKey) as { id: string; row_count: number } | undefined;
 
     db.prepare(
       'INSERT INTO import_sessions (id, created_at, source_bank, format, file_checksum, row_count, overlap_key) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -453,13 +580,13 @@ export async function processImport(options: {
     );
 
     // A day's snapshot is its closing balance: the Saldo of the day's last row
-    // in time. Nordea lists newest first, so then that is the day's first row in
-    // the file. An export whose dates ascend is read the other way round.
-    const bookedDates = records
-      .map((r) => parseDate(getField(r, 'Kirjauspäivä')))
-      .filter((d): d is string => d !== null);
-    const newestFirst = bookedDates.length === 0 || bookedDates[0] >= bookedDates[bookedDates.length - 1];
-    const closingBalances = new Map<string, { saldo: number; currency: string }>();
+    // in time, read from the chain of the day's rows (saldoChain.ts), so the
+    // order of a day's rows in the file does not matter. Only when the chain
+    // does not decide it: the file order, newest first like Nordea (then the
+    // day's first row) or ascending (then its last row).
+    const newestFirst = isNewestFirst(records);
+    const dayRows = new Map<string, Array<SaldoRow & { currency: string }>>();
+    const daysMissingSaldo = new Set<string>();
 
     for (const record of records) {
       const bookingDate = parseDate(getField(record, 'Kirjauspäivä'));
@@ -523,8 +650,11 @@ export async function processImport(options: {
         null
       );
 
-      if (saldo !== null && bookingDate && !(newestFirst && closingBalances.has(bookingDate))) {
-        closingBalances.set(bookingDate, { saldo, currency });
+      if (saldo !== null && bookingDate) {
+        if (!dayRows.has(bookingDate)) dayRows.set(bookingDate, []);
+        dayRows.get(bookingDate)!.push({ amount, saldo, currency });
+      } else if (bookingDate) {
+        daysMissingSaldo.add(bookingDate);
       }
 
       const categoryId = chooseCategoryFor({
@@ -540,20 +670,75 @@ export async function processImport(options: {
       normalizedCount += 1;
     }
 
-    for (const [day, { saldo, currency }] of closingBalances) {
-      insertBalance.run(createId(), now, accountId, day, saldo, currency);
+    for (const [day, rows] of dayRows) {
+      // The chain is only sound when every row of the day has a Saldo: with
+      // one missing, a wrong row can look like the day's last one.
+      const close = daysMissingSaldo.has(day) ? null : dayEnds(rows).close;
+      const byFileOrder = newestFirst ? rows[0] : rows[rows.length - 1];
+      const saldo = close !== null ? close / 100 : byFileOrder.saldo;
+      insertBalance.run(createId(), now, accountId, day, saldo, byFileOrder.currency);
     }
 
     // Post-processing: group duplicates, then link transfers between their canonical rows.
     dedupeInserted(insertedIds);
     linkTransfers(insertedIds);
+    counts = countEffects(importSessionId);
 
-    db.exec('COMMIT');
+    db.exec(dryRun ? 'ROLLBACK' : 'COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
-    logEvent({ type: 'import.error', scope: importSessionId, message: 'Import failed', payload: { error: String(error) } });
+    if (!dryRun) {
+      logEvent({ type: 'import.error', scope: importSessionId, message: 'Import failed', payload: { error: String(error) } });
+    }
     throw error;
   }
+
+  return {
+    importSessionId,
+    accountId,
+    normalizedCount,
+    skippedCount,
+    ...counts,
+    overlapDetected: Boolean(overlapRow),
+    alreadyImportedCount: overlapRow?.row_count ?? 0,
+  };
+}
+
+/** Duplicates grouped and transfers linked by one import session's rows. */
+function countEffects(importSessionId: string): Pick<ImportCounts, 'duplicateCount' | 'overlap' | 'transferCount'> {
+  const dup = db
+    .prepare(
+      `SELECT COUNT(*) AS n, MIN(substr(booking_date, 1, 10)) AS f, MAX(substr(booking_date, 1, 10)) AS t
+       FROM normalized_transactions WHERE import_session_id = ? AND transaction_group_id IS NOT NULL`
+    )
+    .get(importSessionId) as { n: number; f: string | null; t: string | null };
+  const transfers = db
+    .prepare(
+      `SELECT COUNT(DISTINCT n.id) AS n FROM normalized_transactions n
+       JOIN transfer_links l ON n.id IN (l.from_transaction_id, l.to_transaction_id)
+       WHERE n.import_session_id = ?`
+    )
+    .get(importSessionId) as { n: number };
+  return {
+    duplicateCount: Number(dup.n),
+    overlap: dup.f && dup.t ? { from: dup.f, to: dup.t } : null,
+    transferCount: Number(transfers.n),
+  };
+}
+
+/**
+ * Runs the import inside a transaction that is always rolled back: nothing is
+ * written (not even the event log), and the counts are the real pipeline's.
+ * Throws the same errors as `processImport` (e.g. `account_required`).
+ */
+export function dryRunImport(options: ImportOptions): ImportCounts {
+  return runImport(options, planAccount(options), true);
+}
+
+export async function processImport(options: ImportOptions): Promise<ImportResult> {
+  // Planning and the whole transaction run before the first await.
+  const run = runImport(options, planAccount(options), false);
+  const { importSessionId, accountId, normalizedCount, skippedCount, overlapDetected, alreadyImportedCount } = run;
 
   // Hook patterns and briefing into import pipeline
   let briefingSessionId: string | undefined;
@@ -573,17 +758,19 @@ export async function processImport(options: {
     type: 'import.done',
     scope: importSessionId,
     message: `Imported ${normalizedCount} rows (skipped ${skippedCount})`,
-    payload: { normalizedCount, skippedCount, overlapDetected: Boolean(overlapRow), alreadyImportedCount: overlapRow?.row_count ?? 0 },
+    payload: { normalizedCount, skippedCount, overlapDetected, alreadyImportedCount },
   });
 
   return {
     importSessionId,
     accountId,
     normalizedCount,
-    rawCount: rowCount,
+    rawCount: options.records.length,
     skippedCount,
-    overlapDetected: Boolean(overlapRow),
-    alreadyImportedCount: overlapRow?.row_count ?? 0,
+    overlapDetected,
+    alreadyImportedCount,
+    duplicateCount: run.duplicateCount,
+    transferCount: run.transferCount,
     briefingSessionId,
   };
 }

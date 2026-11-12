@@ -3,7 +3,7 @@ import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { db } from '../src/db.js';
-import { checksum, processImport } from '../src/importer.js';
+import { checksum, processImport, type ImportTarget } from '../src/importer.js';
 import { ledgerEntries } from '../src/ledger.js';
 import { resetDb } from './setup/resetDb.js';
 
@@ -28,6 +28,7 @@ const record = (r: Row) => ({
 });
 
 let n = 0;
+const NEW_CARD: ImportTarget = { newAccount: { name: 'Luottokortti', subtype: 'credit_card' } };
 function importRows(accountIban: string, rows: Row[]) {
   const records = rows.map(record);
   return processImport({
@@ -67,14 +68,14 @@ test('a card purchase and a refund of the same amount are not a transfer', async
   ]);
   // Both the card that has an IBAN and a real card export that has none.
   await importRows(CARD, [{ date: '2026-10-11', amount: 20, other: 'Kauppa Oy', name: 'Kauppa Oy' }]);
-  await upload('Luottokortti.csv', [{ date: '2026-10-11', amount: 20, other: 'Kauppa Oy', name: 'Kauppa Oy' }]);
+  await upload('Luottokortti.csv', [{ date: '2026-10-11', amount: 20, other: 'Kauppa Oy', name: 'Kauppa Oy' }], NEW_CARD);
   assert.deepEqual(links(), []);
   assert.equal(ledgerEntries().filter((e) => e.counterparty === 'Kauppa Oy').length, 3);
 });
 
 test('a card purchase paid back by a friend is not a transfer', async () => {
   await importRows(CHECKING, [{ date: '2026-10-10', amount: 40, other: FRIEND, name: 'Kaveri' }]);
-  await upload('Luottokortti.csv', [{ date: '2026-10-10', amount: -40, other: 'Ravintola', name: 'Ravintola' }]);
+  await upload('Luottokortti.csv', [{ date: '2026-10-10', amount: -40, other: 'Ravintola', name: 'Ravintola' }], NEW_CARD);
   assert.deepEqual(links(), []);
 });
 
@@ -158,7 +159,8 @@ test('a failed import leaves nothing behind', async () => {
 });
 
 // Uploads name no account: the importer infers it from the file, as the routes do.
-function upload(filename: string, rows: Array<Row & { own?: string }>) {
+// An export without any IBAN (a credit card) needs the user's choice of account.
+function upload(filename: string, rows: Array<Row & { own?: string }>, target?: ImportTarget) {
   const records = rows.map((r) => ({
     ...record(r),
     // A real export fills the account's own side too: payer when paying, payee when paid.
@@ -170,6 +172,7 @@ function upload(filename: string, rows: Array<Row & { own?: string }>) {
     filename,
     sourceBank: 'nordea',
     format: 'csv',
+    target,
   });
 }
 const accountOf = (importResult: { accountId: string }) =>
@@ -181,7 +184,7 @@ test('a credit card repayment from checking is a transfer', async () => {
     { date: '2026-10-01', amount: -950, other: FRIEND, name: 'Vuokranantaja' },
     { date: '2026-10-20', amount: -500, other: 'FI99 9999 9999 9999 99', name: 'Nordea Rahoitus' },
   ]);
-  await upload('Luottokortti.csv', [{ date: '2026-10-21', amount: 500, other: '', name: 'Maksu, kiitos' }]);
+  await upload('Luottokortti.csv', [{ date: '2026-10-21', amount: 500, other: '', name: 'Maksu, kiitos' }], NEW_CARD);
   assert.equal(links().length, 1);
   assert.equal(links()[0].confidence, 70);
 });
