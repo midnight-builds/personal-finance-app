@@ -586,6 +586,7 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
     // day's first row) or ascending (then its last row).
     const newestFirst = isNewestFirst(records);
     const dayRows = new Map<string, Array<SaldoRow & { currency: string }>>();
+    const daysMissingSaldo = new Set<string>();
 
     for (const record of records) {
       const bookingDate = parseDate(getField(record, 'Kirjauspäivä'));
@@ -652,6 +653,8 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
       if (saldo !== null && bookingDate) {
         if (!dayRows.has(bookingDate)) dayRows.set(bookingDate, []);
         dayRows.get(bookingDate)!.push({ amount, saldo, currency });
+      } else if (bookingDate) {
+        daysMissingSaldo.add(bookingDate);
       }
 
       const categoryId = chooseCategoryFor({
@@ -668,7 +671,9 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
     }
 
     for (const [day, rows] of dayRows) {
-      const close = dayEnds(rows).close;
+      // The chain is only sound when every row of the day has a Saldo: with
+      // one missing, a wrong row can look like the day's last one.
+      const close = daysMissingSaldo.has(day) ? null : dayEnds(rows).close;
       const byFileOrder = newestFirst ? rows[0] : rows[rows.length - 1];
       const saldo = close !== null ? close / 100 : byFileOrder.saldo;
       insertBalance.run(createId(), now, accountId, day, saldo, byFileOrder.currency);

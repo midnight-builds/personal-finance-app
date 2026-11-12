@@ -39,3 +39,14 @@ test("an oldest-first export keeps the day's closing balance", async () => {
   ]);
   assert.equal(accountBalances('2026-10-12')[0].balance, 91);
 });
+
+test('a day with a row missing its Saldo keeps the file-order closing balance', async () => {
+  // Review case: without the blank row, the chain would wrongly end at 85.
+  await run([
+    row('2026/10/12', '-5,00', '100,00'),
+    row('2026/10/12', '20,00', ''),
+    row('2026/10/12', '-15,00', '85,00'),
+    row('2026/10/11', '-10,00', '100,00'),
+  ]);
+  assert.equal(accountBalances('2026-10-12')[0].balance, 100);
+});
