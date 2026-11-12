@@ -31,11 +31,11 @@ import {
   parseAmount,
   parseDate,
 } from './importer.js';
+import { cents, dayEnds, type SaldoRow } from './saldoChain.js';
 import { isCanonicalGroupRow } from './sql/transactions.js';
 
 type BookedRow = { day: string; amount: number; saldo: number | null; counterparty: string | null };
 
-const cents = (n: number) => Math.round(n * 100);
 const euros = (c: number) => c / 100;
 const compact = (iban: string | null) => (iban ? iban.replace(/\s+/g, '').toUpperCase() : null);
 
@@ -166,70 +166,54 @@ function byDay(rows: BookedRow[]): Day[] {
   return days;
 }
 
-/** The one value of `values` not paired with a value of `others` (multisets), if exactly one. */
-function unpaired(values: number[], others: number[]): number | null {
-  const left = new Map<number, number>();
-  for (const o of others) left.set(o, (left.get(o) ?? 0) + 1);
-  const rest = values.filter((v) => {
-    const n = left.get(v) ?? 0;
-    if (n > 0) left.set(v, n - 1);
-    return n === 0;
-  });
-  return rest.length === 1 ? rest[0] : null;
-}
-
-/**
- * A day's balance before and after its rows (cents), whatever their order in
- * the file. The rows form a chain: each row's balance before it (Saldo −
- * amount) is another row's Saldo, except the day's opening; each Saldo is
- * another row's balance before, except the day's close. Falls back to the
- * file order when the chain is ambiguous or broken.
- */
-function dayEnds(d: Day): { opening: number; close: number } {
-  const saldos = d.rows.map((r) => cents(r.saldo!));
-  const before = d.rows.map((r) => cents(r.saldo!) - cents(r.amount));
-  return {
-    opening: unpaired(before, saldos) ?? before[0],
-    close: unpaired(saldos, before) ?? saldos[saldos.length - 1],
-  };
-}
-
 const hasSaldo = (d: Day) => d.rows.every((r) => r.saldo !== null);
+const ends = (d: Day) => dayEnds(d.rows as SaldoRow[]);
 
-/** The file's balance before its first booked row (cents), or null without Saldo. */
+/** The file's balance before its first booked row (cents); null without Saldo or when the first day does not decide it. */
 export function fileOpening(rows: BookedRow[]): number | null {
   const first = byDay(rows)[0];
-  return first && hasSaldo(first) ? dayEnds(first).opening : null;
+  return first && hasSaldo(first) ? ends(first).opening : null;
 }
 
-/** The file's balance after its last booked row (cents), or null without Saldo. */
+/** The file's balance after its last booked row (cents); null without Saldo or when the last day does not decide it. */
 export function fileClosing(rows: BookedRow[]): number | null {
   const days = byDay(rows);
   const last = days[days.length - 1];
-  return last && hasSaldo(last) ? dayEnds(last).close : null;
+  return last && hasSaldo(last) ? ends(last).close : null;
 }
 
 /**
  * Nordea's Saldo is a running balance. Day by day, the previous day's closing
  * balance plus the day's amounts must be the Saldo of one of the day's rows
  * (which one depends on the order within the day, which exports do not
- * guarantee). Otherwise rows are missing in between; the check then goes on
- * from the day's own closing balance, so one gap is reported once.
+ * guarantee). Otherwise rows are missing in between, reported once: the check
+ * goes on from the day's own close. Where the chain does not decide a balance
+ * (a day netting to zero, a row missing mid-day), nothing is guessed: the
+ * check resynchronises on the next day that decides its own opening, and no
+ * break is reported for the undecided stretch.
  */
 export function balanceBreaks(rows: BookedRow[]): BalanceBreak[] {
   if (rows.length === 0 || rows.some((r) => r.saldo === null)) return [];
-  const days = byDay(rows);
   const out: BalanceBreak[] = [];
-  let close = dayEnds(days[0]).opening;
-  for (const d of days) {
+  // The balance before the day, in cents; null = not known, resynchronise.
+  let close: number | null = null;
+  for (const d of byDay(rows)) {
+    const { opening, close: dayClose } = ends(d);
+    if (close === null) {
+      if (opening === null) {
+        close = dayClose;
+        continue;
+      }
+      close = opening;
+    }
     const expected = close + d.sum;
     if (d.rows.some((r) => cents(r.saldo!) === expected)) {
       close = expected;
       continue;
     }
-    const actual = dayEnds(d).close;
+    const actual = dayClose ?? cents(d.rows[d.rows.length - 1].saldo!);
     out.push({ date: d.day, expected: euros(expected), actual: euros(actual), difference: euros(actual - expected) });
-    close = actual;
+    close = dayClose;
   }
   return out;
 }
@@ -312,7 +296,13 @@ function analyze(
     quietPeriods: quietPeriods(rows),
     balanceBreaks: balanceBreaks(rows),
     openingMismatch,
-    ibanMismatch: Boolean(file.ownIban && accountIban && file.ownIban !== accountIban),
+    // The file names its own IBAN and it is someone else's: the target's own
+    // IBAN differs, or another account holds it (also when the target has none).
+    ibanMismatch: Boolean(
+      account &&
+        file.ownIban &&
+        ((accountIban && file.ownIban !== accountIban) || (file.ownIbanAccount && file.ownIbanAccount.id !== account.id))
+    ),
   };
 }
 
@@ -339,10 +329,27 @@ function overlapScore(account: ImportPreviewAccount, rows: BookedRow[], file: Im
          AND t.booking_date >= ? AND t.booking_date < ? AND ${isCanonicalGroupRow('t')}`
     )
     .all(account.id, from, daysBefore(to, -1)) as Array<{ day: string; amount: number; counterparty: string | null }>;
+  // A charge the account pays in two or more months (a card fee, a
+  // subscription) is the same on every card: no evidence either way.
+  const recurring = new Set(
+    (
+      db
+        .prepare(
+          `SELECT t.counterparty_name AS counterparty, t.amount
+           FROM normalized_transactions t
+           WHERE t.account_id = ? AND t.booking_date IS NOT NULL AND ${isCanonicalGroupRow('t')}
+           GROUP BY t.counterparty_name, t.amount
+           HAVING COUNT(DISTINCT substr(t.booking_date, 1, 7)) >= 2`
+        )
+        .all(account.id) as Array<{ counterparty: string | null; amount: number }>
+    ).map((r) => `${cents(r.amount)}|${r.counterparty ?? ''}`)
+  );
+  const isEvidence = (amount: number, counterparty: string | null) => !recurring.has(`${cents(amount)}|${counterparty ?? ''}`);
   const key = (day: string, amount: number, counterparty: string | null) => `${day}|${cents(amount)}|${counterparty ?? ''}`;
   const left = new Map<string, number>();
-  for (const e of existing) left.set(key(e.day, e.amount, e.counterparty), (left.get(key(e.day, e.amount, e.counterparty)) ?? 0) + 1);
-  const inRange = rows.filter((r) => r.day >= from && r.day <= to);
+  const evidence = existing.filter((e) => isEvidence(e.amount, e.counterparty));
+  for (const e of evidence) left.set(key(e.day, e.amount, e.counterparty), (left.get(key(e.day, e.amount, e.counterparty)) ?? 0) + 1);
+  const inRange = rows.filter((r) => r.day >= from && r.day <= to && isEvidence(r.amount, r.counterparty));
   let matched = 0;
   for (const r of inRange) {
     const k = key(r.day, r.amount, r.counterparty);
@@ -353,7 +360,7 @@ function overlapScore(account: ImportPreviewAccount, rows: BookedRow[], file: Im
     }
   }
   const overlaps =
-    matched >= OVERLAP_GUESS_MIN_ROWS && matched * 2 >= existing.length && matched * 2 >= inRange.length;
+    matched >= OVERLAP_GUESS_MIN_ROWS && matched * 2 >= evidence.length && matched * 2 >= inRange.length;
   return overlaps ? matched : null;
 }
 

@@ -30,7 +30,10 @@ sopimus `packages/shared/src/importPreview.ts`):
      → `overlap`. Päällekkäisyys lasketaan kevyellä SQL-haulla duplikaattisäännöllä (päivä,
      summa, vastapuoli, pari kerrallaan) ja vaatii kaikki: vähintään 3 riviä, vähintään puolet
      tilin riveistä yhteiseltä jaksolta ja vähintään puolet tiedoston riveistä samalta jaksolta.
-     Yksi yhteinen kuukausimaksu kahdella kortilla ei siis riitä. Tasapeli → ei arvausta.
+     Tilin toistuvat veloitukset (sama vastapuoli ja summa vähintään kahtena kuukautena, esim.
+     kortin kuukausimaksu tai tilaus) eivät ole todiste eivätkä lasku mukaan. Tasapeli → ei
+     arvausta. Käyttöliittymä valitsee valmiiksi vain IBAN-arvauksen; päällekkäisyysarvaus
+     näytetään ehdotuksena ("Valitse ehdotettu: …").
      Muuten `none` ja uuden tilin ehdotus (ei IBANia → luottokortti, nimessä "säästö" → säästötili).
    - Päällekkäiset ja siirrot lasketaan yhdellä **kuivaharjoituksella** vain valitulle kohteelle: oikea tuontiputki ajetaan
      transaktiossa, joka perutaan (`ROLLBACK`). Luvut ovat siksi täsmälleen ne, jotka tuonti tekee.
@@ -41,7 +44,10 @@ sopimus `packages/shared/src/importPreview.ts`):
      (≥ 14 päivää ilman rivejä). Saldokatkot: edellisen päivän saldo + päivän summat on oltava
      jonkin päivän rivin Saldo — päivän sisäisellä järjestyksellä ei ole väliä; katkon jälkeen
      jatketaan päivän omasta loppusaldosta, joten yksi aukko raportoidaan kerran. Alkusaldon
-     ristiriita tilin saldoon edellisenä päivänä ja IBAN-ristiriita. "Uudet" rivit eivät sisällä
+     ristiriita tilin saldoon edellisenä päivänä ja IBAN-ristiriita (tiedoston IBAN kuuluu toiselle
+     tilille, myös kun kohdetililla ei ole IBANia). Päivän alku- ja loppusaldo luetaan rivien
+     ketjusta (`apps/api/src/saldoChain.ts`), jota myös tuonnin päiväsaldot käyttävät; jos ketju
+     ei ratkaise sitä (päivä nettoutuu nollaan), ei arvata vaan tarkistus jatkuu seuraavasta päivästä. "Uudet" rivit eivät sisällä
      varauksia (ne näkyvät erikseen).
 2. `POST /imports/nordea/csv|xlsx` ottaa valinnan: `accountId` (olemassa oleva tili, nimeä tai
    IBANia ei muuteta; tuntematon → 404) tai `newAccountName` + `newAccountSubtype`

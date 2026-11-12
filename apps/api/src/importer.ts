@@ -10,6 +10,7 @@ import { generateRuleSuggestions } from './ruleSuggestions.js';
 import { canonicalGroupOrder, isCanonicalGroupRow } from './sql/transactions.js';
 import { daysBefore } from './ledger.js';
 import { DomainError } from './http/errors.js';
+import { dayEnds, type SaldoRow } from './saldoChain.js';
 import type { AccountSubtype } from '@finance-app/shared';
 
 export type ImportResult = {
@@ -486,7 +487,11 @@ function planAccount(options: ImportOptions): AccountPlan {
       | undefined;
     if (!row) throw new DomainError('account_not_found', 404);
     const own = inferAccount(options.records, options.filename).accountIban;
-    if (!options.allowIbanMismatch && own && row.iban && compactIban(row.iban) !== own) {
+    // The file's own IBAN is someone else's: the account's IBAN differs, or
+    // another account holds it (also when this account has none).
+    const holder = own ? accountIdByIban(own) : null;
+    const mismatch = own && ((row.iban && compactIban(row.iban) !== own) || (holder && holder !== row.id));
+    if (!options.allowIbanMismatch && mismatch) {
       throw DomainError.conflict('iban_mismatch');
     }
     return { kind: 'existing', accountId: row.id, iban: row.iban };
@@ -575,10 +580,12 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
     );
 
     // A day's snapshot is its closing balance: the Saldo of the day's last row
-    // in time. Nordea lists newest first, so then that is the day's first row in
-    // the file. An export whose dates ascend is read the other way round.
+    // in time, read from the chain of the day's rows (saldoChain.ts), so the
+    // order of a day's rows in the file does not matter. Only when the chain
+    // does not decide it: the file order, newest first like Nordea (then the
+    // day's first row) or ascending (then its last row).
     const newestFirst = isNewestFirst(records);
-    const closingBalances = new Map<string, { saldo: number; currency: string }>();
+    const dayRows = new Map<string, Array<SaldoRow & { currency: string }>>();
 
     for (const record of records) {
       const bookingDate = parseDate(getField(record, 'Kirjauspäivä'));
@@ -642,8 +649,9 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
         null
       );
 
-      if (saldo !== null && bookingDate && !(newestFirst && closingBalances.has(bookingDate))) {
-        closingBalances.set(bookingDate, { saldo, currency });
+      if (saldo !== null && bookingDate) {
+        if (!dayRows.has(bookingDate)) dayRows.set(bookingDate, []);
+        dayRows.get(bookingDate)!.push({ amount, saldo, currency });
       }
 
       const categoryId = chooseCategoryFor({
@@ -659,8 +667,11 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
       normalizedCount += 1;
     }
 
-    for (const [day, { saldo, currency }] of closingBalances) {
-      insertBalance.run(createId(), now, accountId, day, saldo, currency);
+    for (const [day, rows] of dayRows) {
+      const close = dayEnds(rows).close;
+      const byFileOrder = newestFirst ? rows[0] : rows[rows.length - 1];
+      const saldo = close !== null ? close / 100 : byFileOrder.saldo;
+      insertBalance.run(createId(), now, accountId, day, saldo, byFileOrder.currency);
     }
 
     // Post-processing: group duplicates, then link transfers between their canonical rows.

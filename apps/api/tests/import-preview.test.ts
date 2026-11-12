@@ -7,7 +7,7 @@ import type { ImportPreview } from '@finance-app/shared';
 import { db } from '../src/db.js';
 import { DEMO_CHECKING_IBAN, DEMO_SAVINGS_IBAN, demoExports } from '../src/demo/demoData.js';
 import { checksum, processImport } from '../src/importer.js';
-import { balanceBreaks, bookedRowsInTimeOrder, fileOpening, quietPeriods } from '../src/importPreview.js';
+import { balanceBreaks, bookedRowsInTimeOrder, fileClosing, fileOpening, quietPeriods } from '../src/importPreview.js';
 import { ledgerEntries } from '../src/ledger.js';
 import { routes } from '../src/routes/index.js';
 import { resetDb } from './setup/resetDb.js';
@@ -474,4 +474,90 @@ test('file summary and IBAN mismatch', async () => {
 
   const same = await preview('t.csv', nordea(CARD_ROWS, { own: CHECKING }));
   assert.equal(same.analysis.ibanMismatch, false);
+});
+
+test('a day’s closing snapshot does not depend on the order of its rows (importer = preview)', async () => {
+  // 2.10: 100 → −10 (90) → −20 (70). Bank order lists the −20 row first; the other file the −10 row.
+  const rows: Row[] = [
+    { date: '2026-10-01', amount: -0.5, name: 'Maksu' },
+    { date: '2026-10-02', amount: -10, name: 'Kauppa' },
+    { date: '2026-10-02', amount: -20, name: 'Kahvila' },
+  ];
+  const bankOrder = nordea(rows, { opening: 100.5 });
+  const swapped = [...bankOrder];
+  [swapped[0], swapped[1]] = [swapped[1], swapped[0]];
+  const snapshot = async (records: Record<string, unknown>[], name: string) => {
+    const res = await upload('k.csv', records, { newAccountName: name, newAccountSubtype: 'checking' });
+    assert.equal(res.statusCode, 200, res.body);
+    return db
+      .prepare(`SELECT balance FROM balance_snapshots WHERE account_id = ? AND substr(date, 1, 10) = '2026-10-02'`)
+      .get(res.json().accountId) as { balance: number };
+  };
+  assert.equal((await snapshot(bankOrder, 'A')).balance, 70);
+  assert.equal((await snapshot(swapped, 'B')).balance, 70);
+  assert.equal(fileClosing(bookedRowsInTimeOrder(swapped)), 7000);
+});
+
+test('a day that nets to zero is not guessed: no false break after it', () => {
+  // 100 → +10 (110) → −10 (100); next day −5 (95). Listed so that file order would read the opening as 110.
+  const rows = nordea(
+    [
+      { date: '2026-03-10', amount: 10, name: 'Palautus' },
+      { date: '2026-03-10', amount: -10, name: 'Kauppa' },
+      { date: '2026-03-11', amount: -5, name: 'Kahvila' },
+    ],
+    { opening: 100 }
+  );
+  [rows[1], rows[2]] = [rows[2], rows[1]];
+  const booked = bookedRowsInTimeOrder(rows);
+  assert.equal(fileOpening(booked), null);
+  assert.deepEqual(balanceBreaks(booked), []);
+  // The same in the middle of a file after a real break: reported once, then resynchronised.
+  const later = nordea(
+    [
+      { date: '2026-03-08', amount: -1, name: 'a' },
+      { date: '2026-03-09', amount: -3, name: 'puuttuu' },
+      { date: '2026-03-10', amount: 10, name: 'Palautus' },
+      { date: '2026-03-10', amount: -10, name: 'Kauppa' },
+      { date: '2026-03-11', amount: -5, name: 'Kahvila' },
+    ],
+    { opening: 100, drop: [1] }
+  );
+  const breaks = balanceBreaks(bookedRowsInTimeOrder(later));
+  assert.equal(breaks.length, 1);
+  assert.equal(breaks[0].date, '2026-03-10');
+});
+
+test('fees and subscriptions shared by two cards are no evidence of overlap (review round 2)', async () => {
+  const fees: Row[] = ['07', '08', '09'].map((m) => ({ date: `2026-${m}-01`, amount: -2.5, name: 'Kortin kuukausimaksu' }));
+  const cardB = await upload('b.csv', nordea(fees), { newAccountName: 'Kortti B', newAccountSubtype: 'credit_card' });
+  assert.equal(cardB.statusCode, 200, cardB.body);
+  const fileA = nordea([
+    ...fees,
+    { date: '2026-07-12', amount: -40, name: 'Kauppa' },
+    { date: '2026-08-14', amount: -12, name: 'Kahvila' },
+    { date: '2026-09-20', amount: -60, name: 'Huoltoasema' },
+  ]);
+  const p = await preview('Luottokortti.csv', fileA);
+  assert.equal(p.guess?.reason, 'none');
+});
+
+test('a file whose IBAN belongs to another account needs confirmation, also into an IBAN-less account', async () => {
+  const checking = await upload(`Käyttötili ${CHECKING}.csv`, nordea(CARD_ROWS.slice(0, 1), { own: CHECKING }));
+  assert.equal(checking.statusCode, 200, checking.body);
+  const card = await upload('k.csv', nordea(CARD_ROWS), { newAccountName: 'Kortti', newAccountSubtype: 'credit_card' });
+  const cardId = card.json().accountId;
+
+  const checkingExport = nordea([{ date: '2026-11-01', amount: -9, name: 'Kauppa' }], { own: CHECKING });
+  const p = await preview('t.csv', checkingExport, { accountId: cardId });
+  assert.equal(p.analysis.ibanMismatch, true);
+  const refused = await upload('t.csv', checkingExport, { accountId: cardId });
+  assert.equal(refused.statusCode, 409);
+  assert.equal(refused.json().error, 'iban_mismatch');
+  assert.equal((await upload('t.csv', checkingExport, { accountId: cardId, allowIbanMismatch: '1' })).statusCode, 200);
+
+  // An IBAN no account holds may go into an IBAN-less account without asking.
+  const unknown = nordea([{ date: '2026-11-02', amount: -9, name: 'Kauppa' }], { own: OTHER });
+  assert.equal((await preview('t.csv', unknown, { accountId: cardId })).analysis.ibanMismatch, false);
+  assert.equal((await upload('t.csv', unknown, { accountId: cardId })).statusCode, 200);
 });
