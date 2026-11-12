@@ -934,6 +934,9 @@ label {
 }
 
 .import-guess {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
   padding: 8px 12px;
   border-radius: 10px;
   background: rgba(34, 211, 238, 0.08);

@@ -85,6 +85,8 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
   const [ibanConfirmed, setIbanConfirmed] = useState(false);
   // Only the latest preview request may update the view.
   const requestSeq = useRef(0);
+  // The first preview's analysis (for the guess, or a new account without one).
+  const initial = useRef<ImportPreviewAnalysis | null>(null);
 
   const requestPreview = (as?: { accountId: string } | 'new') => {
     const seq = ++requestSeq.current;
@@ -111,9 +113,12 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
     requestPreview().then((p) => {
       if (!p?.guess) return;
       setBase({ file: p.file, accounts: p.accounts, guess: p.guess });
-      // The analysis is for the guess, or for a new account when there is none:
-      // shown only once the user has a choice.
-      setChoice(p.guess.accountId ? { kind: 'existing', accountId: p.guess.accountId } : null);
+      // The analysis is for the guess, or for a new account when there is none;
+      // kept so that choosing that target needs no second request. It is shown
+      // once the user has a choice. Only an IBAN match is chosen for the user:
+      // an overlap is offered as a suggestion.
+      initial.current = p.analysis;
+      setChoice(p.guess.reason === 'iban' && p.guess.accountId ? { kind: 'existing', accountId: p.guess.accountId } : null);
       setNewName(p.guess.newAccount.name);
       setNewSubtype(p.guess.newAccount.subtype);
     });
@@ -127,6 +132,14 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
     setError('');
     if (value === '') {
       setChoice(null);
+      return;
+    }
+    const reuse = initial.current && initial.current.accountId === (value === 'new' ? null : value) ? initial.current : null;
+    if (reuse) {
+      requestSeq.current += 1; // drop any request still in flight
+      setChoice(value === 'new' ? { kind: 'new' } : { kind: 'existing', accountId: value });
+      setAnalysis(reuse);
+      setLoading(false);
       return;
     }
     setLoading(true);
@@ -165,7 +178,9 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
   // The file's own IBAN points elsewhere: importing needs an explicit yes.
   let ibanWarning = '';
   if (choice?.kind === 'existing' && a?.ibanMismatch && target) {
-    ibanWarning = `Tiedoston IBAN (${f.ownIban}) on eri kuin tilin ${target.name} IBAN (${target.iban}).`;
+    ibanWarning = target.iban
+      ? `Tiedoston IBAN (${f.ownIban}) on eri kuin tilin ${target.name} IBAN (${target.iban}).`
+      : `Tiedoston IBAN (${f.ownIban}) kuuluu tilille ${f.ownIbanAccount?.name ?? 'toiselle tilille'}, ei tilille ${target.name}.`;
   } else if (choice?.kind === 'new' && f.ownIbanAccount) {
     ibanWarning = `Tiedoston IBAN (${f.ownIban}) kuuluu jo tilille ${f.ownIbanAccount.name}.`;
   }
@@ -206,7 +221,7 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
 
   let guessText: string;
   if (guess.reason === 'iban') guessText = `Tunnistettu IBANista: ${guessedName}`;
-  else if (guess.reason === 'overlap') guessText = `${guess.overlapCount} päällekkäistä tapahtumaa tilin ${guessedName} kanssa`;
+  else if (guess.reason === 'overlap') guessText = `Ehdotus: ${guess.overlapCount} päällekkäistä tapahtumaa tilin ${guessedName} kanssa — tarkista ja valitse tili`;
   else guessText = 'Tiliä ei tunnistettu — valitse tili';
 
   const notes: string[] = [];
@@ -244,7 +259,14 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
         {f.skippedCount > 0 && ` · ${f.skippedCount} riviä ilman summaa ohitetaan`}
       </p>
 
-      <p className={guess.reason === 'none' ? 'import-guess import-guess-none' : 'import-guess'}>{guessText}</p>
+      <div className={guess.reason === 'iban' ? 'import-guess' : 'import-guess import-guess-none'}>
+        <p>{guessText}</p>
+        {guess.reason === 'overlap' && guess.accountId && selectValue !== guess.accountId && (
+          <button type="button" className="ghost mini" onClick={() => onSelect(guess.accountId!)} disabled={importing}>
+            Valitse ehdotettu: {guessedName} ({guess.overlapCount} päällekkäistä tapahtumaa)
+          </button>
+        )}
+      </div>
 
       <div className="import-target">
         <label>

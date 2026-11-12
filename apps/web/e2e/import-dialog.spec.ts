@@ -79,7 +79,7 @@ test('import dialog: no guess means the user must choose; a new account is sent 
           file: fileInfo(filename),
           accounts: [CARD],
           guess: { accountId: 'card-1', reason: 'overlap', overlapCount: 2, newAccount: { name: 'Visa 2', subtype: 'credit_card' } },
-          analysis: analysis({ accountId: 'card-1', duplicates: 2, newRows: 1, gapBefore: { from: '2026-09-01', to: '2026-09-30', days: 30 } }),
+          analysis: analysis({ accountId: 'card-1', duplicates: 2, newRows: 1, gapBefore: { from: '2026-09-01', to: '2026-09-30', days: 30, balance: 'differs', difference: -80 } }),
         })
       );
     }
@@ -88,9 +88,8 @@ test('import dialog: no guess means the user must choose; a new account is sent 
         file: fileInfo(filename),
         accounts: [CARD],
         guess: { accountId: null, reason: 'none', newAccount: { name: 'Mastercard', subtype: 'credit_card' } },
-        analysis: fields.asNewAccount
-          ? analysis({ balanceBreaks: [{ date: '2026-03-12', expected: 100, actual: 54.8, difference: -45.2 }] })
-          : analysis(),
+        // Without a guess, the first preview is already for a new account.
+        analysis: analysis({ balanceBreaks: [{ date: '2026-03-12', expected: 100, actual: 54.8, difference: -45.2 }] }),
       })
     );
   });
@@ -112,15 +111,24 @@ test('import dialog: no guess means the user must choose; a new account is sent 
 
   await dialog.getByLabel('Kohdetili').selectOption('new');
   await expect(dialog.getByText('Saldo ei täsmää 12.3.: puuttuu −45,20 €', { exact: false })).toBeVisible();
-  expect(previews.at(-1)).toEqual({ asNewAccount: '1' });
+  // "Uusi tili" is what the first preview was for: no second request.
+  expect(previews).toEqual([{}]);
   await expect(dialog.getByLabel('Tilin nimi')).toHaveValue('Mastercard');
   await expect(dialog.getByLabel('Tyyppi')).toHaveValue('credit_card');
   await dialog.getByRole('button', { name: 'Tuo tiedosto' }).click();
 
   // The next file is previewed after the import: guessed by overlap.
   await expect(dialog.getByText('Tiedosto 2 / 2')).toBeVisible();
-  await expect(dialog.getByText('2 päällekkäistä tapahtumaa tilin Visa kanssa')).toBeVisible();
+  // An overlap is a suggestion, not a choice: nothing is selected until the user takes it.
+  await expect(dialog.getByText('2 päällekkäistä tapahtumaa tilin Visa kanssa', { exact: false })).toBeVisible();
+  await expect(dialog.getByLabel('Kohdetili')).toHaveValue('');
+  await expect(dialog.getByRole('button', { name: 'Tuo tiedosto' })).toBeDisabled();
+  const previewsBefore = previews.length;
+  await dialog.getByRole('button', { name: 'Valitse ehdotettu: Visa (2 päällekkäistä tapahtumaa)' }).click();
+  await expect(dialog.getByLabel('Kohdetili')).toHaveValue('card-1');
   await expect(dialog.getByText('30 päivää puuttuu ennen tätä tiedostoa', { exact: false })).toBeVisible();
+  // The first preview was already for the suggestion: no second request.
+  expect(previews.length).toBe(previewsBefore);
   await dialog.getByRole('button', { name: 'Tuo tiedosto' }).click();
 
   await expect(dialog.getByText('Valmis')).toBeVisible();
