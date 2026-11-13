@@ -297,6 +297,47 @@ test('a subscription detected earlier for a person is reclassified as recurring'
   assert.equal(row.is_active, 1);
 });
 
+test('a known bill whose price varies stays active', () => {
+  const acct = mkAccount();
+  const sess = mkSession();
+  mkTx(acct, sess, 'Helen Oy', -120, 120);
+  mkTx(acct, sess, 'Helen Oy', -110, 90);
+  mkTx(acct, sess, 'Helen Oy', -70, 60);
+  mkTx(acct, sess, 'Helen Oy', -60, 30);
+  mkPattern(acct, 'Helen Oy', 'subscription', 4);
+
+  detectPatterns(acct);
+
+  const row = patternOf(acct, 'Helen Oy');
+  assert.equal(row.is_active, 1);
+  assert.equal(row.pattern_type, 'subscription');
+});
+
+test('an irregular person payment detected earlier as a subscription stays, as recurring', () => {
+  const acct = mkAccount();
+  const sess = mkSession();
+  for (const days of [150, 60, 30]) mkTx(acct, sess, 'VIRTANEN MATTI', -10, days, 'FI2112345600000785');
+  mkPattern(acct, 'VIRTANEN MATTI', 'subscription', 3);
+
+  detectPatterns(acct);
+
+  const row = patternOf(acct, 'VIRTANEN MATTI');
+  assert.equal(row.is_active, 1);
+  assert.equal(row.pattern_type, 'recurring');
+});
+
+test('a subscription merchant paid mostly by card stays a subscription', () => {
+  const acct = mkAccount();
+  const sess = mkSession();
+  mkTx(acct, sess, 'Helen Oy', -60, 90);
+  mkTx(acct, sess, 'Helen Oy', -60, 60, 'FI4950009420028730');
+  mkTx(acct, sess, 'Helen Oy', -60, 30);
+
+  detectPatterns(acct);
+
+  assert.equal(patternOf(acct, 'Helen Oy')?.pattern_type, 'subscription');
+});
+
 test("deactivation leaves user-confirmed, annual and other accounts' patterns alone", () => {
   const acct = mkAccount();
   const other = mkAccount();

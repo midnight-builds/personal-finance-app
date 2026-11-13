@@ -13,11 +13,12 @@ const SUBSCRIPTION_MERCHANT = new RegExp(String.raw`(^|[^\p{L}\p{N}])(${SUBSCRIP
 
 /**
  * A subscription is a known subscription merchant, never inferred from the amount.
- * Payments carrying a counterparty IBAN go account to account (people, e-invoices),
- * so a person named e.g. Elisa is not one; such a payment stays recurring.
+ * Payments carrying a counterparty IBAN go account to account; a counterparty paid
+ * only that way is a person (e.g. one named Elisa) or an e-invoice biller, and stays
+ * recurring. A merchant also paid by card or direct debit keeps its subscription.
  */
-function isSubscription(counterparty: string, paidToAccount: boolean): boolean {
-  return !paidToAccount && SUBSCRIPTION_MERCHANT.test(counterparty);
+function isSubscription(counterparty: string, occurrences: Array<{ viaIban: boolean }>): boolean {
+  return !occurrences.every((o) => o.viaIban) && SUBSCRIPTION_MERCHANT.test(counterparty);
 }
 
 /**
@@ -75,9 +76,10 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
   // Transfers are included only to find the counterparties to leave out.
   const entries = ledgerEntries({ accounts: [accountId], to: asOf, includeTransfers: true });
   const rows = recurringCandidates(entries, daysBefore(asOf, 180));
+  const groups = byCounterparty(rows);
   const detected = new Set<string>();
 
-  for (const [counterparty, occurrences] of byCounterparty(rows)) {
+  for (const [counterparty, occurrences] of groups) {
     if (occurrences.length < MIN_OCCURRENCES) continue;
 
     // Check interval consistency — sort by date
@@ -103,7 +105,7 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
     const consistent = amounts.every((a) => Math.abs(a - avgAmount) / avgAmount <= 0.2);
     if (!consistent) continue;
 
-    const patternType = isSubscription(counterparty, sorted.some((o) => o.viaIban)) ? 'subscription' : 'recurring';
+    const patternType = isSubscription(counterparty, sorted) ? 'subscription' : 'recurring';
     detected.add(counterparty);
     const firstSeen = sorted[0].date;
     const lastSeen = sorted[sorted.length - 1].date;
@@ -133,7 +135,7 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
     }
   }
 
-  deactivateUndetected(accountId, detected, now);
+  reviseUndetected(accountId, groups, detected, now);
 
   const longHistory = recurringCandidates(entries, daysBefore(asOf, 1460));
   detectAnnualPatternsForAccount(accountId, longHistory);
@@ -141,19 +143,30 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
 }
 
 /**
- * Monthly/weekly patterns of the account that this run no longer finds stop being
- * active, so ones detected on weaker evidence (or long stopped) leave the forecast
- * and subscription totals. User-confirmed patterns stay.
+ * Active monthly/weekly patterns of the account that this run did not detect. One with
+ * fewer than MIN_OCCURRENCES charges in the window was detected on too little evidence
+ * (or has stopped) and is deactivated. One with enough charges stays active, since a
+ * varying price or a skipped month says nothing against a known bill, but a subscription
+ * that no longer qualifies as one becomes recurring. User-confirmed patterns stay as is.
  */
-function deactivateUndetected(accountId: string, detected: Set<string>, now: string): void {
+function reviseUndetected(
+  accountId: string,
+  groups: Map<string, Array<{ viaIban: boolean }>>,
+  detected: Set<string>,
+  now: string
+): void {
   const rows = db.prepare(`
-    SELECT id, counterparty_name FROM recurring_patterns
+    SELECT id, counterparty_name, pattern_type FROM recurring_patterns
     WHERE account_id = ? AND is_active = 1 AND pattern_type IN ('subscription', 'recurring')
       AND user_confirmed IS NOT 1
-  `).all(accountId) as Array<{ id: string; counterparty_name: string | null }>;
+  `).all(accountId) as Array<{ id: string; counterparty_name: string | null; pattern_type: string }>;
   const deactivate = db.prepare('UPDATE recurring_patterns SET is_active = 0, updated_at = ? WHERE id = ?');
+  const demote = db.prepare("UPDATE recurring_patterns SET pattern_type = 'recurring', updated_at = ? WHERE id = ?");
   for (const r of rows) {
-    if (r.counterparty_name === null || !detected.has(r.counterparty_name)) deactivate.run(now, r.id);
+    if (r.counterparty_name !== null && detected.has(r.counterparty_name)) continue;
+    const occurrences = r.counterparty_name === null ? [] : groups.get(r.counterparty_name) ?? [];
+    if (occurrences.length < MIN_OCCURRENCES) deactivate.run(now, r.id);
+    else if (r.pattern_type === 'subscription' && !isSubscription(r.counterparty_name!, occurrences)) demote.run(now, r.id);
   }
 }
 
