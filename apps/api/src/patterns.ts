@@ -2,23 +2,32 @@ import crypto from 'crypto';
 import { db } from './db.js';
 import { daysBefore, ledgerEntries, today, type LedgerEntry } from './ledger.js';
 
-const SUBSCRIPTION_KEYWORDS = [
-  'netflix', 'spotify', 'hbo', 'disney', 'apple', 'google', 'youtube',
-  'amazon', 'microsoft', 'adobe', 'dropbox', 'github', 'linkedin',
-  'telia', 'elisa', 'dna', 'helen', 'vattenfall',
-];
+/** How far a monthly charge may land from its day of the month (weekends, processing). */
+const SUBSCRIPTION_DAY_TOLERANCE = 3;
 
-// Matched at a word start, so "Sedna" is not DNA while "PAYPAL *HBOMAX" is HBO.
-const SUBSCRIPTION_MERCHANT = new RegExp(String.raw`(^|[^\p{L}\p{N}])(${SUBSCRIPTION_KEYWORDS.join('|')})`, 'iu');
+/** The day `months` calendar months after `date` (YYYY-MM-DD), clamped to the month's last day. */
+function addMonths(date: string, months: number): number {
+  const [y, m, d] = date.slice(0, 10).split('-').map(Number);
+  const lastDay = new Date(Date.UTC(y, m - 1 + months + 1, 0)).getUTCDate();
+  return Date.UTC(y, m - 1 + months, Math.min(d, lastDay));
+}
 
 /**
- * A subscription is a known subscription merchant, never inferred from the amount.
- * Payments carrying a counterparty IBAN go account to account; a counterparty paid
- * only that way is a person (e.g. one named Elisa) or an e-invoice biller, and stays
- * recurring. A merchant also paid by card or direct debit keeps its subscription.
+ * A subscription charges the same amount on about the same day every month, with no
+ * other charge from the counterparty in between: the k-th charge in the window lands
+ * within SUBSCRIPTION_DAY_TOLERANCE days of the first one's day, k months later. Habitual
+ * purchases (groceries, lunch) vary in amount or day. A counterparty paid only to an
+ * IBAN is a person or an e-invoice biller and stays recurring. `occurrences` is in date order.
  */
-function isSubscription(counterparty: string, occurrences: Array<{ viaIban: boolean }>): boolean {
-  return !occurrences.every((o) => o.viaIban) && SUBSCRIPTION_MERCHANT.test(counterparty);
+function isSubscription(occurrences: Array<{ amount: number; date: string; viaIban: boolean }>): boolean {
+  if (occurrences.every((o) => o.viaIban)) return false;
+  const cents = Math.round(occurrences[0].amount * 100);
+  if (occurrences.some((o) => Math.round(o.amount * 100) !== cents)) return false;
+  const first = occurrences[0].date;
+  return occurrences.every(
+    (o, k) =>
+      Math.abs(Date.parse(o.date.slice(0, 10)) - addMonths(first, k)) / 86400_000 <= SUBSCRIPTION_DAY_TOLERANCE
+  );
 }
 
 /**
@@ -105,7 +114,7 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
     const consistent = amounts.every((a) => Math.abs(a - avgAmount) / avgAmount <= 0.2);
     if (!consistent) continue;
 
-    const patternType = isSubscription(counterparty, sorted) ? 'subscription' : 'recurring';
+    const patternType = isSubscription(sorted) ? 'subscription' : 'recurring';
     detected.add(counterparty);
     const firstSeen = sorted[0].date;
     const lastSeen = sorted[sorted.length - 1].date;
@@ -152,7 +161,7 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
  */
 function reviseUndetected(
   accountId: string,
-  groups: Map<string, Array<{ viaIban: boolean }>>,
+  groups: Map<string, Array<{ amount: number; date: string; viaIban: boolean }>>,
   detected: Set<string>,
   now: string
 ): void {
@@ -167,7 +176,7 @@ function reviseUndetected(
     if (r.counterparty_name !== null && detected.has(r.counterparty_name)) continue;
     const occurrences = r.counterparty_name === null ? [] : groups.get(r.counterparty_name) ?? [];
     if (r.occurrence_count < MIN_OCCURRENCES || occurrences.length < MIN_OCCURRENCES) deactivate.run(now, r.id);
-    else if (r.pattern_type === 'subscription' && !isSubscription(r.counterparty_name!, occurrences)) demote.run(now, r.id);
+    else if (r.pattern_type === 'subscription' && !isSubscription(occurrences)) demote.run(now, r.id);
   }
 }
 

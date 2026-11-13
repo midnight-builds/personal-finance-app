@@ -10,8 +10,10 @@ import { markDemoDataset } from '../dataStatus.js';
 
 export const DEMO_CHECKING_IBAN = 'FI00 1234 5600 0000 01';
 export const DEMO_SAVINGS_IBAN = 'FI00 1234 5600 0000 02';
+const DEMO_LANDLORD_IBAN = 'FI00 9876 5400 0000 03';
 
-export type DemoRow = { date: string; amount: number; counterparty: string; message?: string };
+/** `iban`: the other party's account, for account-to-account payments (not card purchases). */
+export type DemoRow = { date: string; amount: number; counterparty: string; message?: string; iban?: string };
 
 export type DemoExport = {
   filename: string;
@@ -46,12 +48,12 @@ export function demoCheckingRows(anchor: string): DemoRow[] {
     const at = (day: number) => ymd(year, month, day);
     const monthIndex = DEMO_MONTHS - 1 - offset; // 0 = oldest month
 
-    rows.push({ date: at(1), amount: -950, counterparty: 'Asunto Oy Demokatu', message: 'Vuokra' });
+    rows.push({ date: at(1), amount: -950, counterparty: 'Asunto Oy Demokatu', message: 'Vuokra', iban: DEMO_LANDLORD_IBAN });
     rows.push({ date: at(3), amount: -24.9, counterparty: 'Elisa Oyj', message: 'Puhelinlasku' });
     rows.push({ date: at(5), amount: -13.99, counterparty: 'Netflix' });
     rows.push({ date: at(8), amount: -(55 + monthIndex * 4), counterparty: 'Helen Oy', message: 'Sähkö' });
     rows.push({ date: at(15), amount: 3200, counterparty: 'Esimerkki Oy', message: 'Palkka' });
-    rows.push({ date: at(16), amount: -300, counterparty: 'Oma säästötili', message: 'Säästö' });
+    rows.push({ date: at(16), amount: -300, counterparty: 'Oma säästötili', message: 'Säästö', iban: DEMO_SAVINGS_IBAN });
 
     // Weekly groceries; the fourth month is a spike month.
     const spike = monthIndex === 3 ? 2.2 : 1;
@@ -80,7 +82,7 @@ export function demoCheckingRows(anchor: string): DemoRow[] {
 export function demoSavingsRows(anchor: string): DemoRow[] {
   return demoCheckingRows(anchor)
     .filter((r) => r.counterparty === 'Oma säästötili')
-    .map((r) => ({ date: r.date, amount: -r.amount, counterparty: 'Oma käyttötili', message: 'Säästö' }));
+    .map((r) => ({ date: r.date, amount: -r.amount, counterparty: 'Oma käyttötili', message: 'Säästö', iban: DEMO_CHECKING_IBAN }));
 }
 
 /** Nordea export rows for oldest-first `rows`: running balance, newest row first like the bank. */
@@ -92,8 +94,8 @@ function toRecords(rows: DemoRow[], openingBalance: number): Record<string, unkn
     return {
       Kirjauspäivä: r.date.replace(/-/g, '/'),
       Määrä: fmt(r.amount),
-      Maksaja: r.amount > 0 ? r.counterparty : '',
-      Maksunsaaja: r.amount < 0 ? r.counterparty : '',
+      Maksaja: r.amount > 0 ? r.iban ?? r.counterparty : '',
+      Maksunsaaja: r.amount < 0 ? r.iban ?? r.counterparty : '',
       Nimi: r.counterparty,
       Otsikko: '',
       Viesti: r.message ?? '',

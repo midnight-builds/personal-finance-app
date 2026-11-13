@@ -24,9 +24,13 @@ function mkSession() {
 }
 
 function mkTx(accountId: string, sessionId: string, counterparty: string, amount: number, daysAgo: number, counterpartyIban: string | null = null) {
+  const date = new Date(Date.now() - daysAgo * 86400_000).toISOString().slice(0, 10);
+  return mkTxOn(accountId, sessionId, counterparty, amount, date, counterpartyIban);
+}
+
+function mkTxOn(accountId: string, sessionId: string, counterparty: string, amount: number, date: string, counterpartyIban: string | null = null) {
   const id = crypto.randomUUID();
   const raw = crypto.randomUUID();
-  const date = new Date(Date.now() - daysAgo * 86400_000).toISOString().slice(0, 10);
   const now = new Date().toISOString();
   db.prepare('INSERT INTO raw_transactions (id, created_at, import_session_id, data, booking_date, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(raw, now, sessionId, '{}', date, amount, 'EUR');
@@ -64,7 +68,7 @@ test('detects monthly recurring pattern from 3 occurrences', () => {
   assert.equal(row.occurrence_count, 3);
 });
 
-test('classifies small-amount monthly as subscription', () => {
+test('a fixed monthly card charge is a subscription', () => {
   const acct = mkAccount();
   const sess = mkSession();
   mkTx(acct, sess, 'Spotify', -9.99, 90);
@@ -198,11 +202,11 @@ test('two same-sized grocery purchases a week apart are not a pattern', () => {
   assert.equal(patternOf(acct, 'K-Citymarket'), undefined);
 });
 
-test('a monthly small restaurant purchase is recurring, not a subscription', () => {
+test('a fixed-price lunch about monthly but on drifting days is recurring, not a subscription', () => {
   const acct = mkAccount();
   const sess = mkSession();
-  mkTx(acct, sess, 'PizzaBuffa', -14.00, 90);
-  mkTx(acct, sess, 'PizzaBuffa', -14.00, 60);
+  mkTx(acct, sess, 'PizzaBuffa', -14.00, 95);
+  mkTx(acct, sess, 'PizzaBuffa', -14.00, 58);
   mkTx(acct, sess, 'PizzaBuffa', -14.00, 30);
 
   detectPatterns(acct);
@@ -220,24 +224,59 @@ test('a monthly payment to a person is recurring, not a subscription', () => {
   assert.equal(patternOf(acct, 'VIRTANEN MATTI')?.pattern_type, 'recurring');
 });
 
-test('a person whose name contains a merchant keyword is not a subscription', () => {
-  const acct = mkAccount();
+// Dated charges for the calendar-month rule; detection runs as of 2026-11-20.
+const AS_OF = '2026-11-20';
+function mkCharges(acct: string, counterparty: string, charges: Array<[string, number]>) {
   const sess = mkSession();
-  for (const days of [90, 60, 30]) mkTx(acct, sess, 'KORHONEN ELISA', -10, days, 'FI2112345600000785');
+  for (const [date, amount] of charges) mkTxOn(acct, sess, counterparty, amount, date);
+}
 
-  detectPatterns(acct);
+test('the same amount on about the same day every month is a subscription', () => {
+  const acct = mkAccount();
+  mkCharges(acct, 'BookBeat', [['2026-07-15', -16.99], ['2026-08-18', -16.99], ['2026-09-12', -16.99], ['2026-10-15', -16.99]]);
 
-  assert.equal(patternOf(acct, 'KORHONEN ELISA')?.pattern_type, 'recurring');
+  detectPatterns(acct, AS_OF);
+
+  assert.equal(patternOf(acct, 'BookBeat')?.pattern_type, 'subscription');
 });
 
-test('a keyword inside another word does not make a subscription', () => {
+test('a charge on the last day of the month follows short months', () => {
   const acct = mkAccount();
-  const sess = mkSession();
-  for (const days of [90, 60, 30]) mkTx(acct, sess, 'Sedna Oy', -9.90, days);
+  mkCharges(acct, 'Valoo Oy', [['2026-08-31', -19.9], ['2026-09-30', -19.9], ['2026-10-31', -19.9]]);
 
-  detectPatterns(acct);
+  detectPatterns(acct, AS_OF);
 
-  assert.equal(patternOf(acct, 'Sedna Oy')?.pattern_type, 'recurring');
+  assert.equal(patternOf(acct, 'Valoo Oy')?.pattern_type, 'subscription');
+});
+
+test('a monthly charge whose day drifts beyond a few days is recurring', () => {
+  const acct = mkAccount();
+  mkCharges(acct, 'Kampaamo', [['2026-08-10', -35], ['2026-09-14', -35], ['2026-10-18', -35]]);
+
+  detectPatterns(acct, AS_OF);
+
+  assert.equal(patternOf(acct, 'Kampaamo')?.pattern_type, 'recurring');
+});
+
+test('another charge to the same party in between makes it recurring', () => {
+  const acct = mkAccount();
+  mkCharges(acct, 'Kuntosali', [
+    ['2026-06-01', -30], ['2026-07-01', -30], ['2026-08-01', -30], ['2026-08-20', -30],
+    ['2026-09-01', -30], ['2026-10-01', -30], ['2026-11-01', -30],
+  ]);
+
+  detectPatterns(acct, AS_OF);
+
+  assert.equal(patternOf(acct, 'Kuntosali')?.pattern_type, 'recurring');
+});
+
+test('a monthly charge whose price changed is recurring', () => {
+  const acct = mkAccount();
+  mkCharges(acct, 'Suoratoisto', [['2026-08-05', -9.99], ['2026-09-05', -9.99], ['2026-10-05', -11.99]]);
+
+  detectPatterns(acct, AS_OF);
+
+  assert.equal(patternOf(acct, 'Suoratoisto')?.pattern_type, 'recurring');
 });
 
 test('a monthly streaming charge by card is a subscription', () => {
@@ -252,7 +291,7 @@ test('a monthly streaming charge by card is a subscription', () => {
   assert.equal(row?.occurrence_count, 4);
 });
 
-test('a monthly bill from an unknown biller is recurring', () => {
+test('a fixed monthly payment to an IBAN only is recurring', () => {
   const acct = mkAccount();
   const sess = mkSession();
   for (const days of [90, 60, 30]) mkTx(acct, sess, 'Valoo Oy', -19.90, days, 'FI4950009420028730');
@@ -297,7 +336,7 @@ test('a subscription detected earlier for a person is reclassified as recurring'
   assert.equal(row.is_active, 1);
 });
 
-test('a known bill whose price varies stays active', () => {
+test('a former subscription whose price varies stays active, as recurring', () => {
   const acct = mkAccount();
   const sess = mkSession();
   mkTx(acct, sess, 'Helen Oy', -120, 120);
@@ -310,7 +349,7 @@ test('a known bill whose price varies stays active', () => {
 
   const row = patternOf(acct, 'Helen Oy');
   assert.equal(row.is_active, 1);
-  assert.equal(row.pattern_type, 'subscription');
+  assert.equal(row.pattern_type, 'recurring');
 });
 
 test('a pattern detected earlier from two charges is deactivated even if frequent charges follow', () => {
@@ -337,16 +376,16 @@ test('an irregular person payment detected earlier as a subscription stays, as r
   assert.equal(row.pattern_type, 'recurring');
 });
 
-test('a subscription merchant paid mostly by card stays a subscription', () => {
+test('a fixed monthly charge paid only partly to an IBAN can be a subscription', () => {
   const acct = mkAccount();
   const sess = mkSession();
-  mkTx(acct, sess, 'Helen Oy', -60, 90);
-  mkTx(acct, sess, 'Helen Oy', -60, 60, 'FI4950009420028730');
-  mkTx(acct, sess, 'Helen Oy', -60, 30);
+  mkTxOn(acct, sess, 'Elisa Oyj', -24.9, '2026-08-03');
+  mkTxOn(acct, sess, 'Elisa Oyj', -24.9, '2026-09-03', 'FI4950009420028730');
+  mkTxOn(acct, sess, 'Elisa Oyj', -24.9, '2026-10-03');
 
-  detectPatterns(acct);
+  detectPatterns(acct, AS_OF);
 
-  assert.equal(patternOf(acct, 'Helen Oy')?.pattern_type, 'subscription');
+  assert.equal(patternOf(acct, 'Elisa Oyj')?.pattern_type, 'subscription');
 });
 
 test("deactivation leaves user-confirmed, annual and other accounts' patterns alone", () => {
