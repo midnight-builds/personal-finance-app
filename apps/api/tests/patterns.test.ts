@@ -204,12 +204,9 @@ test('two same-sized grocery purchases a week apart are not a pattern', () => {
 
 test('a fixed-price lunch about monthly but on drifting days is recurring, not a subscription', () => {
   const acct = mkAccount();
-  const sess = mkSession();
-  mkTx(acct, sess, 'PizzaBuffa', -14.00, 95);
-  mkTx(acct, sess, 'PizzaBuffa', -14.00, 58);
-  mkTx(acct, sess, 'PizzaBuffa', -14.00, 30);
+  mkCharges(acct, 'PizzaBuffa', [['2026-07-01', -14], ['2026-08-12', -14], ['2026-09-03', -14]]);
 
-  detectPatterns(acct);
+  detectPatterns(acct, AS_OF);
 
   assert.equal(patternOf(acct, 'PizzaBuffa')?.pattern_type, 'recurring');
 });
@@ -247,6 +244,35 @@ test('a charge on the last day of the month follows short months', () => {
   detectPatterns(acct, AS_OF);
 
   assert.equal(patternOf(acct, 'Valoo Oy')?.pattern_type, 'subscription');
+});
+
+test('a month-end charge is a subscription even when the window starts in February', () => {
+  const acct = mkAccount();
+  // Due on the 31st; May 31 2026 is a Sunday, so it books on June 1.
+  mkCharges(acct, 'Valoo Oy', [['2026-02-28', -19.9], ['2026-03-31', -19.9], ['2026-04-30', -19.9], ['2026-06-01', -19.9]]);
+
+  detectPatterns(acct, '2026-06-10');
+
+  assert.equal(patternOf(acct, 'Valoo Oy')?.pattern_type, 'subscription');
+});
+
+test('the first charge in the window may be the late booking of the previous month', () => {
+  const acct = mkAccount();
+  // Due on the 30th/31st; the August charge booked on September 4.
+  mkCharges(acct, 'Valoo Oy', [['2026-09-04', -19.9], ['2026-09-30', -19.9], ['2026-10-31', -19.9], ['2026-11-30', -19.9]]);
+
+  detectPatterns(acct, '2026-12-05');
+
+  assert.equal(patternOf(acct, 'Valoo Oy')?.pattern_type, 'subscription');
+});
+
+test('a charge booked late over the holidays stays a subscription', () => {
+  const acct = mkAccount();
+  mkCharges(acct, 'BookBeat', [['2026-10-24', -16.99], ['2026-11-24', -16.99], ['2026-12-28', -16.99], ['2027-01-24', -16.99]]);
+
+  detectPatterns(acct, '2027-02-01');
+
+  assert.equal(patternOf(acct, 'BookBeat')?.pattern_type, 'subscription');
 });
 
 test('a monthly charge whose day drifts beyond a few days is recurring', () => {

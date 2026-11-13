@@ -2,32 +2,46 @@ import crypto from 'crypto';
 import { db } from './db.js';
 import { daysBefore, ledgerEntries, today, type LedgerEntry } from './ledger.js';
 
-/** How far a monthly charge may land from its day of the month (weekends, processing). */
-const SUBSCRIPTION_DAY_TOLERANCE = 3;
+// How far a monthly charge may book from its due day. Booking only slips later
+// (weekends, holidays, card processing), so the late side is wider.
+const DUE_DAY_EARLY = 3;
+const DUE_DAY_LATE = 5;
 
-/** The day `months` calendar months after `date` (YYYY-MM-DD), clamped to the month's last day. */
-function addMonths(date: string, months: number): number {
-  const [y, m, d] = date.slice(0, 10).split('-').map(Number);
-  const lastDay = new Date(Date.UTC(y, m - 1 + months + 1, 0)).getUTCDate();
-  return Date.UTC(y, m - 1 + months, Math.min(d, lastDay));
+/** Due date (UTC ms) on `day` of month `monthIndex` (0-based, may overflow years), clamped to the month's last day. */
+function dueDate(year: number, monthIndex: number, day: number): number {
+  const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  return Date.UTC(year, monthIndex, Math.min(day, lastDay));
+}
+
+/**
+ * Whether one charge falls due on `day` of each consecutive month: the k-th charge books
+ * within the tolerance of the k-th month's due date. The first charge may belong to the
+ * previous or next month (due the 31st, booked on the 1st). Two charges in one month
+ * or a skipped month break the chain.
+ */
+function fitsMonthlyChain(days: string[], day: number): boolean {
+  const [y, m] = days[0].split('-').map(Number);
+  return [-1, 0, 1].some((shift) =>
+    days.every((d, k) => {
+      const offset = (Date.parse(d) - dueDate(y, m - 1 + shift + k, day)) / 86400_000;
+      return offset >= -DUE_DAY_EARLY && offset <= DUE_DAY_LATE;
+    })
+  );
 }
 
 /**
  * A subscription charges the same amount on about the same day every month, with no
- * other charge from the counterparty in between: the k-th charge in the window lands
- * within SUBSCRIPTION_DAY_TOLERANCE days of the first one's day, k months later. Habitual
- * purchases (groceries, lunch) vary in amount or day. A counterparty paid only to an
- * IBAN is a person or an e-invoice biller and stays recurring. `occurrences` is in date order.
+ * other charge from the counterparty in between; the due day is tried from the charges'
+ * own days. Habitual purchases (groceries, lunch) vary in amount or day. A counterparty
+ * paid only to an IBAN is a person or an e-invoice biller and stays recurring.
+ * `occurrences` is in date order.
  */
 function isSubscription(occurrences: Array<{ amount: number; date: string; viaIban: boolean }>): boolean {
   if (occurrences.every((o) => o.viaIban)) return false;
   const cents = Math.round(occurrences[0].amount * 100);
   if (occurrences.some((o) => Math.round(o.amount * 100) !== cents)) return false;
-  const first = occurrences[0].date;
-  return occurrences.every(
-    (o, k) =>
-      Math.abs(Date.parse(o.date.slice(0, 10)) - addMonths(first, k)) / 86400_000 <= SUBSCRIPTION_DAY_TOLERANCE
-  );
+  const days = occurrences.map((o) => o.date.slice(0, 10));
+  return [...new Set(days.map((d) => Number(d.slice(8))))].some((day) => fitsMonthlyChain(days, day));
 }
 
 /**
