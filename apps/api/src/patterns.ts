@@ -2,19 +2,56 @@ import crypto from 'crypto';
 import { db } from './db.js';
 import { daysBefore, ledgerEntries, today, type LedgerEntry } from './ledger.js';
 
-const SUBSCRIPTION_KEYWORDS = [
-  'netflix', 'spotify', 'hbo', 'disney', 'apple', 'google', 'youtube',
-  'amazon', 'microsoft', 'adobe', 'dropbox', 'github', 'linkedin',
-  'telia', 'elisa', 'dna', 'helen', 'vattenfall',
-];
+// How far a monthly charge may book from its due day. Booking only slips later
+// (weekends, holidays, card processing), so the late side is wider.
+const DUE_DAY_EARLY = 3;
+const DUE_DAY_LATE = 5;
 
-function isSubscriptionLike(counterparty: string, amount: number): boolean {
-  const lower = counterparty.toLowerCase();
-  if (SUBSCRIPTION_KEYWORDS.some((k) => lower.includes(k))) return true;
-  return Math.abs(amount) < 15;
+/** Due date (UTC ms) on `day` of month `monthIndex` (0-based, may overflow years), clamped to the month's last day. */
+function dueDate(year: number, monthIndex: number, day: number): number {
+  const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  return Date.UTC(year, monthIndex, Math.min(day, lastDay));
 }
 
-type Occurrence = { counterparty: string; amount: number; date: string };
+/**
+ * Whether one charge falls due on `day` of each consecutive month: the k-th charge books
+ * within the tolerance of the k-th month's due date. The first charge may belong to the
+ * previous or next month (due the 31st, booked on the 1st). Two charges in one month
+ * or a skipped month break the chain.
+ */
+function fitsMonthlyChain(days: string[], day: number): boolean {
+  const [y, m] = days[0].split('-').map(Number);
+  return [-1, 0, 1].some((shift) =>
+    days.every((d, k) => {
+      const offset = (Date.parse(d) - dueDate(y, m - 1 + shift + k, day)) / 86400_000;
+      return offset >= -DUE_DAY_EARLY && offset <= DUE_DAY_LATE;
+    })
+  );
+}
+
+/**
+ * A subscription charges the same amount on about the same day every month, with no
+ * other charge from the counterparty in between; the due day is tried from the charges'
+ * own days. Habitual purchases (groceries, lunch) vary in amount or day. A counterparty
+ * paid only to an IBAN is a person or an e-invoice biller and stays recurring.
+ * `occurrences` is in date order.
+ */
+function isSubscription(occurrences: Array<{ amount: number; date: string; viaIban: boolean }>): boolean {
+  if (occurrences.every((o) => o.viaIban)) return false;
+  const cents = Math.round(occurrences[0].amount * 100);
+  if (occurrences.some((o) => Math.round(o.amount * 100) !== cents)) return false;
+  const days = occurrences.map((o) => o.date.slice(0, 10));
+  return [...new Set(days.map((d) => Number(d.slice(8))))].some((day) => fitsMonthlyChain(days, day));
+}
+
+/**
+ * Two charges give one interval, which any pair of purchases a month apart passes.
+ * Recurring patterns feed the forecast as fixed costs just like subscriptions, so a
+ * pair is not even recurring: it needs a third occurrence to show a rhythm.
+ */
+const MIN_OCCURRENCES = 3;
+
+type Occurrence = { counterparty: string; amount: number; date: string; viaIban: boolean };
 
 /**
  * An account's countable expenses with a counterparty since `from`, ordered by
@@ -35,7 +72,12 @@ function recurringCandidates(entries: LedgerEntry[], from: string): Occurrence[]
         e.counterparty !== null &&
         !transferCounterparties.has(e.counterparty)
     )
-    .map((e) => ({ counterparty: e.counterparty!, amount: e.amount, date: e.bookedAt }))
+    .map((e) => ({
+      counterparty: e.counterparty!,
+      amount: e.amount,
+      date: e.bookedAt,
+      viaIban: e.counterpartyIban !== null,
+    }))
     .sort((a, b) => binary(a.counterparty, b.counterparty) || binary(a.date, b.date));
 }
 
@@ -43,10 +85,10 @@ function recurringCandidates(entries: LedgerEntry[], from: string): Occurrence[]
 const binary = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 function byCounterparty(rows: Occurrence[]) {
-  const groups = new Map<string, Array<{ amount: number; date: string }>>();
+  const groups = new Map<string, Array<{ amount: number; date: string; viaIban: boolean }>>();
   for (const r of rows) {
     if (!groups.has(r.counterparty)) groups.set(r.counterparty, []);
-    groups.get(r.counterparty)!.push({ amount: r.amount, date: r.date });
+    groups.get(r.counterparty)!.push({ amount: r.amount, date: r.date, viaIban: r.viaIban });
   }
   return groups;
 }
@@ -57,9 +99,11 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
   // Transfers are included only to find the counterparties to leave out.
   const entries = ledgerEntries({ accounts: [accountId], to: asOf, includeTransfers: true });
   const rows = recurringCandidates(entries, daysBefore(asOf, 180));
+  const groups = byCounterparty(rows);
+  const detected = new Set<string>();
 
-  for (const [counterparty, occurrences] of byCounterparty(rows)) {
-    if (occurrences.length < 2) continue;
+  for (const [counterparty, occurrences] of groups) {
+    if (occurrences.length < MIN_OCCURRENCES) continue;
 
     // Check interval consistency — sort by date
     const sorted = occurrences.sort((a, b) => a.date.localeCompare(b.date));
@@ -84,7 +128,8 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
     const consistent = amounts.every((a) => Math.abs(a - avgAmount) / avgAmount <= 0.2);
     if (!consistent) continue;
 
-    const patternType = isSubscriptionLike(counterparty, avgAmount) ? 'subscription' : 'recurring';
+    const patternType = isSubscription(sorted) ? 'subscription' : 'recurring';
+    detected.add(counterparty);
     const firstSeen = sorted[0].date;
     const lastSeen = sorted[sorted.length - 1].date;
 
@@ -113,9 +158,40 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
     }
   }
 
+  reviseUndetected(accountId, groups, detected, now);
+
   const longHistory = recurringCandidates(entries, daysBefore(asOf, 1460));
   detectAnnualPatternsForAccount(accountId, longHistory);
   detectConfirmationCandidates(accountId, longHistory);
+}
+
+/**
+ * Active monthly/weekly patterns of the account that this run did not detect. One first
+ * found on fewer than MIN_OCCURRENCES charges was detected on too little evidence, and one
+ * with fewer such charges left in the window has stopped: both are deactivated. Otherwise
+ * it stays active, since a varying price or a skipped month says nothing against a known
+ * bill, but a subscription that no longer qualifies as one becomes recurring.
+ * User-confirmed patterns stay as is.
+ */
+function reviseUndetected(
+  accountId: string,
+  groups: Map<string, Array<{ amount: number; date: string; viaIban: boolean }>>,
+  detected: Set<string>,
+  now: string
+): void {
+  const rows = db.prepare(`
+    SELECT id, counterparty_name, pattern_type, occurrence_count FROM recurring_patterns
+    WHERE account_id = ? AND is_active = 1 AND pattern_type IN ('subscription', 'recurring')
+      AND user_confirmed IS NOT 1
+  `).all(accountId) as Array<{ id: string; counterparty_name: string | null; pattern_type: string; occurrence_count: number }>;
+  const deactivate = db.prepare('UPDATE recurring_patterns SET is_active = 0, updated_at = ? WHERE id = ?');
+  const demote = db.prepare("UPDATE recurring_patterns SET pattern_type = 'recurring', updated_at = ? WHERE id = ?");
+  for (const r of rows) {
+    if (r.counterparty_name !== null && detected.has(r.counterparty_name)) continue;
+    const occurrences = r.counterparty_name === null ? [] : groups.get(r.counterparty_name) ?? [];
+    if (r.occurrence_count < MIN_OCCURRENCES || occurrences.length < MIN_OCCURRENCES) deactivate.run(now, r.id);
+    else if (r.pattern_type === 'subscription' && !isSubscription(occurrences)) demote.run(now, r.id);
+  }
 }
 
 const ANNUAL_CONFIRMATION_THRESHOLD_EUR = 80;
