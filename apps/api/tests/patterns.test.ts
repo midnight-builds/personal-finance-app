@@ -313,6 +313,17 @@ test('a known bill whose price varies stays active', () => {
   assert.equal(row.pattern_type, 'subscription');
 });
 
+test('a pattern detected earlier from two charges is deactivated even if frequent charges follow', () => {
+  const acct = mkAccount();
+  const sess = mkSession();
+  for (const [days, amount] of [[40, -12], [33, -48], [20, -7], [12, -31], [3, -66]]) mkTx(acct, sess, 'K-Market', amount, days);
+  mkPattern(acct, 'K-Market', 'subscription', 2);
+
+  detectPatterns(acct);
+
+  assert.equal(patternOf(acct, 'K-Market').is_active, 0);
+});
+
 test('an irregular person payment detected earlier as a subscription stays, as recurring', () => {
   const acct = mkAccount();
   const sess = mkSession();

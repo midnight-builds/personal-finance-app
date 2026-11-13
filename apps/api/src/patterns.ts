@@ -143,11 +143,12 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
 }
 
 /**
- * Active monthly/weekly patterns of the account that this run did not detect. One with
- * fewer than MIN_OCCURRENCES charges in the window was detected on too little evidence
- * (or has stopped) and is deactivated. One with enough charges stays active, since a
- * varying price or a skipped month says nothing against a known bill, but a subscription
- * that no longer qualifies as one becomes recurring. User-confirmed patterns stay as is.
+ * Active monthly/weekly patterns of the account that this run did not detect. One first
+ * found on fewer than MIN_OCCURRENCES charges was detected on too little evidence, and one
+ * with fewer such charges left in the window has stopped: both are deactivated. Otherwise
+ * it stays active, since a varying price or a skipped month says nothing against a known
+ * bill, but a subscription that no longer qualifies as one becomes recurring.
+ * User-confirmed patterns stay as is.
  */
 function reviseUndetected(
   accountId: string,
@@ -156,16 +157,16 @@ function reviseUndetected(
   now: string
 ): void {
   const rows = db.prepare(`
-    SELECT id, counterparty_name, pattern_type FROM recurring_patterns
+    SELECT id, counterparty_name, pattern_type, occurrence_count FROM recurring_patterns
     WHERE account_id = ? AND is_active = 1 AND pattern_type IN ('subscription', 'recurring')
       AND user_confirmed IS NOT 1
-  `).all(accountId) as Array<{ id: string; counterparty_name: string | null; pattern_type: string }>;
+  `).all(accountId) as Array<{ id: string; counterparty_name: string | null; pattern_type: string; occurrence_count: number }>;
   const deactivate = db.prepare('UPDATE recurring_patterns SET is_active = 0, updated_at = ? WHERE id = ?');
   const demote = db.prepare("UPDATE recurring_patterns SET pattern_type = 'recurring', updated_at = ? WHERE id = ?");
   for (const r of rows) {
     if (r.counterparty_name !== null && detected.has(r.counterparty_name)) continue;
     const occurrences = r.counterparty_name === null ? [] : groups.get(r.counterparty_name) ?? [];
-    if (occurrences.length < MIN_OCCURRENCES) deactivate.run(now, r.id);
+    if (r.occurrence_count < MIN_OCCURRENCES || occurrences.length < MIN_OCCURRENCES) deactivate.run(now, r.id);
     else if (r.pattern_type === 'subscription' && !isSubscription(r.counterparty_name!, occurrences)) demote.run(now, r.id);
   }
 }
