@@ -334,8 +334,9 @@ type LinkSide = {
  * A card's monthly bill is often paid as an e-invoice without the issuer's
  * IBAN, unlike extra repayments. A payee that an IBAN-carrying repayment from
  * the account already went to is the card issuer, so a payment to it without
- * an IBAN may be a repayment too, and it beats other payments of the same
- * amount. A card credit several payments could have repaid waits for a second
+ * an IBAN may be a repayment too, when the card names the credit as it named
+ * that repayment (a refund carries the merchant's name), and it beats other
+ * payments of the same amount. A card credit several payments could have repaid waits for a second
  * pass, when repayments in the same import may have taught the issuer; rows
  * left unlinked are tried again then too.
  */
@@ -366,9 +367,10 @@ function linkTransfers(ids: string[]) {
   const insertLink = db.prepare(
     'INSERT INTO transfer_links (id, created_at, from_transaction_id, to_transaction_id, confidence) VALUES (?, ?, ?, ?, ?)'
   );
-  // Payees of IBAN-carrying repayments: from an account with an IBAN into one without.
+  // IBAN-carrying repayments from an account with an IBAN into one without: the payee
+  // on the paying side, and how the payment is named on the card.
   const payeesStmt = db.prepare(
-    `SELECT DISTINCT f.account_id, f.counterparty_name
+    `SELECT DISTINCT f.account_id, f.counterparty_name, t.account_id AS card_id, t.counterparty_name AS credit_name
      FROM transfer_links l
      JOIN normalized_transactions f ON f.id = l.from_transaction_id
      JOIN accounts fa ON fa.id = f.account_id
@@ -377,17 +379,22 @@ function linkTransfers(ids: string[]) {
      WHERE fa.iban IS NOT NULL AND ta.iban IS NULL
        AND f.counterparty_iban IS NOT NULL AND f.counterparty_name IS NOT NULL`
   );
-  const payeeKey = (accountId: string, name: string | null) => `${accountId}\u0000${name}`;
+  const payeeKey = (from: Pick<LinkSide, 'account_id' | 'counterparty_name'>, card: Pick<LinkSide, 'account_id' | 'counterparty_name'>) =>
+    [from.account_id, from.counterparty_name, card.account_id, card.counterparty_name].join('\u0000');
   const loadPayees = () =>
     new Set(
-      (payeesStmt.all() as Array<{ account_id: string; counterparty_name: string }>).map((p) =>
-        payeeKey(p.account_id, p.counterparty_name)
-      )
+      (
+        payeesStmt.all() as Array<{ account_id: string; counterparty_name: string; card_id: string; credit_name: string | null }>
+      ).map((p) => payeeKey(p, { account_id: p.card_id, counterparty_name: p.credit_name }))
     );
   let payees = loadPayees();
 
-  const knownPayee = (s: LinkSide) =>
-    s.counterparty_name !== null && payees.has(payeeKey(s.account_id, s.counterparty_name));
+  /**
+   * A payment from `from` to the card's issuer, named on the card as its earlier repayments
+   * were: a refund on the card carries the merchant's name instead.
+   */
+  const knownPayee = (from: LinkSide, card: LinkSide) =>
+    from.counterparty_name !== null && payees.has(payeeKey(from, card));
   /** Unlinked payments on accounts with an IBAN that could have repaid this card credit. */
   const repaymentRivals = (credit: LinkSide & { booking_date: string; amount: number }) => {
     const day = credit.booking_date.slice(0, 10);
@@ -426,7 +433,7 @@ function linkTransfers(ids: string[]) {
       (into.amount ?? 0) > 0 &&
       (!carriesIbans(from.account_id) ||
         from.counterparty_iban !== null ||
-        (from.counterparty_name !== null && payees.has(payeeKey(from.account_id, from.counterparty_name))));
+        knownPayee(from, into));
     const plausible = candidates.filter((c) => {
       const cand = { ...c, amount: -row.amount };
       if (!row.account_iban || !c.account_iban) return isRepayment(row, cand) || isRepayment(cand, row);
@@ -452,8 +459,9 @@ function linkTransfers(ids: string[]) {
       const rivals = credit ? candidates.filter((c) => c.account_iban) : card ? repaymentRivals(card) : [];
       if (rivals.length > 1) {
         if (!settle) return;
-        if (credit && pool.some(knownPayee)) pool = pool.filter(knownPayee);
-        if (card && !knownPayee(row) && rivals.some(knownPayee)) pool = pool.filter((c) => c !== card);
+        const fromIssuer = (c: LinkSide) => knownPayee(c, credit!);
+        if (credit && pool.some(fromIssuer)) pool = pool.filter(fromIssuer);
+        if (card && !knownPayee(row, card) && rivals.some((r) => knownPayee(r, card))) pool = pool.filter((c) => c !== card);
       }
       match = pool[0];
       confidence = 70;

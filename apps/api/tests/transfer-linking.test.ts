@@ -248,6 +248,24 @@ test('a card bill beats another payment of the same amount on the same day', asy
   }
 });
 
+test('a card refund is not taken for a repayment of a purchase at the issuer', async () => {
+  // The issuer also sells on invoice: a -35 purchase without an IBAN, and a +35 refund on the card.
+  await importRows(CHECKING, [
+    { date: '2026-10-05', amount: -500, other: 'FI99 9999 9999 9999 99', name: 'Korttipankki Oyj' },
+    { date: '2026-10-12', amount: -35, other: 'Korttipankki Oyj', name: 'Korttipankki Oyj' },
+  ]);
+  await upload(
+    'Luottokortti.csv',
+    [
+      { date: '2026-10-05', amount: 500, other: '', name: 'Maksu, kiitos' },
+      { date: '2026-10-13', amount: 35, other: 'Verkkokauppa', name: 'Verkkokauppa' },
+    ],
+    NEW_CARD
+  );
+  assert.equal(links().length, 1);
+  assert.equal(ledgerEntries().filter((e) => e.amount === -35 || e.amount === 35).length, 2);
+});
+
 test('a payment without an IBAN to a payee never repaid by IBAN is not a transfer', async () => {
   // The landlord is paid by IBAN, but not as a card repayment.
   await importRows(CHECKING, [
