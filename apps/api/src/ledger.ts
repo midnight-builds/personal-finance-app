@@ -34,6 +34,8 @@ export type LedgerEntry = {
   amount: number;
   currency: string;
   counterparty: string | null;
+  /** Set on account-to-account payments (bank transfer, e-invoice); card purchases carry none. */
+  counterpartyIban: string | null;
   description: string | null;
   categoryId: string | null;
   categoryName: string | null;
@@ -127,7 +129,7 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
          FROM normalized_transactions t
          WHERE ${where.join('\n           AND ')})
        SELECT nt.id, nt.account_id, substr(nt.booking_date, 1, 10) AS day, nt.booking_date, nt.amount, nt.currency,
-              nt.counterparty_name, nt.description, nt.transaction_group_id,
+              nt.counterparty_name, nt.counterparty_iban, nt.description, nt.transaction_group_id,
               cd.category_id, c.name AS category_name, nt.is_transfer
        FROM scoped nt
        ${latestCategoryDecisionJoin('nt', 'cd')}
@@ -143,6 +145,7 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
       amount: number;
       currency: string;
       counterparty_name: string | null;
+      counterparty_iban: string | null;
       description: string | null;
       transaction_group_id: string | null;
       category_id: string | null;
@@ -158,6 +161,7 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
     amount: Number(r.amount),
     currency: r.currency,
     counterparty: r.counterparty_name,
+    counterpartyIban: r.counterparty_iban,
     description: r.description,
     categoryId: r.category_id,
     categoryName: r.category_name,

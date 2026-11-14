@@ -21,12 +21,19 @@ import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
 import { listPendingRuleSuggestions, acceptRuleSuggestion, rejectRuleSuggestion } from './ruleSuggestions.js';
 import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
 import { getForecast } from './forecast.js';
+import { redetectPatternsIfRulesChanged } from './patterns.js';
 import { routes } from './routes/index.js';
 
 initDb();
 seedDefaultCategories();
 
 const server = Fastify({ logger: true });
+
+try {
+  if (redetectPatternsIfRulesChanged()) server.log.info('Recurring patterns re-detected for new detection rules');
+} catch (err) {
+  server.log.error({ err }, 'Re-detecting recurring patterns failed; stored patterns kept');
+}
 
 await server.register(cors, {
   origin: true,

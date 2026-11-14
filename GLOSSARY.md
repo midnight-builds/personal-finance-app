@@ -55,6 +55,34 @@ Unknown (null), not zero, when there is no snapshot yet.
 **Balance adjustment** — a manual correction to an account's balance, e.g. a
 cash withdrawal missing from the export.
 
+**Recurring pattern** — a counterparty an account pays again and again,
+detected from its countable expenses in the last 180 days (`patterns.ts`).
+Monthly or weekly patterns need at least three charges with a steady interval
+and amount; two charges are one interval and prove nothing. The forecast
+counts every active monthly/weekly pattern as a fixed cost. Stored as
+`recurring_patterns`; `pattern_type` is `recurring`, `subscription` or
+`annual`.
+
+**Subscription** — a recurring pattern told apart by its charges, not by who
+the merchant is: the same amount every time, booked on about the same day
+each month (3 days early to 5 days late), with no other charge to the
+counterparty in between. A counterparty paid only to an IBAN (a person, an
+e-invoice biller) is never one. Fixed monthly savings paid by card look the
+same and are counted as subscriptions too.
+
+**Recurring (pattern type)** — a monthly or weekly pattern that is not a
+subscription: varying amount or day, or paid to an IBAN.
+
+**Annual pattern** — a charge about once a year (330–400 days apart), or one
+the user confirmed as annual.
+
+**Confirmation candidate** — a single large expense (≥ 80 €) with no pattern,
+offered to the user to confirm as annual (`pattern_confirmations`).
+
+**Pattern rules version** — `PATTERN_RULES_VERSION` in `patterns.ts`. Bumping it
+re-detects every account's patterns on the next API start, so stored patterns
+follow changed rules without waiting for an import.
+
 **Day** — a calendar day `YYYY-MM-DD`. "Today" is today in Helsinki
 (Europe/Helsinki), never the server's UTC date.
 
