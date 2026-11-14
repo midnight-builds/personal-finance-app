@@ -23,6 +23,13 @@ that counts.
 out of spending and income by default. If one copy of a duplicate group is
 linked, every copy is a transfer.
 
+**Card repayment** — the one transfer a credit card (an account without an
+IBAN) takes part in: a payment from checking into the card. Extra repayments
+carry the issuer's IBAN; the monthly bill, paid as an e-invoice, often does
+not. A payee that an IBAN-carrying repayment went to is the card's issuer, so
+payments to it without an IBAN count as repayments too and beat other
+payments of the same amount.
+
 **Category (of a transaction)** — the category of its most recent
 categorization decision, whether a rule, AI or the user made it. Decisions are
 history: a new one is appended and earlier ones are kept (never replaced), so
