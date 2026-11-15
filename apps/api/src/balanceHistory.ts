@@ -13,7 +13,8 @@ import { getDataStatus } from './dataStatus.js';
 // Balances and net worth over time, read from the balance snapshots imports
 // store (never reconstructed from cash flow). An account's balance on a day is
 // known only between its first snapshot and the last day its imported data
-// covers; elsewhere it is unknown (null), never zero, and the point says so.
+// covers, and only while no booking came after the snapshot it rests on;
+// elsewhere it is unknown (null), never zero, and the point says so.
 
 /** Asset classes no account type covers, so net worth never includes them. */
 const UNTRACKED_ASSET_CLASSES = ['investments'];
@@ -84,6 +85,10 @@ export function balanceHistory(params: Partial<BalanceHistoryParams> & Pick<Bala
   if (from > to) throw new DomainError('invalid_range', 400, { from, to });
 
   const accounts = accountsWithCoverage();
+  const lastBooking = db.prepare(
+    `SELECT MAX(substr(booking_date, 1, 10)) AS day FROM normalized_transactions
+     WHERE account_id = ? AND booking_date IS NOT NULL AND substr(booking_date, 1, 10) <= ?`
+  );
   const points = pointDates(from, to, params.interval).map((date): BalanceHistoryPoint => {
     const balances = new Map(accountBalances(date).map((b) => [b.accountId, b]));
     let assets = 0;
@@ -92,8 +97,15 @@ export function balanceHistory(params: Partial<BalanceHistoryParams> & Pick<Bala
     const missingAccountIds: string[] = [];
     const perAccount = accounts.map((a) => {
       const b = balances.get(a.id);
+      // A booking after the snapshot (a row with a blank Saldo) makes that balance stale.
       const known =
-        b?.balance != null && a.knownFrom !== null && a.knownUntil !== null && date >= a.knownFrom && date <= a.knownUntil;
+        b?.balance != null &&
+        b.date !== null &&
+        a.knownFrom !== null &&
+        a.knownUntil !== null &&
+        date >= a.knownFrom &&
+        date <= a.knownUntil &&
+        ((lastBooking.get(a.id, date) as { day: string | null }).day ?? '') <= b.date;
       if (!known) {
         missingAccountIds.push(a.id);
         return { accountId: a.id, balance: null, balanceDate: null };
@@ -104,13 +116,14 @@ export function balanceHistory(params: Partial<BalanceHistoryParams> & Pick<Bala
       else assets += balance;
       return { accountId: a.id, balance, balanceDate: b.date };
     });
+    const anyKnown = includedAccountIds.length > 0;
     return {
       date,
       accounts: perAccount,
-      assets: cents(assets),
-      liabilities: cents(liabilities),
-      netWorth: cents(assets - liabilities),
-      isComplete: missingAccountIds.length === 0,
+      assets: anyKnown ? cents(assets) : null,
+      liabilities: anyKnown ? cents(liabilities) : null,
+      netWorth: anyKnown ? cents(assets - liabilities) : null,
+      isComplete: anyKnown && missingAccountIds.length === 0,
       coverage: { includedAccountIds, missingAccountIds },
     };
   });

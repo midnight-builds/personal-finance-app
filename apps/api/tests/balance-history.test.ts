@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 
 import { db } from '../src/db.js';
 import { balanceHistory } from '../src/balanceHistory.js';
+import { daysBefore } from '../src/ledger.js';
 import { routes } from '../src/routes/index.js';
 import { resetDb } from './setup/resetDb.js';
 
@@ -39,6 +40,12 @@ function balanceOn(accountId: string, date: string, balance: number) {
     balance,
     'EUR'
   );
+  bookedOn(accountId, date);
+}
+
+/** A transaction booked that day, without a balance (a row with a blank Saldo). */
+function bookedOn(accountId: string, date: string) {
+  const now = new Date().toISOString();
   const session = crypto.randomUUID();
   db.prepare(
     'INSERT INTO import_sessions (id, created_at, source_bank, format, file_checksum, row_count, overlap_key) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -180,6 +187,38 @@ test('defaults: to = latest booking date, from = 12 months earlier, monthly', ()
   assert.equal(h.to, '2026-10-20');
   assert.equal(h.from, '2025-10-20');
   assert.equal(h.points.at(-1)!.date, '2026-10-20');
+});
+
+test('a balance with bookings after its snapshot is unknown, not stale', () => {
+  const checking = account('Käyttötili');
+  balanceOn(checking, '2026-10-10', 1000);
+  bookedOn(checking, '2026-10-15'); // no Saldo on these rows
+  bookedOn(checking, '2026-10-20');
+  const h = balanceHistory({ from: '2026-10-10', to: '2026-10-20', interval: 'day' });
+  assert.equal(balanceOf(point(h, '2026-10-14'), checking), 1000);
+  const late = point(h, '2026-10-15');
+  assert.equal(balanceOf(late, checking), null);
+  assert.equal(late.isComplete, false);
+});
+
+test('totals are unknown when no account is known, and nothing known is never complete', () => {
+  const checking = account('Käyttötili');
+  balanceOn(checking, '2026-10-10', 1000);
+  const before = point(balanceHistory({ from: '2026-09-30', to: '2026-09-30', interval: 'day' }), '2026-09-30');
+  assert.deepEqual([before.assets, before.liabilities, before.netWorth], [null, null, null]);
+  assert.equal(before.isComplete, false);
+
+  resetDb();
+  const empty = point(balanceHistory({ from: '2026-09-30', to: '2026-09-30', interval: 'day' }), '2026-09-30');
+  assert.equal(empty.netWorth, null);
+  assert.equal(empty.isComplete, false);
+});
+
+test('at most BALANCE_HISTORY_MAX_POINTS points, `to` included', () => {
+  const checking = account('Käyttötili');
+  balanceOn(checking, '2026-10-01', 1);
+  assert.equal(balanceHistory({ from: daysBefore('2026-10-01', 399), to: '2026-10-01', interval: 'day' }).points.length, 400);
+  assert.throws(() => balanceHistory({ from: daysBefore('2026-10-01', 400), to: '2026-10-01', interval: 'day' }), /too_many_points/);
 });
 
 test('GET /balances/history validates its query and refuses too many points', async () => {

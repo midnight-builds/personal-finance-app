@@ -37,13 +37,13 @@ export type BalanceHistoryPoint = {
   date: string;
   /** Every account; balance null = unknown on that day (never zero). */
   accounts: Array<{ accountId: string; balance: number | null; balanceDate: string | null }>;
-  /** Known balances of bank accounts (and credit cards in credit). */
-  assets: number;
-  /** Known credit card debt, positive. */
-  liabilities: number;
-  /** assets − liabilities over the included accounts only. */
-  netWorth: number;
-  /** True when every account's balance is known on this day. */
+  /** Known balances of bank accounts (and credit cards in credit); null when no account is known. */
+  assets: number | null;
+  /** Known credit card debt, positive; null when no account is known. */
+  liabilities: number | null;
+  /** assets − liabilities over the included accounts only; null when no account is known. */
+  netWorth: number | null;
+  /** True when there are accounts and every one's balance is known on this day. */
   isComplete: boolean;
   coverage: { includedAccountIds: string[]; missingAccountIds: string[] };
 };
