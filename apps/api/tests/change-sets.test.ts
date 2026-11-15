@@ -270,6 +270,42 @@ test('create_category and its undo: the category is archived and its rows move t
   assert.equal(latest(tx).change_set_id, undo.id);
 });
 
+test('creating a name again after its category was renamed away creates a new category', () => {
+  const first = applyNow({ kind: 'create_category', name: 'Foo' }, 'user');
+  const fooId = first.categories[0].id!;
+  applyNow({ kind: 'rename_category', categoryId: fooId, name: 'Bar' }, 'user');
+  const second = applyNow({ kind: 'create_category', name: 'Foo' }, 'user');
+  assert.notEqual(second.id, first.id);
+  const newId = second.categories[0].id!;
+  assert.notEqual(newId, fooId);
+  assert.equal(category(newId).name, 'Foo');
+  assert.equal(category(fooId).name, 'Bar');
+});
+
+test('recategorize turns a rule-made category into a manual decision', () => {
+  const tx = mkTx('Sirkus Pelle', { categoryId: FUN(), source: 'rule' });
+  const p = plan({ kind: 'recategorize', transactionIds: [tx], categoryId: FUN() }, 'user');
+  assert.deepEqual(p.rows, [{ transactionId: tx, fromCategoryId: FUN(), toCategoryId: FUN() }]);
+  applyNow({ kind: 'recategorize', transactionIds: [tx], categoryId: FUN() }, 'user');
+  assert.equal(latest(tx).source, 'user');
+  // Already manual in the target: nothing to do.
+  assert.equal(plan({ kind: 'recategorize', transactionIds: [tx], categoryId: FUN() }, 'user').rowsTotal, 0);
+});
+
+test('undo of disable_rule does not re-enable a rule whose category was archived since', () => {
+  const cat = applyNow({ kind: 'create_category', name: 'Sienestys' }, 'user').categories[0].id!;
+  const ruleId = applyNow({ kind: 'create_rule', pattern: 'sienitori', matchField: 'counterparty', categoryId: cat }, 'user').rules[0].id!;
+  const disabled = applyNow({ kind: 'disable_rule', ruleId }, 'user');
+  const before = plan({ kind: 'undo', changeSetId: disabled.id }, 'user').planToken;
+  applyNow({ kind: 'archive_category', categoryId: cat }, 'user');
+  const p = plan({ kind: 'undo', changeSetId: disabled.id }, 'user');
+  assert.notEqual(p.planToken, before);
+  assert.deepEqual(p.exceptions, [{ ruleId, reason: 'category_archived' }]);
+  assert.deepEqual(p.rules, []);
+  apply({ kind: 'undo', changeSetId: disabled.id }, p.planToken, 'user');
+  assert.ok(rule(ruleId).disabled_at);
+});
+
 test('rename_category keeps id and role; undo restores the old name only when it is free', () => {
   const fallback = roleId('fallback');
   const set = applyNow({ kind: 'rename_category', categoryId: fallback, name: 'Sekalaiset' }, 'user');

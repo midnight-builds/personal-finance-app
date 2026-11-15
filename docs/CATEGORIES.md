@@ -100,6 +100,10 @@ Details settled while building it:
   `category_archived`; rule suggestions rejected by an archive are pending again
   after its undo.
 - Rule decisions written by `create_rule` have source `rule` and the rule's id.
+- `recategorize` into the category a rule already gave a row confirms it as a
+  manual decision; only rows already manual in the target are skipped.
+- Undo leaves a rule disabled when its category has been archived since
+  (exception `category_archived`).
 
 ## Delivery
 

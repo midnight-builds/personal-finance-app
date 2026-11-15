@@ -124,7 +124,7 @@ function latestDecision(transactionId: string): Latest | null {
  * a decision that is still the latest, so that one sits right below it) and is
  * as manual as the restored one.
  */
-function isManual(transactionId: string, latest: Latest): boolean {
+export function isManual(transactionId: string, latest: Pick<Latest, 'source'>): boolean {
   if (latest.source !== 'undo') return latest.source === 'user';
   const history = db
     .prepare(`SELECT source FROM categorization_decisions WHERE transaction_id = ? ORDER BY ${LATEST_DECISION_ORDER}`)
@@ -163,6 +163,18 @@ function lastTouch(list: 'categories' | 'rules', id: string): string | null {
   return row?.id ?? null;
 }
 
+/** The newest change set that gave a category this name or took it away. */
+function lastNameTouch(name: string): string | null {
+  const row = db
+    .prepare(
+      `SELECT cs.id FROM change_sets cs, json_each(cs.payload, '$.categories') je
+       WHERE json_extract(je.value, '$.name') = ? OR json_extract(je.value, '$.fromName') = ?
+       ORDER BY cs.rowid DESC LIMIT 1`
+    )
+    .get(name, name) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
 function categoryState(id: string) {
   const c = getCategory(id);
   return c ? [id, c.name, c.role, c.archived_at, c.merged_into_id, lastTouch('categories', id)] : [id, null];
@@ -170,7 +182,7 @@ function categoryState(id: string) {
 
 function ruleState(id: string) {
   const r = getRule(id);
-  return r ? [id, r.category_id, r.disabled_at, lastTouch('rules', id)] : [id, null];
+  return r ? [id, r.category_id, r.disabled_at, lastTouch('rules', id), getCategory(r.category_id)?.archived_at ?? null] : [id, null];
 }
 
 function requireCategoryInUse(id: string, notFound = 'category_not_found'): Category {
@@ -225,7 +237,9 @@ function draftRecategorize(op: Extract<Op, { kind: 'recategorize' }>): Draft {
   for (const transactionId of op.transactionIds) {
     const latest = latestDecision(transactionId);
     seen.push([transactionId, latest?.id ?? null]);
-    if (latest?.category_id === op.categoryId) continue;
+    // Confirming a category a rule chose makes it manual; only a manual
+    // decision already in the target is left as is.
+    if (latest?.category_id === op.categoryId && isManual(transactionId, latest)) continue;
     draft.rows.push({ transactionId, fromCategoryId: latest?.category_id ?? null, toCategoryId: op.categoryId, source: 'user' });
   }
   draft.deps = { rows: seen.sort(), categories: [categoryState(op.categoryId)] };
@@ -237,6 +251,9 @@ function draftCreateCategory(op: Extract<Op, { kind: 'create_category' }>): Draf
   if (nameTaken(op.name)) throw new DomainError('name_exists', 400);
   const draft = emptyDraft(op);
   draft.categories.push({ id: null, change: 'created', name: op.name });
+  // A name freed by a rename can be created again: that must be a new plan,
+  // not the set that created the name the first time.
+  draft.deps = { name: [op.name, lastNameTouch(op.name)] };
   return draft;
 }
 
@@ -464,8 +481,14 @@ function draftUndo(op: Extract<Op, { kind: 'undo' }>): Draft {
       if (rule.disabled_at) draft.exceptions.push({ ruleId: rule.id, reason: 'changed_since' });
       else draft.rules.push(ruleChange(rule, 'disabled'));
     } else if (change.change === 'disabled') {
-      if (!rule.disabled_at || rule.disabled_change_set_id !== set.id) draft.exceptions.push({ ruleId: rule.id, reason: 'changed_since' });
-      else draft.rules.push(ruleChange(rule, 'enabled'));
+      if (!rule.disabled_at || rule.disabled_change_set_id !== set.id) {
+        draft.exceptions.push({ ruleId: rule.id, reason: 'changed_since' });
+      } else if (getCategory(rule.category_id)?.archived_at && !unarchivedNow.has(rule.category_id)) {
+        // A rule of a category out of use stays off (archived categories' rules are disabled).
+        draft.exceptions.push({ ruleId: rule.id, reason: 'category_archived' });
+      } else {
+        draft.rules.push(ruleChange(rule, 'enabled'));
+      }
     }
   }
 

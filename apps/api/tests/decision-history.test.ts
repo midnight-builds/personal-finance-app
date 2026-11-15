@@ -162,7 +162,8 @@ test('accepting a rule suggestion moves only transactions whose latest category 
     stillMisc.id,
     wasMisc.id
   );
-  upsertDecision({ transactionId: stillMisc.id, categoryId: misc, source: 'user' });
+  // A rule put it in misc: a manual misc pick would be left alone.
+  upsertDecision({ transactionId: stillMisc.id, categoryId: misc, source: 'rule' });
   upsertDecision({ transactionId: wasMisc.id, categoryId: misc, source: 'user' });
   const transport = createCategory(`Liikenne ${pattern}`).id;
   upsertDecision({ transactionId: wasMisc.id, categoryId: transport, source: 'user' });

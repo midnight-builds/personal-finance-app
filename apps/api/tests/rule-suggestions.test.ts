@@ -126,3 +126,37 @@ test('acceptRuleSuggestion moves fallback rows by role, whatever the fallback is
   assert.equal(rule.actor, 'hermes');
   db.prepare('UPDATE categories SET name = ? WHERE id = ?').run('Muut ja epäselvät', misc.id);
 });
+
+test('acceptRuleSuggestion leaves manual fallback picks alone and matches the pattern literally', () => {
+  const misc = (db.prepare("SELECT id FROM categories WHERE role = 'fallback'").get() as { id: string }).id;
+  const now = new Date().toISOString();
+  const [acct, sess] = [crypto.randomUUID(), crypto.randomUUID()];
+  db.prepare('INSERT INTO accounts (id, created_at, name, type) VALUES (?, ?, ?, ?)').run(acct, now, 'Testitili', 'bank');
+  db.prepare('INSERT INTO import_sessions (id, created_at, source_bank, format) VALUES (?, ?, ?, ?)').run(sess, now, 'Test', 'CSV');
+  const mk = (counterparty: string, source: string) => {
+    const tx = crypto.randomUUID();
+    db.prepare(
+      `INSERT INTO normalized_transactions (id, created_at, import_session_id, account_id, booking_date, amount, currency, counterparty_name)
+       VALUES (?, ?, ?, ?, '2026-11-01', -9, 'EUR', ?)`
+    ).run(tx, now, sess, acct, counterparty);
+    db.prepare(
+      `INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source) VALUES (?, ?, ?, ?, ?)`
+    ).run(crypto.randomUUID(), '2026-11-01T00:00:00.000Z', tx, misc, source);
+    return tx;
+  };
+  const byRule = mk('Kioski_Kulma Oy', 'rule');
+  const manual = mk('Kioski_Kulma Oy', 'user');
+  const wildcard = mk('KioskiXKulma Oy', 'rule');
+
+  acceptRuleSuggestion(mkSuggestion('Ruoka ja päivittäistavarat', 'kioski_kulma'));
+
+  const latest = (tx: string) =>
+    (
+      db
+        .prepare('SELECT category_id FROM categorization_decisions WHERE transaction_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1')
+        .get(tx) as { category_id: string }
+    ).category_id;
+  assert.equal(latest(byRule), getCategoryId('Ruoka ja päivittäistavarat'));
+  assert.equal(latest(manual), misc);
+  assert.equal(latest(wildcard), misc);
+});

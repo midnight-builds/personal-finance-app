@@ -166,6 +166,15 @@ test('POST /transactions/:id/category: the learned rule belongs to the set, and 
   assert.ok((db.prepare('SELECT disabled_at FROM category_rules WHERE id = ?').get(rule.id) as { disabled_at: string }).disabled_at);
 });
 
+test('POST /transactions/:id/category confirming a rule-made category makes it manual', async () => {
+  const tx = mkTx('Kauppahalli');
+  await post(`/transactions/${tx}/category`, { categoryId: roleId('fallback') });
+  const latest = db
+    .prepare('SELECT source FROM categorization_decisions WHERE transaction_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1')
+    .get(tx) as { source: string };
+  assert.equal(latest.source, 'user');
+});
+
 test('POST /transactions/:id/category answers 404 for an unknown transaction or category', async () => {
   const tx = mkTx('Kauppa');
   const noTx = await post('/transactions/nope/category', { categoryId: categoryId('Vakuutukset') });
