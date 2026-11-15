@@ -20,7 +20,17 @@ test('defaults: stdio, local API, hermes source, no disabled tools', () => {
   assert.deepEqual(cfg.transport, { kind: 'stdio' });
   assert.equal(cfg.apiUrl, 'http://127.0.0.1:3001');
   assert.equal(cfg.proposalSource, 'hermes');
+  assert.equal(cfg.actor, 'hermes');
   assert.equal(cfg.disabledTools.size, 0);
+});
+
+test('actor: MCP_ACTOR, else the proposal source; must be a valid actor name', () => {
+  assert.equal(load({ MCP_ACTOR: 'hermes-test' }).actor, 'hermes-test');
+  assert.equal(load({ MCP_PROPOSAL_SOURCE: 'aino' }).actor, 'aino');
+  assert.equal(load({ MCP_PROPOSAL_SOURCE: 'Aino Agent', MCP_ACTOR: 'aino' }).actor, 'aino');
+  for (const env of [{ MCP_ACTOR: 'Hermes' }, { MCP_ACTOR: 'x'.repeat(41) }, { MCP_ACTOR: '' }, { MCP_PROPOSAL_SOURCE: 'Aino Agent' }]) {
+    assert.throws(() => load(env), /MCP_ACTOR/, JSON.stringify(env));
+  }
 });
 
 test('lists are comma separated and trimmed', () => {

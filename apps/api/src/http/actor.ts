@@ -1,6 +1,5 @@
 import type { FastifyRequest } from 'fastify';
-
-const ACTOR = /^[a-z0-9_-]{1,40}$/;
+import { ACTOR_HEADER, ACTOR_PATTERN } from '@finance-app/shared';
 
 /**
  * Who makes the request, as the client names it in `X-Finance-Actor` (`user`
@@ -8,6 +7,6 @@ const ACTOR = /^[a-z0-9_-]{1,40}$/;
  * docs/adr/0001-actor-without-authentication.md.
  */
 export function actorOf(request: Pick<FastifyRequest, 'headers'>): string {
-  const value = request.headers['x-finance-actor'];
-  return typeof value === 'string' && ACTOR.test(value) ? value : 'user';
+  const value = request.headers[ACTOR_HEADER];
+  return typeof value === 'string' && ACTOR_PATTERN.test(value) ? value : 'user';
 }
