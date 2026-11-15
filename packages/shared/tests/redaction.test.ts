@@ -62,3 +62,17 @@ test('redactDeep drops identifier keys and redacts nested strings without mutati
   assert.deepEqual(redactDeep(input), { items: [{ counterpartyName: REDACTED, amount: -5, ok: true, none: null }] });
   assert.deepEqual(input, snapshot);
 });
+
+test('redactDeep leaves generated ids and plan tokens intact even when they look like an account number', () => {
+  // Agents send these back (transaction ids to recategorize, a plan token to
+  // apply); a redacted one would break the call. Both are random, never bank data.
+  const uuid = '1b2c3d4e-ab12-3456-7890-123456789012';
+  const token = 'ab1234567890123456' + 'c'.repeat(46);
+  assert.notEqual(redactSensitiveIds(uuid), uuid);
+  assert.notEqual(redactSensitiveIds(token), token);
+  assert.deepEqual(redactDeep({ id: uuid, planToken: token, ids: [uuid] }), { id: uuid, planToken: token, ids: [uuid] });
+  // Only a whole id is exempt; anything around it is redacted as before.
+  assert.equal(redactDeep(`see ${token}`), redactSensitiveIds(`see ${token}`));
+  assert.notEqual(redactDeep(`see ${token}`), `see ${token}`);
+  assert.equal(redactDeep('FI2112345600000785'), REDACTED);
+});
