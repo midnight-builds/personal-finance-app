@@ -82,8 +82,9 @@ export function chooseCategoryFor(input: CategoryMatchInput): string | null {
  * latestCategoryDecisionJoin). Re-stating what the latest decision already
  * says (same category from the same source, e.g. a rule re-run or the user
  * picking the same category again) appends nothing, so the table does not grow
- * on repeats. `actor` is who made it (null: not known, shown as `system`).
- * Returns true when a decision was appended.
+ * on repeats. `actor` is who made it (null: not known, shown as `system`);
+ * `changeSetId` the change set that wrote it, if any.
+ * Returns the new decision's id, or null when nothing was appended.
  */
 export function appendDecision(options: {
   transactionId: string;
@@ -93,8 +94,9 @@ export function appendDecision(options: {
   createdAt?: string;
   actor?: string | null;
   reason?: string | null;
-}): boolean {
-  const { transactionId, categoryId, source, ruleId = null, actor = null, reason = null } = options;
+  changeSetId?: string | null;
+}): string | null {
+  const { transactionId, categoryId, source, ruleId = null, actor = null, reason = null, changeSetId = null } = options;
   const latest = db
     .prepare(
       `SELECT category_id, source FROM categorization_decisions
@@ -103,21 +105,23 @@ export function appendDecision(options: {
        LIMIT 1`
     )
     .get(transactionId) as { category_id: string; source: string } | undefined;
-  if (latest && latest.category_id === categoryId && latest.source === source) return false;
+  if (latest && latest.category_id === categoryId && latest.source === source) return null;
+  const id = crypto.randomUUID();
   db.prepare(
-    `INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source, rule_id, actor, reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source, rule_id, actor, reason, change_set_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
-    crypto.randomUUID(),
+    id,
     options.createdAt ?? new Date().toISOString(),
     transactionId,
     categoryId,
     source,
     ruleId,
     actor,
-    reason
+    reason,
+    changeSetId
   );
-  return true;
+  return id;
 }
 
 export function upsertDecision(options: {
@@ -133,22 +137,39 @@ export function upsertDecision(options: {
   const now = new Date().toISOString();
   appendDecision({ transactionId, categoryId, source, ruleId, createdAt: now, actor });
 
-  // simple learning: create a rule from counterparty/description
-  if (source === 'user') {
-    const pattern = (counterparty || description || '').trim();
-    if (pattern.length >= 3) {
-      const matchField = counterparty ? 'counterparty' : 'description';
-      const existingRule = db.prepare(
-        'SELECT id FROM category_rules WHERE pattern = ? AND category_id = ? AND match_field = ? LIMIT 1'
-      ).get(pattern.toLowerCase(), categoryId, matchField);
-      if (!existingRule) {
-        db.prepare(
-          'INSERT INTO category_rules (id, created_at, category_id, pattern, match_field, priority, actor) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).run(crypto.randomUUID(), now, categoryId, pattern.toLowerCase(), matchField, 10, actor);
-      }
-    }
-  }
+  if (source === 'user') learnRuleFromChoice({ categoryId, counterparty, description, actor, createdAt: now });
 }
+
+/**
+ * Simple learning from a manual choice: a rule from the counterparty (or the
+ * description) to the chosen category, unless one exists. Returns the created
+ * rule, or null when none was created.
+ */
+export function learnRuleFromChoice(options: {
+  categoryId: string;
+  counterparty?: string | null;
+  description?: string | null;
+  actor?: string | null;
+  createdAt?: string;
+  changeSetId?: string | null;
+}): { id: string; categoryId: string; pattern: string; matchField: string } | null {
+  const { categoryId, counterparty, description, actor = null, changeSetId = null } = options;
+  const pattern = (counterparty || description || '').trim().toLowerCase();
+  if (pattern.length < 3) return null;
+  const matchField = counterparty ? 'counterparty' : 'description';
+  const existingRule = db
+    .prepare('SELECT id FROM category_rules WHERE pattern = ? AND category_id = ? AND match_field = ? LIMIT 1')
+    .get(pattern, categoryId, matchField);
+  if (existingRule) return null;
+  const id = crypto.randomUUID();
+  db.prepare(
+    'INSERT INTO category_rules (id, created_at, category_id, pattern, match_field, priority, actor, change_set_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, options.createdAt ?? new Date().toISOString(), categoryId, pattern, matchField, USER_RULE_PRIORITY, actor, changeSetId);
+  return { id, categoryId, pattern, matchField };
+}
+
+/** Priority of rules the user or an agent makes; built-in rules sit below (see db.ts). */
+export const USER_RULE_PRIORITY = 10;
 
 export type CategoryListItem = { id: string; name: string; built_in: number; role: CategoryRole | null };
 
@@ -163,84 +184,4 @@ export function listCategories(options: { includeArchived?: boolean } = {}) {
 /** True when the category exists and is not archived. */
 export function isCategoryInUse(id: string): boolean {
   return Boolean(db.prepare('SELECT 1 FROM categories WHERE id = ? AND archived_at IS NULL').get(id));
-}
-
-export function createCategory(name: string) {
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error('name_required');
-  // Archived categories keep their names: their decisions still show them.
-  const exists = db.prepare('SELECT 1 FROM categories WHERE name = ?').get(trimmed);
-  if (exists) throw new Error('name_exists');
-  const id = crypto.randomUUID();
-  const now = new Date().toISOString();
-  db.prepare('INSERT INTO categories (id, created_at, name, built_in) VALUES (?, ?, ?, 0)').run(
-    id,
-    now,
-    trimmed
-  );
-  return { id, name: trimmed };
-}
-
-/** Renames any category in use, role categories included; id, role, decisions and rules stay. */
-export function renameCategory(id: string, name: string) {
-  const trimmed = (name ?? '').trim();
-  if (!trimmed) throw new Error('name_required');
-  const target = db.prepare('SELECT archived_at FROM categories WHERE id = ?').get(id) as
-    | { archived_at: string | null }
-    | undefined;
-  if (!target) throw new Error('not_found');
-  if (target.archived_at) throw new Error('category_archived');
-  const exists = db.prepare('SELECT 1 FROM categories WHERE name = ? AND id != ?').get(trimmed, id);
-  if (exists) throw new Error('name_exists');
-  db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(trimmed, id);
-}
-
-/**
- * Archives a category (categories are never deleted): its current transactions
- * move to `moveTo` (default: the fallback category) by new decisions, its rules
- * are disabled and its pending rule suggestions rejected. Earlier decisions are
- * history and stay as they are. A category with a role cannot be archived.
- */
-export function deleteCategory(id: string, options: { moveTo?: string; actor?: string | null } = {}) {
-  const target = db.prepare('SELECT role, archived_at FROM categories WHERE id = ?').get(id) as
-    | { role: string | null; archived_at: string | null }
-    | undefined;
-  if (!target || target.archived_at) throw new Error('not_found');
-  if (target.role) throw new Error('category_has_role');
-  const moveTo = options.moveTo ?? categoryIdByRole('fallback');
-  if (!moveTo || moveTo === id || !isCategoryInUse(moveTo)) throw new Error('invalid_move_target');
-
-  db.exec('BEGIN');
-  try {
-    const current = db
-      .prepare(
-        `SELECT nt.id FROM normalized_transactions nt
-         ${latestCategoryDecisionJoin('nt', 'cd')}
-         WHERE cd.category_id = ?`
-      )
-      .all(id) as Array<{ id: string }>;
-    const now = new Date().toISOString();
-    for (const tx of current) {
-      appendDecision({
-        transactionId: tx.id,
-        categoryId: moveTo,
-        source: 'category_archived',
-        createdAt: now,
-        actor: options.actor ?? null,
-      });
-    }
-    db.prepare('UPDATE category_rules SET disabled_at = ? WHERE category_id = ? AND disabled_at IS NULL').run(now, id);
-    // A pending suggestion can no longer be accepted. It keeps pointing at the
-    // archived category, which records what was suggested.
-    db.prepare(
-      `UPDATE rule_suggestions SET status = 'rejected', resolved_at = ?
-       WHERE category_id = ? AND status = 'pending'`
-    ).run(now, id);
-    db.prepare('UPDATE categories SET archived_at = ? WHERE id = ?').run(now, id);
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-  return { reassignedTo: moveTo };
 }

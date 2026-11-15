@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { httpErrorHandler } from '../http/errors.js';
 import { balanceHistoryRoutes } from './balanceHistory.js';
 import { categoryRoutes } from './categories.js';
+import { categorizationRoutes } from './categorization.js';
 import { featureProposalRoutes } from './featureProposals.js';
 import { importRoutes } from './imports.js';
 import { transactionSearchRoutes } from './transactionSearch.js';
@@ -19,4 +20,5 @@ export const routes: FastifyPluginAsync = async (app) => {
   await app.register(importRoutes);
   await app.register(balanceHistoryRoutes);
   await app.register(categoryRoutes);
+  await app.register(categorizationRoutes);
 };

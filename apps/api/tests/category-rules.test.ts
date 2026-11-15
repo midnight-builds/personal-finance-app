@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import crypto from 'crypto';
 
 import { db } from '../src/db.js';
-import { chooseCategoryFor, renameCategory, upsertDecision } from '../src/rules.js';
+import { renameCategory } from '../src/categorization.js';
+import { chooseCategoryFor, upsertDecision } from '../src/rules.js';
 import { resetDb } from './setup/resetDb.js';
 
 // How a transaction gets its category from rules: user rules first, then the

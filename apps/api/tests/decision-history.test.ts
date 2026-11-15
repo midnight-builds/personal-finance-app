@@ -11,7 +11,8 @@ import { searchTransactions } from '../src/transactionSearch.js';
 import { getInsights } from '../src/insights.js';
 import { getSummary, getHouseholdSummary } from '../src/summary.js';
 import { getMonthlyOverview } from '../src/monthly.js';
-import { appendDecision, createCategory, deleteCategory, upsertDecision } from '../src/rules.js';
+import { archiveCategory as deleteCategory, createCategory } from '../src/categorization.js';
+import { appendDecision, upsertDecision } from '../src/rules.js';
 import { acceptRuleSuggestion } from '../src/ruleSuggestions.js';
 import { resetDb } from './setup/resetDb.js';
 

@@ -354,6 +354,27 @@ export function initDb() {
   safeExec(`ALTER TABLE categorization_decisions ADD COLUMN actor TEXT`);
   safeExec(`ALTER TABLE categorization_decisions ADD COLUMN reason TEXT`);
 
+  // Change sets: every categorization change, with what it changed and the
+  // before values its undo needs (src/categorization.ts). Decisions and rules
+  // a set wrote point back to it; a rule also records the set that disabled it.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS change_sets (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      reason TEXT,
+      plan_token TEXT NOT NULL UNIQUE,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'applied',
+      undo_of_id TEXT REFERENCES change_sets(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_change_sets_undo_of ON change_sets(undo_of_id);
+  `);
+  safeExec(`ALTER TABLE categorization_decisions ADD COLUMN change_set_id TEXT`);
+  safeExec(`ALTER TABLE category_rules ADD COLUMN change_set_id TEXT`);
+  safeExec(`ALTER TABLE category_rules ADD COLUMN disabled_change_set_id TEXT`);
+
   safeExec(`
     DELETE FROM category_rules WHERE rowid NOT IN (
       SELECT MIN(rowid) FROM category_rules

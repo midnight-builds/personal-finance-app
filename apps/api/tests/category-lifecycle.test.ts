@@ -4,14 +4,8 @@ import assert from 'node:assert/strict';
 import crypto from 'crypto';
 
 import { db, initDb, seedDefaultCategories } from '../src/db.js';
-import {
-  appendDecision,
-  createCategory,
-  deleteCategory,
-  listCategories,
-  renameCategory,
-  upsertDecision,
-} from '../src/rules.js';
+import { archiveCategory as deleteCategory, createCategory, renameCategory } from '../src/categorization.js';
+import { appendDecision, listCategories, upsertDecision } from '../src/rules.js';
 import { resetDb } from './setup/resetDb.js';
 
 // Category roles, seeding, and archiving instead of deleting.
@@ -231,7 +225,8 @@ test('names of archived categories stay taken; archived categories cannot be ren
   assert.throws(() => createCategory('Vanha'), /name_exists/);
   assert.throws(() => renameCategory(categoryId('Vakuutukset'), 'Vanha'), /name_exists/);
   assert.throws(() => renameCategory(doomed, 'Uudempi'), /category_archived/);
-  assert.throws(() => deleteCategory(doomed), /not_found/);
+  // The service says why; DELETE /categories/:id still answers 404 not_found.
+  assert.throws(() => deleteCategory(doomed), /category_archived/);
 });
 
 test('listCategories includes each category role', () => {

@@ -1,16 +1,32 @@
-import type { FastifyPluginAsync } from 'fastify';
-import { db } from '../db.js';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
+import { ZodError } from 'zod';
+import { applyNow, archiveCategory, createCategory, renameCategory } from '../categorization.js';
 import { actorOf } from '../http/actor.js';
-import { createCategory, deleteCategory, listCategories, renameCategory, upsertDecision } from '../rules.js';
+import { DomainError } from '../http/errors.js';
+import { listCategories } from '../rules.js';
 import { acceptRuleSuggestion, listPendingRuleSuggestions, rejectRuleSuggestion } from '../ruleSuggestions.js';
 
 const message = (err: unknown) => (err instanceof Error ? err.message : 'unknown');
 
 /**
- * Categories, a transaction's category and rule suggestions. Moved from
- * index.ts as they were: each route answers its own errors with
- * `{ error: <code> }` and the same statuses as before. Changes record the
- * actor of the request (`X-Finance-Actor`).
+ * Answers a change-set error in the shape these routes always had:
+ * `{ error: <code> }`, with the old codes and statuses. `renames` maps the
+ * service's codes to the old ones (e.g. `category_not_found` → 404 `not_found`).
+ */
+function legacyError(reply: FastifyReply, err: unknown, renames: Record<string, [number, string]> = {}) {
+  if (err instanceof ZodError) return reply.code(400).send({ error: 'invalid_request' });
+  if (!(err instanceof DomainError)) throw err;
+  const [status, code] = renames[err.code] ?? [err.statusCode, err.code];
+  return reply.code(status).send({ error: code });
+}
+
+const NOT_FOUND: [number, string] = [404, 'not_found'];
+
+/**
+ * Categories, a transaction's category and rule suggestions. Each route answers
+ * its own errors with `{ error: <code> }` and the same statuses as before.
+ * Category changes go through the change-set service (src/categorization.ts),
+ * applied directly, and record the actor of the request (`X-Finance-Actor`).
  */
 export const categoryRoutes: FastifyPluginAsync = async (app) => {
   app.get('/categories', async () => listCategories());
@@ -18,57 +34,44 @@ export const categoryRoutes: FastifyPluginAsync = async (app) => {
   app.post('/categories', async (request, reply) => {
     const { name } = (request.body as { name?: unknown } | undefined) ?? {};
     try {
-      return reply.send(createCategory(String(name ?? '')));
+      return reply.send(createCategory(String(name ?? ''), { actor: actorOf(request) }));
     } catch (err) {
-      return reply.code(400).send({ error: message(err) });
+      return legacyError(reply, err);
     }
   });
 
   app.patch<{ Params: { id: string }; Body: { name: string } }>('/categories/:id', async (request, reply) => {
     try {
-      renameCategory(request.params.id, request.body?.name);
+      renameCategory(request.params.id, String(request.body?.name ?? ''), { actor: actorOf(request) });
       return reply.send({ ok: true });
     } catch (err) {
-      const msg = message(err);
-      const status = ['name_exists', 'name_required', 'category_archived'].includes(msg) ? 400 : 404;
-      return reply.code(status).send({ error: msg });
+      return legacyError(reply, err, { category_not_found: NOT_FOUND });
     }
   });
 
   // Categories are archived, never deleted; the route keeps its old name and shape.
   app.delete<{ Params: { id: string } }>('/categories/:id', async (request, reply) => {
     try {
-      const res = deleteCategory(request.params.id, { actor: actorOf(request) });
+      const res = archiveCategory(request.params.id, { actor: actorOf(request) });
       return reply.send({ ok: true, reassignedTo: res.reassignedTo });
     } catch (err) {
-      const msg = message(err);
-      const status = ['category_has_role', 'invalid_move_target'].includes(msg) ? 400 : 404;
-      return reply.code(status).send({ error: msg });
+      return legacyError(reply, err, { category_not_found: NOT_FOUND, category_archived: NOT_FOUND });
     }
   });
 
+  // A one-row manual recategorization; still learns a rule from the row for the UI.
   app.post<{ Params: { id: string }; Body: { categoryId: string } }>(
     '/transactions/:id/category',
     async (request, reply) => {
       const { id } = request.params;
       const { categoryId } = request.body || {};
       if (!categoryId) return reply.code(400).send({ error: 'category_missing' });
-      const category = db.prepare('SELECT archived_at FROM categories WHERE id = ?').get(categoryId) as
-        | { archived_at: string | null }
-        | undefined;
-      if (category?.archived_at) return reply.code(400).send({ error: 'category_archived' });
-      const tx = db
-        .prepare('SELECT counterparty_name, description FROM normalized_transactions WHERE id = ?')
-        .get(id) as { counterparty_name: string | null; description: string | null } | undefined;
-      upsertDecision({
-        transactionId: id,
-        categoryId,
-        source: 'user',
-        counterparty: tx?.counterparty_name ?? null,
-        description: tx?.description ?? null,
-        actor: actorOf(request),
-      });
-      return reply.send({ ok: true });
+      try {
+        applyNow({ kind: 'recategorize', transactionIds: [id], categoryId }, actorOf(request), { learnRule: true });
+        return reply.send({ ok: true });
+      } catch (err) {
+        return legacyError(reply, err, { category_not_found: NOT_FOUND, unknown_transactions: NOT_FOUND });
+      }
     }
   );
 
