@@ -177,7 +177,7 @@ test('accepting a rule suggestion moves only transactions whose latest category 
   assert.equal(listed(wasMisc.id).categoryId, transport, 'an old misc decision is history, not the category');
 });
 
-test('deleting a category looks as before: current members move to misc, others keep theirs', () => {
+test('archiving a category looks as deleting did: current members move to misc, others keep theirs', () => {
   const misc = categoryId('Muut ja epäselvät');
   const food = categoryId('Ruoka ja päivittäistavarat');
   const doomed = createCategory('Poistettava').id;
@@ -187,29 +187,29 @@ test('deleting a category looks as before: current members move to misc, others 
   upsertDecision({ transactionId: member.id, categoryId: doomed, source: 'user' });
   upsertDecision({ transactionId: former.id, categoryId: doomed, source: 'user' });
   upsertDecision({ transactionId: former.id, categoryId: food, source: 'user' });
-  const memberHistory = decisions(member.id).length;
+  const memberHistory = decisions(member.id);
+  const formerHistory = decisions(former.id);
+  const visibleBefore = decisionCount();
 
   const res = deleteCategory(doomed);
   assert.equal(res.reassignedTo, misc);
-  assert.equal(db.prepare('SELECT 1 FROM categories WHERE id = ?').get(doomed), undefined);
-  assert.equal(
-    Number((db.prepare('SELECT COUNT(*) AS n FROM categorization_decisions WHERE category_id = ?').get(doomed) as { n: number }).n),
-    0
-  );
+  // Archived, not deleted: the category and its past decisions stay.
+  assert.ok((db.prepare('SELECT archived_at FROM categories WHERE id = ?').get(doomed) as any).archived_at);
+  assert.equal(decisionCount(), visibleBefore + 1);
+  assert.deepEqual(decisions(former.id), formerHistory);
 
   assert.equal(listed(member.id).categoryId, misc);
   assert.equal(listed(member.id).categoryName, 'Muut ja epäselvät');
   assert.equal(ledgerEntries().find((e) => e.id === member.id)?.categoryId, misc);
-  // The move is recorded as a new decision.
-  assert.equal(decisions(member.id).length, memberHistory + 1);
-  assert.deepEqual(decisions(member.id).at(-1), { category_id: misc, source: 'category_deleted' });
+  // The move is recorded as a new decision; earlier ones are untouched.
+  assert.deepEqual(decisions(member.id).slice(0, memberHistory.length), memberHistory);
+  assert.deepEqual(decisions(member.id).at(-1), { category_id: misc, source: 'category_archived' });
 
   assert.equal(listed(former.id).categoryId, food);
   assert.equal(ledgerEntries().find((e) => e.id === former.id)?.categoryId, food);
 });
 
-test('a category that has rule suggestions can be deleted; its pending ones are rejected', () => {
-  const misc = categoryId('Muut ja epäselvät');
+test('a category that has rule suggestions can be archived; its pending ones are rejected', () => {
   const doomed = createCategory('Poistettava ehdotuksin').id;
   const insert = db.prepare(
     `INSERT INTO rule_suggestions (id, created_at, category_id, category_name, pattern, match_field, status)
@@ -229,14 +229,14 @@ test('a category that has rule suggestions can be deleted; its pending ones are 
       status: string;
       resolved_at: string | null;
     };
-  assert.equal(db.prepare('SELECT 1 FROM categories WHERE id = ?').get(doomed), undefined);
-  // A suggestion for a category that no longer exists cannot be accepted.
+  // A suggestion for an archived category cannot be accepted.
   assert.equal(row(pending).status, 'rejected');
   assert.ok(row(pending).resolved_at);
   assert.equal(row(accepted).status, 'accepted');
-  // The name of the suggested category stays in the history.
+  // What was suggested stays in the history.
   assert.equal(row(pending).category_name, 'Poistettava ehdotuksin');
-  assert.equal(row(accepted).category_id, misc);
+  assert.equal(row(pending).category_id, doomed);
+  assert.equal(row(accepted).category_id, doomed);
 
   // A stale UI accepting the rejected suggestion must not create a misc rule.
   const rules = () => Number((db.prepare('SELECT COUNT(*) AS n FROM category_rules').get() as { n: number }).n);

@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { db } from './db.js';
 import { getOpenAIApiKey } from './settings.js';
 import { aiCategorize } from './ai.js';
-import { appendDecision } from './rules.js';
+import { appendDecision, categoryIdByRole } from './rules.js';
 import { latestCategoryDecisionJoin } from './sql/transactions.js';
 
 export type RuleSuggestion = {
@@ -24,7 +24,8 @@ export function listPendingRuleSuggestions(): RuleSuggestion[] {
   ).all('pending') as RuleSuggestion[];
 }
 
-export function acceptRuleSuggestion(id: string): void {
+export function acceptRuleSuggestion(id: string, options: { actor?: string | null } = {}): void {
+  const actor = options.actor ?? null;
   const suggestion = db.prepare('SELECT * FROM rule_suggestions WHERE id = ?').get(id) as RuleSuggestion | undefined;
   if (!suggestion) throw new Error('not_found');
   // A resolved suggestion (e.g. rejected when its category was deleted) must
@@ -39,22 +40,22 @@ export function acceptRuleSuggestion(id: string): void {
 
   if (!existingRule) {
     db.prepare(
-      'INSERT INTO category_rules (id, created_at, category_id, pattern, match_field, priority) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(crypto.randomUUID(), now, suggestion.category_id, suggestion.pattern, suggestion.match_field, 10);
+      'INSERT INTO category_rules (id, created_at, category_id, pattern, match_field, priority, actor) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(crypto.randomUUID(), now, suggestion.category_id, suggestion.pattern, suggestion.match_field, 10, actor);
   }
 
-  // Apply to existing "Muut" transactions matching this counterparty
-  const miscRow = db.prepare("SELECT id FROM categories WHERE name = 'Muut ja epäselvät' LIMIT 1").get() as { id: string } | undefined;
-  if (miscRow) {
+  // Apply to existing fallback transactions matching this counterparty
+  const miscId = categoryIdByRole('fallback');
+  if (miscId) {
     const matching = db.prepare(`
       SELECT nt.id FROM normalized_transactions nt
       ${latestCategoryDecisionJoin('nt', 'cd')}
       WHERE cd.category_id = ?
         AND LOWER(nt.counterparty_name) LIKE ?
-    `).all(miscRow.id, `%${suggestion.pattern}%`) as Array<{ id: string }>;
+    `).all(miscId, `%${suggestion.pattern}%`) as Array<{ id: string }>;
 
     for (const tx of matching) {
-      appendDecision({ transactionId: tx.id, categoryId: suggestion.category_id, source: 'rule', createdAt: now });
+      appendDecision({ transactionId: tx.id, categoryId: suggestion.category_id, source: 'rule', createdAt: now, actor });
     }
   }
 
@@ -72,8 +73,8 @@ export function rejectRuleSuggestion(id: string): void {
 export async function generateRuleSuggestions(): Promise<void> {
   if (!getOpenAIApiKey()) return;
 
-  const miscRow = db.prepare("SELECT id FROM categories WHERE name = 'Muut ja epäselvät' LIMIT 1").get() as { id: string } | undefined;
-  if (!miscRow) return;
+  const miscId = categoryIdByRole('fallback');
+  if (!miscId) return;
 
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
 
@@ -94,7 +95,7 @@ export async function generateRuleSuggestions(): Promise<void> {
     GROUP BY nt.counterparty_name
     ORDER BY cnt DESC
     LIMIT 10
-  `).all(miscRow.id, thirtyDaysAgo) as Array<{ counterparty_name: string; cnt: number; avg_amount: number }>;
+  `).all(miscId, thirtyDaysAgo) as Array<{ counterparty_name: string; cnt: number; avg_amount: number }>;
 
   for (const candidate of candidates) {
     try {
@@ -109,12 +110,12 @@ export async function generateRuleSuggestions(): Promise<void> {
       let categoryName: string | null = null;
       let reason: string | null = null;
 
-      if (result.mode === 'existing' && result.categoryId !== miscRow.id) {
+      if (result.mode === 'existing' && result.categoryId !== miscId) {
         categoryId = result.categoryId;
         categoryName = result.categoryName;
       } else if (result.mode === 'options' && result.options.length > 0) {
         const top = result.options[0];
-        if (top.categoryId !== miscRow.id) {
+        if (top.categoryId !== miscId) {
           categoryId = top.categoryId;
           categoryName = top.categoryName;
           reason = top.reason;
