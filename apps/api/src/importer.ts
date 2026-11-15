@@ -312,6 +312,7 @@ type LinkSide = {
   id: string;
   account_id: string;
   counterparty_iban: string | null;
+  counterparty_name: string | null;
   account_iban: string | null;
   dist?: number;
 };
@@ -329,15 +330,24 @@ type LinkSide = {
  *   transferring (e.g. a purchase on one card and a refund on another);
  * - otherwise the closest day wins, and a tie between accounts is left
  *   unlinked rather than guessed.
+ *
+ * A card's monthly bill is often paid as an e-invoice without the issuer's
+ * IBAN, unlike extra repayments. A payee that an IBAN-carrying repayment from
+ * the account already went to is the card issuer, so a payment to it without
+ * an IBAN may be a repayment too, when the card names the credit as it named
+ * that repayment (a refund carries the merchant's name), and it beats other
+ * payments of the same amount. A card credit several payments could have repaid waits for a second
+ * pass, when repayments in the same import may have taught the issuer; rows
+ * left unlinked are tried again then too.
  */
 function linkTransfers(ids: string[]) {
   const sideOf = db.prepare(
-    `SELECT t.id, t.account_id, t.booking_date, t.amount, t.counterparty_iban, a.iban AS account_iban
+    `SELECT t.id, t.account_id, t.booking_date, t.amount, t.counterparty_iban, t.counterparty_name, a.iban AS account_iban
      FROM normalized_transactions t JOIN accounts a ON a.id = t.account_id
      WHERE t.id = ? AND t.booking_date IS NOT NULL AND ${isCanonicalGroupRow('t')} AND NOT ${isLinked('t')}`
   );
   const candidatesOf = db.prepare(
-    `SELECT c.id, c.account_id, c.counterparty_iban, a.iban AS account_iban,
+    `SELECT c.id, c.account_id, c.booking_date, c.amount, c.counterparty_iban, c.counterparty_name, a.iban AS account_iban,
             ABS(julianday(substr(c.booking_date, 1, 10)) - julianday(substr(?, 1, 10))) AS dist
      FROM normalized_transactions c JOIN accounts a ON a.id = c.account_id
      WHERE c.account_id != ? AND c.amount = ?
@@ -357,10 +367,46 @@ function linkTransfers(ids: string[]) {
   const insertLink = db.prepare(
     'INSERT INTO transfer_links (id, created_at, from_transaction_id, to_transaction_id, confidence) VALUES (?, ?, ?, ?, ?)'
   );
+  // IBAN-carrying repayments from an account with an IBAN into one without: the payee
+  // on the paying side, and how the payment is named on the card.
+  const payeesStmt = db.prepare(
+    `SELECT DISTINCT f.account_id, f.counterparty_name, t.account_id AS card_id, t.counterparty_name AS credit_name
+     FROM transfer_links l
+     JOIN normalized_transactions f ON f.id = l.from_transaction_id
+     JOIN accounts fa ON fa.id = f.account_id
+     JOIN normalized_transactions t ON t.id = l.to_transaction_id
+     JOIN accounts ta ON ta.id = t.account_id
+     WHERE fa.iban IS NOT NULL AND ta.iban IS NULL
+       AND f.counterparty_iban IS NOT NULL AND f.counterparty_name IS NOT NULL`
+  );
+  const payeeKey = (from: Pick<LinkSide, 'account_id' | 'counterparty_name'>, card: Pick<LinkSide, 'account_id' | 'counterparty_name'>) =>
+    [from.account_id, from.counterparty_name, card.account_id, card.counterparty_name].join('\u0000');
+  const loadPayees = () =>
+    new Set(
+      (
+        payeesStmt.all() as Array<{ account_id: string; counterparty_name: string; card_id: string; credit_name: string | null }>
+      ).map((p) => payeeKey(p, { account_id: p.card_id, counterparty_name: p.credit_name }))
+    );
+  let payees = loadPayees();
 
-  for (const id of ids) {
+  /**
+   * A payment from `from` to the card's issuer, named on the card as its earlier repayments
+   * were: a refund on the card carries the merchant's name instead.
+   */
+  const knownPayee = (from: LinkSide, card: LinkSide) =>
+    from.counterparty_name !== null && payees.has(payeeKey(from, card));
+  /** Unlinked payments on accounts with an IBAN that could have repaid this card credit. */
+  const repaymentRivals = (credit: LinkSide & { booking_date: string; amount: number }) => {
+    const day = credit.booking_date.slice(0, 10);
+    return (
+      candidatesOf.all(credit.booking_date, credit.account_id, -credit.amount, daysBefore(day, 2), daysBefore(day, -3), credit.booking_date) as LinkSide[]
+    ).filter((c) => c.account_iban);
+  };
+
+  /** Links one row. With `settle` false, a card credit several payments could have repaid waits. */
+  const linkOne = (id: string, settle: boolean) => {
     const row = sideOf.get(id) as (LinkSide & { booking_date: string; amount: number }) | undefined;
-    if (!row || row.amount === 0) continue;
+    if (!row || row.amount === 0) return;
     // An export naming the account's own IBAN as the other party says nothing about it.
     const ownIbanAsNone = (s: LinkSide) =>
       normIban(s.counterparty_iban) === normIban(s.account_iban) ? { ...s, counterparty_iban: null } : s;
@@ -385,7 +431,9 @@ function linkTransfers(ids: string[]) {
       !into.account_iban &&
       !!from.account_iban &&
       (into.amount ?? 0) > 0 &&
-      (!carriesIbans(from.account_id) || from.counterparty_iban !== null);
+      (!carriesIbans(from.account_id) ||
+        from.counterparty_iban !== null ||
+        knownPayee(from, into));
     const plausible = candidates.filter((c) => {
       const cand = { ...c, amount: -row.amount };
       if (!row.account_iban || !c.account_iban) return isRepayment(row, cand) || isRepayment(cand, row);
@@ -403,16 +451,32 @@ function linkTransfers(ids: string[]) {
       match = proven[0];
       confidence = 95;
     } else {
-      match = plausible[0];
+      // Several payments of the card credit's amount: the one to the card's issuer
+      // wins, and the issuer may be learnt only later in this import, so wait.
+      let pool = plausible;
+      const credit = !row.account_iban && row.amount > 0 ? row : null;
+      const card = credit ? null : (pool.find((c) => !c.account_iban) as (LinkSide & { booking_date: string; amount: number }) | undefined);
+      const rivals = credit ? candidates.filter((c) => c.account_iban) : card ? repaymentRivals(card) : [];
+      if (rivals.length > 1) {
+        if (!settle) return;
+        const fromIssuer = (c: LinkSide) => knownPayee(c, credit!);
+        if (credit && pool.some(fromIssuer)) pool = pool.filter(fromIssuer);
+        if (card && !knownPayee(row, card) && rivals.some((r) => knownPayee(r, card))) pool = pool.filter((c) => c !== card);
+      }
+      match = pool[0];
       confidence = 70;
-      if (match && plausible.some((c) => c.dist === match!.dist && c.account_id !== match!.account_id)) continue;
+      if (match && pool.some((c) => c.dist === match!.dist && c.account_id !== match!.account_id)) return;
     }
-    if (!match) continue;
+    if (!match) return;
 
     const fromId = row.amount < 0 ? row.id : match.id;
     const toId = row.amount < 0 ? match.id : row.id;
     insertLink.run(createId(), new Date().toISOString(), fromId, toId, confidence);
-  }
+  };
+
+  ids.forEach((id) => linkOne(id, false));
+  payees = loadPayees();
+  ids.forEach((id) => linkOne(id, true));
 }
 
 /** Where an import goes, as the user chose it. */

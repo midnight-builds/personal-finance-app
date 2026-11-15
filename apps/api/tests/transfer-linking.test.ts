@@ -189,6 +189,93 @@ test('a credit card repayment from checking is a transfer', async () => {
   assert.equal(links()[0].confidence, 70);
 });
 
+test('a card bill paid without an IBAN to the payee of an IBAN repayment is a transfer', async () => {
+  // The monthly e-invoice payment carries no IBAN; an extra repayment to the same payee does.
+  await importRows(CHECKING, [
+    { date: '2026-10-01', amount: -950, other: FRIEND, name: 'Vuokranantaja' },
+    { date: '2026-10-05', amount: -300, other: 'FI99 9999 9999 9999 99', name: 'Korttipankki Oyj' },
+    { date: '2026-10-20', amount: -212.4, other: 'Korttipankki Oyj', name: 'Korttipankki Oyj' },
+  ]);
+  await upload(
+    'Luottokortti.csv',
+    [
+      { date: '2026-10-21', amount: 212.4, other: '', name: 'Maksu, kiitos' },
+      { date: '2026-10-05', amount: 300, other: '', name: 'Maksu, kiitos' },
+    ],
+    NEW_CARD
+  );
+  assert.equal(links().length, 2);
+  assert.equal(ledgerEntries().filter((e) => e.counterparty === 'Korttipankki Oyj').length, 0);
+});
+
+test('a card bill imported on checking after the card export is a transfer', async () => {
+  const card = await upload(
+    'Luottokortti.csv',
+    [
+      { date: '2026-10-05', amount: 300, other: '', name: 'Maksu, kiitos' },
+      { date: '2026-10-21', amount: 212.4, other: '', name: 'Maksu, kiitos' },
+    ],
+    NEW_CARD
+  );
+  await importRows(CHECKING, [
+    { date: '2026-10-01', amount: -950, other: FRIEND, name: 'Vuokranantaja' },
+    { date: '2026-10-20', amount: -212.4, other: 'Korttipankki Oyj', name: 'Korttipankki Oyj' },
+    { date: '2026-10-05', amount: -300, other: 'FI99 9999 9999 9999 99', name: 'Korttipankki Oyj' },
+  ]);
+  assert.equal(links().length, 2);
+  assert.ok(card.accountId);
+});
+
+test('a card bill beats another payment of the same amount on the same day', async () => {
+  // Same day, same amount: the card bill (no IBAN) and a payment to a friend (IBAN).
+  const rows: Row[] = [
+    { date: '2026-10-05', amount: -300, other: 'FI99 9999 9999 9999 99', name: 'Korttipankki Oyj' },
+    { date: '2026-10-20', amount: -200, other: FRIEND, name: 'Kaveri' },
+    { date: '2026-10-20', amount: -200, other: 'Korttipankki Oyj', name: 'Korttipankki Oyj' },
+  ];
+  const card: Row[] = [
+    { date: '2026-10-20', amount: 200, other: '', name: 'Maksu, kiitos' },
+    { date: '2026-10-05', amount: 300, other: '', name: 'Maksu, kiitos' },
+  ];
+  for (const cardFirst of [false, true]) {
+    resetDb();
+    if (cardFirst) await upload('Luottokortti.csv', card, NEW_CARD);
+    await importRows(CHECKING, rows);
+    if (!cardFirst) await upload('Luottokortti.csv', card, NEW_CARD);
+    assert.equal(links().length, 2, `card first: ${cardFirst}`);
+    const spent = ledgerEntries().filter((e) => e.amount < 0).map((e) => e.counterparty);
+    assert.deepEqual(spent, ['Kaveri'], `card first: ${cardFirst}`);
+  }
+});
+
+test('a card refund is not taken for a repayment of a purchase at the issuer', async () => {
+  // The issuer also sells on invoice: a -35 purchase without an IBAN, and a +35 refund on the card.
+  await importRows(CHECKING, [
+    { date: '2026-10-05', amount: -500, other: 'FI99 9999 9999 9999 99', name: 'Korttipankki Oyj' },
+    { date: '2026-10-12', amount: -35, other: 'Korttipankki Oyj', name: 'Korttipankki Oyj' },
+  ]);
+  await upload(
+    'Luottokortti.csv',
+    [
+      { date: '2026-10-05', amount: 500, other: '', name: 'Maksu, kiitos' },
+      { date: '2026-10-13', amount: 35, other: 'Verkkokauppa', name: 'Verkkokauppa' },
+    ],
+    NEW_CARD
+  );
+  assert.equal(links().length, 1);
+  assert.equal(ledgerEntries().filter((e) => e.amount === -35 || e.amount === 35).length, 2);
+});
+
+test('a payment without an IBAN to a payee never repaid by IBAN is not a transfer', async () => {
+  // The landlord is paid by IBAN, but not as a card repayment.
+  await importRows(CHECKING, [
+    { date: '2026-10-01', amount: -950, other: FRIEND, name: 'Vuokranantaja' },
+    { date: '2026-10-10', amount: -20, other: 'Vuokranantaja', name: 'Vuokranantaja' },
+  ]);
+  await upload('Luottokortti.csv', [{ date: '2026-10-11', amount: 20, other: '', name: 'Hyvitys' }], NEW_CARD);
+  assert.deepEqual(links(), []);
+});
+
 test('a savings export fed only from checking is filed under savings', async () => {
   // Every row names both accounts once: only the own side tells which file this is.
   const savings = await upload('Tapahtumat.csv', [
