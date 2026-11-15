@@ -116,5 +116,8 @@ Details settled while building it:
    `role` (UI protects role categories by role, not name).
 2. **Change sets** — plan/apply/undo service and REST endpoints; existing category
    endpoints record change sets.
-3. **MCP tools** — plan, apply, list/show change sets, undo; the MCP client sends
-   its actor. A change-log view with undo in the web UI comes later.
+3. **MCP tools** (delivered) — `list_category_rules`, `plan_categorization`,
+   `apply_categorization`, `list_category_changes`, `get_category_change`; undo is
+   the `undo` operation through plan and apply. The MCP client sends its actor
+   (`MCP_ACTOR`, default `hermes`). See `docs/MCP.md`.
+4. **Web UI change log** (to come) — a change-log view with undo in the web UI.

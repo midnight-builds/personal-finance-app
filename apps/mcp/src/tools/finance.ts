@@ -116,5 +116,14 @@ const dataTools: ToolDefinition[] = [
 
 export const financeTools: ToolDefinition[] = [
   ...dataTools.map((tool) => (tool.freshness ? tool : withFreshness(tool))),
-  readEndpoint('list_categories', 'Categories', 'All spending categories (id + name).', '/categories'),
+  readEndpoint(
+    'list_categories',
+    'Categories',
+    'Spending categories in use: id, name, built_in and role. A role marks a special category whatever it is ' +
+      'named: fallback (where uncategorized transactions and those of archived categories go), income, refund; ' +
+      'null for others. A role category can be renamed but not archived. Archived categories are not listed: they ' +
+      'are out of use but keep their past decisions (categories are never deleted). Use these ids in ' +
+      'plan_categorization.',
+    '/categories'
+  ),
 ];

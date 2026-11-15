@@ -33,6 +33,18 @@ export function defineTool<Shape extends z.ZodRawShape>(tool: ToolDefinition<Sha
 
 export const READ_ONLY: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 
+/**
+ * Applies a planned categorization change set: changes which category
+ * transactions have, recorded and undoable as a whole; deletes nothing.
+ * Idempotent: the same plan token returns the same change set.
+ */
+export const UNDOABLE_WRITE: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
 /** Adds a record to a review queue; never changes or deletes existing data. */
 export const APPEND_ONLY: ToolAnnotations = {
   readOnlyHint: false,

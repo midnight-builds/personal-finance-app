@@ -16,7 +16,7 @@ Goal: **easy import → automatic categorization → clear reports**.
 - **Categorization** — default categories, manual rules, and AI-suggested rules you can approve or reject
 - **Pattern detection** — detects annual recurring expenses and flags large one-off transactions for confirmation
 - **Forecasting** — 3-month spending forecast engine with a briefing generator and UI panel
-- **MCP server** — read-only tools for external agents (e.g. Hermes) plus a feature-proposal queue you review in the UI; see `docs/MCP.md`
+- **MCP server** — tools for external agents (e.g. Hermes): read-only data tools, planned and undoable category management recorded under the agent's name, and a feature-proposal queue you review in the UI; see `docs/MCP.md`
 
 ## Quick start
 
