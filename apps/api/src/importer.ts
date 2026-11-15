@@ -501,6 +501,8 @@ export type ImportOptions = {
    * while the IBAN is already taken). Without it those are refused.
    */
   allowIbanMismatch?: boolean;
+  /** Who imports (`X-Finance-Actor`); recorded on the rule decisions made on import. Default `user`. */
+  actor?: string;
 };
 
 /** What the import's transactional part did, or in a dry run would do. */
@@ -727,7 +729,7 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
         amount,
       });
       if (categoryId) {
-        upsertDecision({ transactionId: normalizedId, categoryId, source: 'rule' });
+        upsertDecision({ transactionId: normalizedId, categoryId, source: 'rule', actor: options.actor ?? 'user' });
       }
 
       insertedIds.push(normalizedId);
