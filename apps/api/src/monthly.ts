@@ -9,6 +9,8 @@ const day = (year: number, month: number, date: number) =>
  * A period is labelled by its month and runs from the day after the payday
  * window opens (payday − flex days) up to and including the same day of the
  * next month, so the salary that lands early still counts in its own month.
+ * `from` and `to` are the period's inclusive booking-date range: searching
+ * transactions over the same range (default scope) gives the same totals.
  */
 export function getMonthlyOverview(limit = 6, asOf: string = today()) {
   const { payday, paydayFlexDays } = getSettings();
@@ -18,8 +20,9 @@ export function getMonthlyOverview(limit = 6, asOf: string = today()) {
   const periods = [];
   for (let n = Math.min(limit, 10) - 1; n >= 0; n--) {
     const m = month - 1 - n;
-    const start = day(year, m, 1 + offset);
-    const entries = ledgerEntries({ from: daysBefore(start, -1), to: day(year, m + 1, 1 + offset) });
+    const from = daysBefore(day(year, m, 1 + offset), -1);
+    const to = day(year, m + 1, 1 + offset);
+    const entries = ledgerEntries({ from, to });
     let income = 0;
     let expense = 0;
     for (const e of entries) {
@@ -31,6 +34,8 @@ export function getMonthlyOverview(limit = 6, asOf: string = today()) {
     const net = Math.round((income + expense) * 100) / 100;
     periods.push({
       month: day(year, m, 1).slice(0, 7),
+      from,
+      to,
       income,
       expense,
       net,

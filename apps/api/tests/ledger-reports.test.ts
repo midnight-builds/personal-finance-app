@@ -13,6 +13,7 @@ import {
 import { daysBefore } from '../src/ledger.js';
 import { getHouseholdSummary, getSummary } from '../src/summary.js';
 import { getMonthlyOverview } from '../src/monthly.js';
+import { searchTransactions } from '../src/transactionSearch.js';
 import { computeMonthlyForecast, getForecast } from '../src/forecast.js';
 import { resetDb } from './setup/resetDb.js';
 
@@ -79,6 +80,27 @@ test('monthly: pay periods add up to the plan, overlap counted once', () => {
     assert.equal(p.expense, sum(rows.filter((r) => r.amount < 0)), p.month);
     assert.equal(p.net, sum(rows), p.month);
   }
+});
+
+test('monthly: each period states its booking-date range, and search over it gives the same totals', () => {
+  const periods = getMonthlyOverview(6, ANCHOR);
+  assert.equal(periods[0].from, '2026-06-14');
+  assert.equal(periods[0].to, '2026-07-13');
+  for (const [i, p] of periods.entries()) {
+    if (i > 0) assert.equal(p.from, daysBefore(periods[i - 1].to, -1), `${p.month} starts the day after the previous period`);
+    const { items, total } = searchTransactions({ from: p.from, to: p.to, limit: 500 });
+    assert.equal(items.length, total, p.month);
+    const income = sum(items.filter((t) => t.amount > 0));
+    const expense = sum(items.filter((t) => t.amount < 0));
+    assert.equal(p.income, income, p.month);
+    assert.equal(p.expense, expense, p.month);
+    assert.equal(p.net, Math.round((income + expense) * 100) / 100, p.month);
+  }
+  // Over the whole window too: periods leave no gaps and do not overlap.
+  const all = searchTransactions({ from: periods[0].from, to: periods[periods.length - 1].to, limit: 500 });
+  assert.equal(all.items.length, all.total);
+  assert.equal(sum(periods.map((p) => ({ amount: p.income }))), sum(all.items.filter((t) => t.amount > 0)));
+  assert.equal(sum(periods.map((p) => ({ amount: p.expense }))), sum(all.items.filter((t) => t.amount < 0)));
 });
 
 test('monthly: every month appears once, also at the end of a long month', () => {

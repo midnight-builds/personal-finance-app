@@ -57,7 +57,15 @@ export type Summary = {
   accounts: { id: string; name: string; balance: number | null; currency: string | null; date: string | null }[];
 };
 
-export type MonthlyRow = { month: string; income: number; expense: number; net: number; direction: string };
+export type MonthlyRow = {
+  month: string;
+  from: string;
+  to: string;
+  income: number;
+  expense: number;
+  net: number;
+  direction: string;
+};
 
 export type Insight = {
   id: string;
