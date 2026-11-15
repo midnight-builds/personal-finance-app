@@ -1,0 +1,3 @@
+# Actors without authentication
+
+The app stays single-user with no login (user's decision, 2026-11-15): user accounts, tokens and web login were considered and judged unnecessary for now. To still tell the user's changes from an agent's, every change records an **actor** named by the client (`user` from the web UI, `hermes` from MCP), trusted rather than authenticated. That trust holds only because the REST API listens on loopback: the web UI proxy and the MCP server reach it on 127.0.0.1, and nothing on the network can call it directly. If the API ever has to be reachable from the network, authentication must come first.

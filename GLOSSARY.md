@@ -35,8 +35,42 @@ categorization decision, whether a rule, AI or the user made it. Decisions are
 history: a new one is appended and earlier ones are kept (never replaced), so
 anything that counts transactions must read only the latest decision.
 Re-stating the latest decision (same category, same source) appends nothing.
-Deleting a category appends a move to "Muut ja epäselvät" for its current
-transactions; older decisions that named it are repointed there too.
+
+**Actor** — who made a change: the user (web UI) or a named agent such as
+Hermes (MCP). Named by the client, not authenticated. Changes from before
+actors existed belong to `system`.
+_Avoid_: user (for agents), author
+
+**Source (of a decision)** — how a decision was reached: manual, rule or AI.
+Independent of the actor: a rule's decision during Hermes's import has actor
+Hermes and source rule.
+
+**Manual decision** — a decision an actor made by choosing the category
+directly. No rule overrides it; only a newer decision does.
+
+**Category role** — the special job a category does whatever it is named:
+`fallback` (where uncategorized and archived categories' transactions go),
+`income`, `refund`. A category with a role cannot be archived.
+_Avoid_: built-in name, "Muut" as an identifier
+
+**Archived category** — a category taken out of use: hidden from pickers, its
+transactions moved to another category by new decisions, its rules disabled.
+Its past decisions stay as they were. Categories are never deleted.
+_Avoid_: deleted category
+
+**Disabled rule** — a rule that no longer matches; kept for history.
+
+**Change set** — one applied change to categorization (recategorizing rows,
+creating, renaming, archiving or merging a category, creating or disabling a
+rule), recorded with its actor and reason, and undoable as a whole.
+
+**Plan** — a change set worked out without writing anything: what would move
+where, and what is left out as an exception. Applying needs the plan's token,
+which goes stale when the data the plan rests on changes.
+_Avoid_: preview (for categorization), proposal
+
+**Undo** — reverting a change set with new decisions; rows changed again since
+the set are left alone and reported.
 
 **Import preview** — what importing a file would do, computed before anything
 is written: the guessed target account, and for the chosen target the rows
