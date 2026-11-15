@@ -1,4 +1,4 @@
-import { transactionSearchFields } from '@finance-app/shared';
+import { balanceHistoryFields, transactionSearchFields } from '@finance-app/shared';
 import { ApiError } from '../apiClient.js';
 import { READ_ONLY, defineTool, type ToolDefinition } from './types.js';
 
@@ -83,6 +83,19 @@ const dataTools: ToolDefinition[] = [
     ),
     forecastStart
   ),
+  defineTool({
+    name: 'get_balance_history',
+    title: 'Balance and net worth history',
+    description:
+      'Account balances, assets, liabilities (credit card debt) and net worth at the end of each day, week ' +
+      '(Sunday) or month between from and to, read from the balances the bank exports report. A balance is null ' +
+      '(unknown, never zero) before an account’s first balance and after the last day its imported data covers; ' +
+      'such a point has isComplete false and coverage.missingAccountIds lists the accounts left out of net worth. ' +
+      'untrackedAssetClasses (e.g. investments) are never included. Transfers between own accounts do not change net worth.',
+    inputSchema: balanceHistoryFields,
+    annotations: READ_ONLY,
+    run: (args, { api }) => api.get('/balances/history', args),
+  }),
   readEndpoint('list_accounts', 'Accounts', 'Accounts with type, owner label and latest balance.', '/accounts'),
   readEndpoint(
     'list_recurring',

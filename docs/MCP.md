@@ -10,6 +10,7 @@ over the REST API and never opens the database.
 |------|--------|
 | `search_transactions` | Filtered, paginated transactions (`GET /transactions/search`) |
 | `get_summary`, `get_monthly_overview`, `get_insights`, `get_latest_briefing`, `get_forecast` | Read reports |
+| `get_balance_history` | Balances and net worth per day/week/month with coverage (`GET /balances/history`) |
 | `list_categories`, `list_accounts`, `list_recurring` | Read reference data |
 | `list_feature_proposals` | Earlier proposals and bug reports with their status, notes, resolution and history |
 | `propose_feature` | Adds a feature proposal or bug report (`kind`) to the local review queue |
