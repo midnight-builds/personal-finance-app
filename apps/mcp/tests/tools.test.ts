@@ -76,6 +76,21 @@ test('search_transactions forwards validated filters with defaults to the API', 
   ]);
 });
 
+test('get_balance_history forwards the range with the default interval and adds freshness', async () => {
+  const status = { lastImportAt: '2026-11-02T09:30:00.000Z', dataAsOf: '2026-10-31' };
+  const history = { from: '2026-01-01', to: '2026-10-31', interval: 'month', accounts: [], untrackedAssetClasses: [], points: [] };
+  const { client, calls } = await connect({ '/data-status': status, '/balances/history': history });
+  const res = (await client.callTool({ name: 'get_balance_history', arguments: { from: '2026-01-01' } })) as {
+    content: Array<{ text: string }>;
+  };
+  assert.deepEqual(calls, [{ method: 'get', path: '/balances/history', arg: { from: '2026-01-01', interval: 'month' } }]);
+  assert.deepEqual(JSON.parse(res.content[0].text), history);
+  assert.equal(JSON.parse(res.content[1].text).meta.dataAsOf, '2026-10-31');
+
+  const bad = await client.callTool({ name: 'get_balance_history', arguments: { interval: 'year' } });
+  assert.equal(bad.isError, true);
+});
+
 test('invalid input is rejected before the API is called', async () => {
   const { client, calls } = await connect();
   for (const args of [{ from: '2026-02-30' }, { limit: 10_000 }]) {

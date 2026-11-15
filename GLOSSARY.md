@@ -59,6 +59,17 @@ from the export in between.
 before that day, plus balance adjustments dated on or before the snapshot.
 Unknown (null), not zero, when there is no snapshot yet.
 
+**Known balance period** — from an account's first balance snapshot to the
+last day its imported data covers (latest snapshot or booking). Outside it the
+account's balance is unknown, and so is a day with bookings after the snapshot
+the balance rests on (rows with a blank Saldo): a balance series never carries
+a stale balance or one past or before the data.
+
+**Net worth (on a day)** — known balances of bank accounts minus credit card
+debt, over the accounts whose balance is known that day (`balanceHistory.ts`).
+Complete only when every account is known; investments are not tracked and
+never included. Transfers between own accounts leave it unchanged.
+
 **Balance adjustment** — a manual correction to an account's balance, e.g. a
 cash withdrawal missing from the export.
 
