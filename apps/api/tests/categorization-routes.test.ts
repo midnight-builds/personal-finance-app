@@ -122,6 +122,52 @@ test('GET /categorization/change-sets lists newest first; GET /:id shows one; un
   assert.equal(ofUndo.json().error, 'cannot_undo_undo');
 });
 
+test('GET /categorization/rules lists enabled rules in match order; disabled ones on request', async () => {
+  const applyOp = async (op: object) => {
+    const planned = (await post('/categorization/plan', { op }, HERMES)).json();
+    const applied = await post('/categorization/apply', { op, planToken: planned.planToken }, HERMES);
+    assert.equal(applied.statusCode, 200, applied.body);
+    return applied.json();
+  };
+  const fun = categoryId('Viihde ja harrastukset');
+  const created = await applyOp({ kind: 'create_rule', pattern: 'Lautapeli', matchField: 'counterparty', categoryId: fun });
+  const ruleId = created.rules[0].id as string;
+  await applyOp({ kind: 'create_rule', pattern: 'elokuvateatteri', matchField: 'description', categoryId: fun });
+
+  const res = await app.inject({ method: 'GET', url: '/categorization/rules' });
+  assert.equal(res.statusCode, 200, res.body);
+  const rules = res.json() as Array<Record<string, unknown>>;
+  const mine = rules.find((r) => r.id === ruleId);
+  assert.deepEqual(mine, {
+    id: ruleId,
+    categoryId: fun,
+    categoryName: 'Viihde ja harrastukset',
+    pattern: 'lautapeli',
+    matchField: 'counterparty',
+    matchType: 'contains',
+    amountSign: null,
+    builtin: false,
+    disabledAt: null,
+    priority: 10,
+    createdAt: mine?.createdAt,
+    actor: 'hermes',
+  });
+  assert.ok(rules.some((r) => r.builtin === true), 'built-in rules are listed too');
+  const priorities = rules.map((r) => r.priority as number);
+  assert.deepEqual(priorities, [...priorities].sort((a, b) => b - a), 'match order: highest priority first');
+  assert.equal(rules[0].pattern, 'elokuvateatteri', 'newest first within a priority');
+
+  await applyOp({ kind: 'disable_rule', ruleId });
+  const enabled = (await app.inject({ method: 'GET', url: '/categorization/rules' })).json() as Array<{ id: string }>;
+  assert.equal(enabled.some((r) => r.id === ruleId), false);
+  const all = (await app.inject({ method: 'GET', url: '/categorization/rules?includeDisabled=true' })).json() as Array<{
+    id: string;
+    disabledAt: string | null;
+  }>;
+  assert.ok(all.find((r) => r.id === ruleId)?.disabledAt);
+  assert.equal((await app.inject({ method: 'GET', url: '/categorization/rules?includeDisabled=yes' })).statusCode, 400);
+});
+
 test('the existing category endpoints record change sets', async () => {
   const created = (await post('/categories', { name: 'Arkistoon' }, HERMES)).json();
   const tx = mkTx('Rautakauppa Ruuvi');

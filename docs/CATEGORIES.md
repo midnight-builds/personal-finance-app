@@ -79,6 +79,10 @@ union on `kind`) is `packages/shared/src/categorization.ts`, shared with MCP.
   kind, reason, status, `undoOfId`/`undoneById` and counts.
 - `GET /categorization/change-sets/:id` → one set: its operation, rows (at most
   200 listed), categories, rules and exceptions.
+- `GET /categorization/rules?includeDisabled` → rules in match order (priority,
+  then newest first): `id`, `categoryId`, `categoryName`, `pattern`, `matchField`,
+  `matchType`, `amountSign`, `builtin`, `disabledAt`, `priority`, `createdAt`,
+  `actor`. Disabled rules only with `includeDisabled=true`.
 
 Every operation takes an optional `reason`, stored on the change set (and on the
 decisions it writes). Errors are `{ error, details? }`: 400 `invalid_request`,
