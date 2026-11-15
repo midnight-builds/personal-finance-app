@@ -31,6 +31,11 @@ export function acceptRuleSuggestion(id: string, options: { actor?: string | nul
   // A resolved suggestion (e.g. rejected when its category was deleted) must
   // not turn into a rule, even if a stale UI still offers it.
   if (suggestion.status !== 'pending') throw new Error('not_pending');
+  // Archived while the AI call was in flight: the suggestion never got rejected.
+  const category = db.prepare('SELECT archived_at FROM categories WHERE id = ?').get(suggestion.category_id) as
+    | { archived_at: string | null }
+    | undefined;
+  if (!category || category.archived_at) throw new Error('category_archived');
 
   const now = new Date().toISOString();
 

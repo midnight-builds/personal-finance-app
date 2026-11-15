@@ -80,7 +80,7 @@ export const categoryRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ ok: true });
     } catch (err) {
       const msg = message(err);
-      const code = msg === 'not_found' ? 404 : msg === 'not_pending' ? 409 : 500;
+      const code = msg === 'not_found' ? 404 : msg === 'not_pending' || msg === 'category_archived' ? 409 : 500;
       return reply.code(code).send({ error: msg });
     }
   });

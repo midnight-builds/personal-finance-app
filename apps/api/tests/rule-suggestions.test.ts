@@ -65,6 +65,15 @@ test('acceptRuleSuggestion creates category_rule and marks accepted', () => {
   assert.equal(rule.match_field, 'counterparty');
 });
 
+test('acceptRuleSuggestion refuses a suggestion whose category was archived meanwhile', () => {
+  const id = mkSuggestion('Viihde ja harrastukset', 'leffateatteri');
+  // Archived while the suggestion was being generated: it stayed pending.
+  db.prepare('UPDATE categories SET archived_at = ? WHERE name = ?').run(new Date().toISOString(), 'Viihde ja harrastukset');
+
+  assert.throws(() => acceptRuleSuggestion(id), /category_archived/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM category_rules WHERE pattern = 'leffateatteri'").get()!.n, 0);
+});
+
 test('acceptRuleSuggestion skips duplicate rule if one already exists', () => {
   const catId = getCategoryId('Ruoka ja päivittäistavarat');
   db.prepare(
