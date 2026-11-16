@@ -109,6 +109,7 @@ server.delete("/balance-adjustments/:id", async (request, reply) => {
 server.post('/debug/clear', async () => {
   db.exec('PRAGMA foreign_keys=OFF;');
   db.exec(`
+    DELETE FROM change_sets;
     DELETE FROM rule_suggestions;
     DELETE FROM categorization_decisions;
     DELETE FROM category_rules;

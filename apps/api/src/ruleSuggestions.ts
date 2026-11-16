@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { db } from './db.js';
 import { getOpenAIApiKey } from './settings.js';
 import { aiCategorize } from './ai.js';
+import { isManual } from './categorization.js';
 import { appendDecision, categoryIdByRole } from './rules.js';
 import { latestCategoryDecisionJoin } from './sql/transactions.js';
 
@@ -49,15 +50,19 @@ export function acceptRuleSuggestion(id: string, options: { actor?: string | nul
     ).run(crypto.randomUUID(), now, suggestion.category_id, suggestion.pattern, suggestion.match_field, 10, actor);
   }
 
-  // Apply to existing fallback transactions matching this counterparty
+  // Apply to existing fallback transactions whose counterparty contains the
+  // pattern (literally, case-insensitively, like rules match); a manual pick of
+  // the fallback is left alone, since a rule never overrides a manual decision.
   const miscId = categoryIdByRole('fallback');
   if (miscId) {
-    const matching = db.prepare(`
-      SELECT nt.id FROM normalized_transactions nt
-      ${latestCategoryDecisionJoin('nt', 'cd')}
-      WHERE cd.category_id = ?
-        AND LOWER(nt.counterparty_name) LIKE ?
-    `).all(miscId, `%${suggestion.pattern}%`) as Array<{ id: string }>;
+    const pattern = suggestion.pattern.toLowerCase();
+    const matching = (
+      db.prepare(`
+        SELECT nt.id, nt.counterparty_name, cd.source FROM normalized_transactions nt
+        ${latestCategoryDecisionJoin('nt', 'cd')}
+        WHERE cd.category_id = ?
+      `).all(miscId) as Array<{ id: string; counterparty_name: string | null; source: string }>
+    ).filter((tx) => (tx.counterparty_name ?? '').toLowerCase().includes(pattern) && !isManual(tx.id, tx));
 
     for (const tx of matching) {
       appendDecision({ transactionId: tx.id, categoryId: suggestion.category_id, source: 'rule', createdAt: now, actor });
