@@ -119,5 +119,5 @@ Details settled while building it:
 3. **MCP tools** (delivered) — `list_category_rules`, `plan_categorization`,
    `apply_categorization`, `list_category_changes`, `get_category_change`; undo is
    the `undo` operation through plan and apply. The MCP client sends its actor
-   (`MCP_ACTOR`, default `hermes`). See `docs/MCP.md`.
+   (`MCP_ACTOR`, default: the proposal source, `hermes`). See `docs/MCP.md`.
 4. **Web UI change log** (to come) — a change-log view with undo in the web UI.
