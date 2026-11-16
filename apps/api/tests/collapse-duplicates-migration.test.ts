@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { db, initDb } from '../src/db.js';
 import { applyNow, plan } from '../src/categorization.js';
 import { ledgerEntries } from '../src/ledger.js';
+import { listTransactions } from '../src/query.js';
 import { resetDb } from './setup/resetDb.js';
 
 // Databases from before "a transaction is stored once" hold every re-imported
@@ -137,23 +138,25 @@ test('a fresh database has no grouping columns', () => {
   assert.equal(columns('transaction_groups').length, 0);
 });
 
-test('collapses every duplicate group into its canonical row, keeping what the app showed', () => {
+test('collapses every duplicate group into its canonical row, keeping categories, transfers and undo', () => {
   const checking = account('Käyttötili');
   const savings = account('Säästötili');
   const s1 = session(T(1));
   const s2 = session(T(2));
 
-  // A rule chose the category on the first copy; a manual choice was made
-  // later on the second copy, which no view showed.
+  // A rule chose the category on the first copy; later the user picked one
+  // by hand on the second copy in the transaction list: manual beats rule.
   const shop = pair({ s1, s2, account: checking, day: '2026-09-03', amount: -12.5, counterparty: 'Kauppa Esimerkki' });
   const shopRule = decide(shop.canonical, FOOD(), 'rule', T(10));
-  decide(shop.copy, FOOD(), 'rule', T(11));
-  decide(shop.copy, FUN(), 'user', T(20));
+  const shopCopyRule = decide(shop.copy, FOOD(), 'rule', T(11));
+  const shopManual = decide(shop.copy, FUN(), 'user', T(20));
 
-  // A manual choice on the canonical row; the copy has older history.
+  // A manual choice on the canonical row; the copy has older history and a
+  // newer rule decision, which must not win.
   const gym = pair({ s1, s2, account: checking, day: '2026-09-04', amount: -30, counterparty: 'Kuntosali Esimerkki' });
   const gymOld = decide(gym.copy, INSURANCE(), 'rule', T(5));
   const gymManual = decide(gym.canonical, FUN(), 'user', T(30));
+  decide(gym.copy, INSURANCE(), 'rule', T(40));
 
   // A copy linked as a transfer; the other side is a single row.
   const out = pair({ s1, s2, account: checking, day: '2026-09-05', amount: -100, counterparty: 'Oma säästötili' });
@@ -178,6 +181,11 @@ test('collapses every duplicate group into its canonical row, keeping what the a
   const kiosk = pair({ s1, s2, account: checking, day: '2026-09-09', amount: -3, counterparty: 'Kioski Toinen' });
   decide(kiosk.canonical, FOOD(), 'rule', T(10));
   const onlyCopy = applyNow({ kind: 'recategorize', transactionIds: [kiosk.copy], categoryId: FUN() }, 'user');
+  // A set that moved only the copy, after which the canonical row got a newer manual choice.
+  const tea = pair({ s1, s2, account: checking, day: '2026-09-10', amount: -2, counterparty: 'Teehuone Esimerkki' });
+  decide(tea.canonical, FOOD(), 'rule', T(10));
+  const teaCopySet = applyNow({ kind: 'recategorize', transactionIds: [tea.copy], categoryId: FUN() }, 'user');
+  decide(tea.canonical, INSURANCE(), 'user', '2099-01-01T00:00:00.000Z');
 
   // A finding pointing at both copies.
   db.prepare(
@@ -185,7 +193,7 @@ test('collapses every duplicate group into its canonical row, keeping what the a
      VALUES ('f1', ?, 'one_off', 'Iso osto', 'Kuvaus', ?)`
   ).run(T(3), JSON.stringify([shop.copy, shop.canonical, single]));
 
-  const copies = [shop, gym, out, out2, into2, fuel, kiosk].map((p) => p.copy);
+  const copies = [shop, gym, out, out2, into2, fuel, kiosk, tea].map((p) => p.copy);
   const rawOfCopies = copies.map(
     (id) => (db.prepare('SELECT raw_transaction_id AS r FROM normalized_transactions WHERE id = ?').get(id) as { r: string }).r
   );
@@ -206,15 +214,18 @@ test('collapses every duplicate group into its canonical row, keeping what the a
     count('SELECT COUNT(*) AS n FROM categorization_decisions WHERE transaction_id NOT IN (SELECT id FROM normalized_transactions)'),
     0
   );
-  // What the app showed (the canonical row's latest decision) is what it shows now.
-  const shopHistory = history(shop.canonical);
-  assert.equal(shopHistory[0].id, shopRule);
+  // The manual choice made on the copy is kept, with its history on top and
+  // the canonical row's older rule decision below it, timestamps intact.
   assert.deepEqual(
-    shopHistory.map((d) => d.source),
-    ['rule'],
-    'decisions newer than the canonical history are not merged: they would change the category'
+    history(shop.canonical).map((d) => [d.id, d.created_at]),
+    [
+      [shopManual, T(20)],
+      [shopCopyRule, T(11)],
+      [shopRule, T(10)],
+    ]
   );
-  // The copy's older decision is kept below the canonical history, timestamps intact.
+  // The canonical row's manual choice stays; the copy's older decision goes
+  // below it and its newer rule decision is dropped.
   assert.deepEqual(
     history(gym.canonical).map((d) => [d.id, d.created_at]),
     [
@@ -255,19 +266,33 @@ test('collapses every duplicate group into its canonical row, keeping what the a
   applyNow({ kind: 'undo', changeSetId: both.id }, 'user');
   assert.equal(history(fuel.canonical)[0].category_id, FOOD());
 
-  // The set that moved only the copy: the row it changed is no longer what is shown.
+  // A set that moved only the copy by hand: its choice won, so the set's
+  // decision is the row's latest; the copy had no category before.
   assert.deepEqual(payload(onlyCopy.id).rows.map((r: { transactionId: string }) => r.transactionId), [kiosk.canonical]);
+  assert.equal(history(kiosk.canonical)[0].category_id, FUN());
   const undoCopy = plan({ kind: 'undo', changeSetId: onlyCopy.id });
   assert.equal(undoCopy.summary.rowsChanged, 0);
-  assert.deepEqual(undoCopy.exceptions, [{ transactionId: kiosk.canonical, reason: 'changed_since' }]);
-  assert.equal(history(kiosk.canonical)[0].category_id, FOOD());
+  assert.deepEqual(undoCopy.exceptions, [{ transactionId: kiosk.canonical, reason: 'no_previous_category' }]);
+  // A set that moved only the copy, overtaken by a newer manual choice on
+  // the canonical row: undo leaves the row alone and says why.
+  assert.equal(history(tea.canonical)[0].category_id, INSURANCE());
+  const undoTea = plan({ kind: 'undo', changeSetId: teaCopySet.id });
+  assert.equal(undoTea.summary.rowsChanged, 0);
+  assert.deepEqual(undoTea.exceptions, [{ transactionId: tea.canonical, reason: 'changed_since' }]);
 
-  // What was not merged is on record.
+  // What changed is on record.
   const logged = db.prepare("SELECT payload FROM event_log WHERE type = 'migration.collapse_duplicates'").get() as { payload: string };
   const report = JSON.parse(logged.payload);
-  assert.equal(report.groups, 7);
-  assert.equal(report.removedTransactions, 7);
-  assert.ok(report.droppedDecisions.some((d: { source: string; categoryId: string }) => d.source === 'user' && d.categoryId === FUN()));
+  assert.equal(report.groups, 8);
+  assert.equal(report.removedTransactions, 8);
+  assert.deepEqual(
+    report.manualFromCopy.map((m: { transactionId: string; categoryAfter: string }) => [m.transactionId, m.categoryAfter]).sort(),
+    [
+      [shop.canonical, FUN()],
+      [kiosk.canonical, FUN()],
+    ].sort()
+  );
+  assert.ok(report.droppedDecisions.every((d: { source: string; transactionId: string }) => d.source !== 'user' || d.transactionId === tea.copy || d.transactionId === fuel.copy));
 
   // Running again changes nothing.
   const snapshot = () =>
@@ -282,15 +307,41 @@ test('collapses every duplicate group into its canonical row, keeping what the a
   assert.equal(snapshot(), after);
 });
 
-test('a group whose canonical row has no decision keeps it uncategorized', () => {
+test('a canonical row without a decision takes a manual choice made on its copy, not a rule one', () => {
   const checking = account('Käyttötili');
   const s1 = session(T(1));
   const s2 = session(T(2));
-  const p = pair({ s1, s2, account: checking, day: '2026-09-03', amount: -5, counterparty: 'Kauppa Esimerkki' });
-  decide(p.copy, FOOD(), 'user', T(10));
+  const manual = pair({ s1, s2, account: checking, day: '2026-09-03', amount: -5, counterparty: 'Kauppa Esimerkki' });
+  decide(manual.copy, FOOD(), 'user', T(10));
+  const rule = pair({ s1, s2, account: checking, day: '2026-09-04', amount: -6, counterparty: 'Kauppa Toinen' });
+  decide(rule.copy, FOOD(), 'rule', T(10));
   initDb();
-  assert.deepEqual(history(p.canonical), []);
-  assert.equal(ledgerEntries()[0].categoryId, null);
+  assert.deepEqual(history(manual.canonical).map((d) => [d.category_id, d.source]), [[FOOD(), 'user']]);
+  assert.deepEqual(history(rule.canonical), [], 'the reports showed it uncategorized');
+});
+
+test('a canonical row and its copy linked to different rows keep both links', () => {
+  const checking = account('Käyttötili');
+  const savings = account('Säästötili');
+  const s1 = session(T(1));
+  const s2 = session(T(2));
+  const out = pair({ s1, s2, account: checking, day: '2026-09-05', amount: -100, counterparty: 'Oma säästötili' });
+  const x = row({ session: s1, account: savings, createdAt: T(1), day: '2026-09-05', amount: 100, counterparty: 'Oma käyttötili' });
+  const y = row({ session: s2, account: savings, createdAt: T(2), day: '2026-09-06', amount: 100, counterparty: 'Oma käyttötili' });
+  link(out.canonical, x);
+  link(out.copy, y);
+  initDb();
+  const links = db.prepare('SELECT from_transaction_id AS f, to_transaction_id AS t FROM transfer_links ORDER BY rowid').all().map((r) => ({ ...r }));
+  assert.deepEqual(links, [
+    { f: out.canonical, t: x },
+    { f: out.canonical, t: y },
+  ]);
+  assert.ok(ledgerEntries({ includeTransfers: true }).every((e) => e.isTransfer));
+  assert.equal(listTransactions().filter((t: { id: string }) => t.id === out.canonical).length, 1, 'listed once');
+  const report = JSON.parse(
+    (db.prepare("SELECT payload FROM event_log WHERE type = 'migration.collapse_duplicates'").get() as { payload: string }).payload
+  );
+  assert.equal(report.transactionsInSeveralLinks, 1);
 });
 
 test('a failing migration leaves the old state in place', () => {

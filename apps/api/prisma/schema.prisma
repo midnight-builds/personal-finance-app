@@ -47,23 +47,13 @@ model NormalizedTransaction {
   currency        String
   counterpartyName String?
   description     String?
-  transactionGroupId String?
 
   rawTransaction  RawTransaction? @relation(fields: [rawTransactionId], references: [id])
   importSession   ImportSession   @relation(fields: [importSessionId], references: [id])
   account         Account         @relation(fields: [accountId], references: [id])
-  transactionGroup TransactionGroup? @relation(fields: [transactionGroupId], references: [id])
 
   transferFromLinks TransferLink[] @relation("TransferFrom")
   transferToLinks   TransferLink[] @relation("TransferTo")
-}
-
-model TransactionGroup {
-  id          String   @id @default(cuid())
-  createdAt   DateTime @default(now())
-  canonicalTransactionId String?
-
-  transactions NormalizedTransaction[]
 }
 
 model TransferLink {

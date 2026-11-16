@@ -4,26 +4,35 @@ import type { DatabaseSync } from 'node:sqlite';
 // One-time cleanup for databases from before "a transaction is stored once".
 // An overlapping import used to store every row again and group the copies
 // with the first one (normalized_transactions.transaction_group_id, table
-// transaction_groups); every view showed only the group's canonical row, the
-// earliest imported. This keeps that row, moves everything that points at the
-// other copies onto it, deletes the copies with their raw rows and drops the
-// grouping schema. The dropped column is the marker: it runs once, in one
-// transaction, and does nothing on a database without the column.
+// transaction_groups); reports, search and the AI tools counted only the
+// group's canonical row, the earliest imported, while the transaction list
+// showed every copy with its own category picker. This keeps the canonical
+// row, moves everything that points at the other copies onto it, deletes the
+// copies with their raw rows and drops the grouping schema. The dropped column
+// is the marker: it runs once, in one transaction, and does nothing on a
+// database without the column.
 //
-// Categorization: what the app showed was the canonical row's own latest
-// decision, so the canonical row's history stays on top untouched. A copy's
-// decision is merged into it only when it is older than the whole canonical
-// history (and the undo walk of `isManual` in categorization.ts cannot reach
-// it); a newer one would change the category shown, so it is dropped and
-// written to the event log (type `migration.collapse_duplicates`).
+// Categorization: one row's history is kept on top, untouched, so its
+// category and manual state stay exactly as they were. That is the canonical
+// row's (what the reports showed), unless a copy's category is a manual choice
+// newer than any manual one on the canonical row: manual beats rule, and a
+// choice made on a copy in the list is the user's. Decisions of the other rows
+// are merged below the kept history when older than all of it (and the undo
+// walk of `isManual` in categorization.ts cannot reach them); newer ones would
+// change the category, so they are dropped. Both, and every copy whose manual
+// choice won, are written to the event log (type
+// `migration.collapse_duplicates`).
 
 type Decision = { id: string; rowid: number; transaction_id: string; category_id: string; source: string; created_at: string };
 type Report = {
   groups: number;
   removedTransactions: number;
   mergedDecisions: number;
+  /** Groups whose kept history is a copy's: its manual choice was the newest one. */
+  manualFromCopy: Array<{ transactionId: string; fromCopy: string; categoryBefore: string | null; categoryAfter: string }>;
   droppedDecisions: Array<{ id: string; transactionId: string; keptTransactionId: string; categoryId: string; source: string; createdAt: string }>;
   removedTransferLinks: Array<{ id: string; from: string; to: string; reason: 'duplicate' | 'self' }>;
+  transactionsInSeveralLinks: number;
   changeSetsRewritten: number;
   findingsRewritten: number;
 };
@@ -44,6 +53,11 @@ function manualWalkEnd(history: Decision[]): number {
   let i = 0;
   while (history[i]?.source === 'undo') i += 2;
   return i;
+}
+
+/** `isManual` (categorization.ts) on a newest-first history. */
+function isManualHistory(history: Decision[]): boolean {
+  return history[manualWalkEnd(history)]?.source === 'user';
 }
 
 /** Collapses duplicate groups; returns the report, or null when there is nothing to do. */
@@ -84,8 +98,10 @@ function collapse(db: DatabaseSync): Report {
     groups,
     removedTransactions: canonicalOf.size,
     mergedDecisions: 0,
+    manualFromCopy: [],
     droppedDecisions: [],
     removedTransferLinks: [],
+    transactionsInSeveralLinks: 0,
     changeSetsRewritten: 0,
     findingsRewritten: 0,
   };
@@ -110,37 +126,63 @@ function collapse(db: DatabaseSync): Report {
     list.push({ ...d });
     byTx.set(d.transaction_id, list);
   }
-  const movable = new Map<string, Decision>(); // canonical → its oldest decision that a merged one must be older than
-  for (const canonical of new Set(canonicalOf.values())) {
-    const own = (byTx.get(canonical) ?? []).sort(newestFirst);
-    const end = manualWalkEnd(own);
-    // The walk stays inside the canonical history: decisions below it cannot change what is shown.
-    if (own.length > 0 && end < own.length) movable.set(canonical, own[own.length - 1]);
-  }
+  const membersOf = new Map<string, string[]>(); // canonical → every row of its group, canonical first
+  for (const [copy, canonical] of canonicalOf) membersOf.set(canonical, [...(membersOf.get(canonical) ?? [canonical]), copy]);
+  const winnerOf = new Map<string, string>(); // canonical → the row whose history it keeps
   const repoint = db.prepare('UPDATE categorization_decisions SET transaction_id = ? WHERE id = ?');
   const dropDecision = db.prepare('DELETE FROM categorization_decisions WHERE id = ?');
-  for (const [copy, canonical] of canonicalOf) {
-    const oldest = movable.get(canonical);
-    for (const d of byTx.get(copy) ?? []) {
-      if (oldest && newestFirst(d, oldest) > 0) {
-        repoint.run(canonical, d.id);
-        report.mergedDecisions += 1;
-      } else {
-        dropDecision.run(d.id);
-        report.droppedDecisions.push({
-          id: d.id,
-          transactionId: copy,
-          keptTransactionId: canonical,
-          categoryId: d.category_id,
-          source: d.source,
-          createdAt: d.created_at,
-        });
+  for (const [canonical, rows] of membersOf) {
+    const histories = new Map(rows.map((id) => [id, (byTx.get(id) ?? []).sort(newestFirst)]));
+    // Manual beats rule: the newest manual choice on any copy wins; without
+    // one, the canonical row's history (what the reports showed) stays.
+    // A copy that agrees with a manual canonical row changes nothing: the canonical row stays.
+    const manual = rows.filter((id) => isManualHistory(histories.get(id)!));
+    const newest = manual.sort((a, b) => newestFirst(histories.get(a)![0], histories.get(b)![0]))[0] ?? canonical;
+    const sameAsCanonical =
+      manual.includes(canonical) && histories.get(newest)![0].category_id === histories.get(canonical)![0].category_id;
+    const winner = sameAsCanonical ? canonical : newest;
+    winnerOf.set(canonical, winner);
+    if (winner !== canonical) {
+      const before = histories.get(canonical)![0];
+      report.manualFromCopy.push({
+        transactionId: canonical,
+        fromCopy: winner,
+        categoryBefore: before?.category_id ?? null,
+        categoryAfter: histories.get(winner)![0].category_id,
+      });
+    }
+    const kept = histories.get(winner)!;
+    // Decisions of the other rows go below the kept history, and only where
+    // the undo walk of isManual stays inside it, so they cannot change the
+    // category or its manual state.
+    const oldest = kept.length > 0 && manualWalkEnd(kept) < kept.length ? kept[kept.length - 1] : null;
+    for (const d of kept) {
+      if (d.transaction_id !== canonical) repoint.run(canonical, d.id);
+    }
+    for (const id of rows) {
+      if (id === winner) continue;
+      for (const d of histories.get(id)!) {
+        if (oldest && newestFirst(d, oldest) > 0) {
+          if (d.transaction_id !== canonical) repoint.run(canonical, d.id);
+          report.mergedDecisions += 1;
+        } else {
+          dropDecision.run(d.id);
+          report.droppedDecisions.push({
+            id: d.id,
+            transactionId: id,
+            keptTransactionId: canonical,
+            categoryId: d.category_id,
+            source: d.source,
+            createdAt: d.created_at,
+          });
+        }
       }
     }
   }
 
   // 2. Transfer links: onto the canonical rows; a link that becomes a copy of
-  // another, or links a row to itself, goes.
+  // another, or links a row to itself, goes. Links to different rows are all
+  // kept (each other side stays a transfer), and counted in the report.
   db.exec(`
     UPDATE transfer_links SET from_transaction_id = (SELECT canonical_id FROM collapse_map WHERE copy_id = from_transaction_id)
       WHERE from_transaction_id IN (SELECT copy_id FROM collapse_map);
@@ -162,10 +204,22 @@ function collapse(db: DatabaseSync): Report {
     dropLink.run(l.id);
     report.removedTransferLinks.push({ id: l.id, from: l.f, to: l.t, reason: l.reason });
   }
+  report.transactionsInSeveralLinks = Number(
+    (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM (
+             SELECT x FROM (SELECT from_transaction_id AS x FROM transfer_links UNION ALL SELECT to_transaction_id FROM transfer_links)
+             GROUP BY x HAVING COUNT(*) > 1)`
+        )
+        .get() as { n: number }
+    ).n
+  );
 
   // 3. Change sets: each transaction once, on its canonical row. Of a set's
-  // rows for one transaction the canonical row's own is kept (its decision is
-  // the one an undo checks); exceptions likewise.
+  // rows for one transaction the kept history's row's own is kept (its
+  // decision is the one an undo checks); exceptions likewise. A payload that
+  // is not JSON stops the migration: categorization.ts could not read it either.
   const sets = db.prepare('SELECT id, payload FROM change_sets').all() as Array<{ id: string; payload: string }>;
   const writeSet = db.prepare('UPDATE change_sets SET payload = ? WHERE id = ?');
   for (const set of sets) {
@@ -186,8 +240,9 @@ function collapse(db: DatabaseSync): Report {
       const kept = new Map<string, { transactionId: string }>();
       for (const row of payload.rows) {
         const target = mapId(row.transactionId);
-        const own = target === row.transactionId;
-        if (!own) changed = true;
+        // The kept history's row: its decision is the one an undo checks.
+        const own = row.transactionId === (winnerOf.get(target) ?? target);
+        if (target !== row.transactionId) changed = true;
         if (!kept.has(target) || own) kept.set(target, { ...row, transactionId: target });
       }
       const order = [...new Set(payload.rows.map((r) => mapId(r.transactionId)))];
@@ -212,13 +267,18 @@ function collapse(db: DatabaseSync): Report {
     }
   }
 
-  // 4. Insight findings: their linked transactions.
+  // 4. Insight findings: their linked transactions (an unreadable list is left as it is).
   const findings = db
     .prepare('SELECT id, transaction_ids FROM insight_findings WHERE transaction_ids IS NOT NULL')
     .all() as Array<{ id: string; transaction_ids: string }>;
   const writeFinding = db.prepare('UPDATE insight_findings SET transaction_ids = ? WHERE id = ?');
   for (const f of findings) {
-    const ids = JSON.parse(f.transaction_ids) as unknown;
+    let ids: unknown;
+    try {
+      ids = JSON.parse(f.transaction_ids);
+    } catch {
+      continue;
+    }
     if (!Array.isArray(ids)) continue;
     if (!ids.some((id) => typeof id === 'string' && canonicalOf.has(id))) continue;
     const next = [...new Set(ids.map((id) => (typeof id === 'string' ? mapId(id) : id)))];

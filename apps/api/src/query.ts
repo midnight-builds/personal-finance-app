@@ -1,6 +1,6 @@
 import { db } from "./db.js";
 import { getSettings } from "./settings.js";
-import { latestCategoryDecisionJoin } from "./sql/transactions.js";
+import { latestCategoryDecisionJoin, transferLinkJoin } from "./sql/transactions.js";
 import { ledgerEntries } from "./ledger.js";
 
 type RecurringFlags = { daily: boolean; weekly: boolean; monthly: boolean };
@@ -62,7 +62,7 @@ export function listTransactions() {
        JOIN accounts a ON a.id = nt.account_id
        ${latestCategoryDecisionJoin()}
        LEFT JOIN categories c ON c.id = cd.category_id
-       LEFT JOIN transfer_links tl ON tl.from_transaction_id = nt.id OR tl.to_transaction_id = nt.id
+       ${transferLinkJoin()}
        ORDER BY nt.booking_date DESC
        LIMIT 200`
     )
