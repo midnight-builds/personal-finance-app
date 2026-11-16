@@ -30,12 +30,18 @@ export function redactSensitiveIds(text: string): string {
   return PATTERNS.reduce((acc, re) => acc.replace(re, REDACTED), text);
 }
 
+// Ids the app generates: a UUID, or a SHA-256 hex digest (a categorization plan
+// token). Random hex often contains "two letters + many digits" and would be
+// masked as an IBAN, breaking an agent that sends the id back. A whole string of
+// this shape is never bank data, so it is left alone.
+const GENERATED_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$/i;
+
 /**
  * Deep-copies a JSON-like value, dropping identifier-named keys and redacting
- * sensitive ids inside every string.
+ * sensitive ids inside every string (except strings that are wholly a generated id).
  */
 export function redactDeep(value: unknown): unknown {
-  if (typeof value === 'string') return redactSensitiveIds(value);
+  if (typeof value === 'string') return GENERATED_ID.test(value) ? value : redactSensitiveIds(value);
   if (Array.isArray(value)) return value.map(redactDeep);
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(

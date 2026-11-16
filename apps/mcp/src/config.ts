@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import { X509Certificate } from 'node:crypto';
-import { proposalSourceSchema } from '@finance-app/shared';
+import { ACTOR_PATTERN, proposalSourceSchema } from '@finance-app/shared';
 
 // All runtime options come from environment variables and are validated here,
 // once, at startup. See docs/MCP.md for the full list.
@@ -20,6 +20,8 @@ export type HttpConfig = {
 export type Config = {
   apiUrl: string;
   proposalSource: string;
+  /** Sent as `X-Finance-Actor`; the API records it on every change this server makes. */
+  actor: string;
   disabledTools: ReadonlySet<string>;
   transport: { kind: 'stdio' } | ({ kind: 'http' } & HttpConfig);
 };
@@ -59,6 +61,23 @@ function parseProposalSource(value: string | undefined) {
   const parsed = proposalSourceSchema.safeParse(value ?? 'hermes');
   if (!parsed.success) throw new ConfigError(`Invalid MCP_PROPOSAL_SOURCE: "${value}" (1–40 characters)`);
   return parsed.data;
+}
+
+/**
+ * The actor the API records for this server's changes (`X-Finance-Actor`).
+ * Defaults to the proposal source; the API would record a malformed name as
+ * `user`, so it is refused here instead.
+ */
+function parseActor(value: string | undefined, proposalSource: string) {
+  const actor = value ?? proposalSource;
+  if (!ACTOR_PATTERN.test(actor)) {
+    throw new ConfigError(
+      value === undefined
+        ? `MCP_PROPOSAL_SOURCE "${proposalSource}" is not a valid actor name; set MCP_ACTOR (a-z, 0-9, _ or -, 1–40 characters)`
+        : `Invalid MCP_ACTOR: "${value}" (a-z, 0-9, _ or -, 1–40 characters)`
+    );
+  }
+  return actor;
 }
 
 function parsePort(value: string | undefined) {
@@ -116,9 +135,11 @@ export function parseAllowedClients(value: string | undefined): net.BlockList | 
 }
 
 export function loadConfig(env: Env, readFile: ReadFile = (p) => fs.readFileSync(p)): Config {
+  const proposalSource = parseProposalSource(env.MCP_PROPOSAL_SOURCE);
   const base = {
     apiUrl: parseUrl(env.FINANCE_API_URL ?? 'http://127.0.0.1:3001', 'FINANCE_API_URL'),
-    proposalSource: parseProposalSource(env.MCP_PROPOSAL_SOURCE),
+    proposalSource,
+    actor: parseActor(env.MCP_ACTOR, proposalSource),
     disabledTools: new Set(list(env.MCP_DISABLED_TOOLS)),
   };
 

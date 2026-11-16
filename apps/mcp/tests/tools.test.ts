@@ -41,11 +41,22 @@ const validProposal = {
   acceptanceCriteria: ['Warning at 80%'],
 };
 
-test('registry: unique names, and only propose_feature may write', () => {
+// The tools that may write, each acknowledged here on purpose (docs/MCP.md):
+// a feature proposal, and a planned categorization change set.
+const WRITING_TOOLS = ['propose_feature', 'apply_categorization'];
+
+test('registry: unique names, and only the acknowledged tools may write', () => {
   assert.equal(new Set(TOOL_NAMES).size, TOOL_NAMES.length);
   for (const tool of ALL_TOOLS) {
     assert.equal(tool.annotations.destructiveHint, false, tool.name);
-    if (tool.name !== 'propose_feature') assert.equal(tool.annotations.readOnlyHint, true, tool.name);
+    assert.equal(tool.annotations.readOnlyHint, !WRITING_TOOLS.includes(tool.name), tool.name);
+  }
+  assert.deepEqual(
+    ALL_TOOLS.filter((t) => !t.annotations.readOnlyHint).map((t) => t.name).sort(),
+    [...WRITING_TOOLS].sort()
+  );
+  for (const name of WRITING_TOOLS) {
+    assert.equal(ALL_TOOLS.find((t) => t.name === name)?.annotations.idempotentHint, true, name);
   }
 });
 
@@ -55,6 +66,23 @@ test('all registered tools are listed with input schemas', async () => {
   assert.deepEqual(tools.map((t) => t.name).sort(), [...TOOL_NAMES].sort());
   const search = tools.find((t) => t.name === 'search_transactions');
   assert.ok(search?.inputSchema.properties && 'from' in search.inputSchema.properties);
+
+  // The agent sees every operation kind of the shared union in the schema.
+  const plan = tools.find((t) => t.name === 'plan_categorization');
+  type Variant = { properties: { kind: { const: string } } };
+  const op = plan?.inputSchema.properties?.op as { oneOf?: Variant[]; anyOf?: Variant[] };
+  const variants = op.oneOf ?? op.anyOf ?? [];
+  assert.deepEqual(variants.map((v) => v.properties.kind.const).sort(), [
+    'archive_category',
+    'create_category',
+    'create_rule',
+    'disable_rule',
+    'merge_categories',
+    'recategorize',
+    'rename_category',
+    'undo',
+  ]);
+  assert.deepEqual(plan?.inputSchema.required, ['op']);
 });
 
 test('disabled tools are not exposed; unknown names fail loudly', async () => {
@@ -213,4 +241,83 @@ test('get_latest_briefing: same shape with or without a briefing; other failures
   const missingRoute = await call(new ApiError(404, { error: 'Not Found', message: 'Route GET:/briefing/latest not found' }));
   assert.equal(missingRoute.isError, true);
   assert.equal((await call(new ApiError(500, { error: 'boom' }))).isError, true);
+});
+
+const TOKEN = 'ab'.repeat(32);
+const recategorize = { kind: 'recategorize', transactionIds: ['tx-1', 'tx-2'], categoryId: 'cat-fun', reason: 'board games' };
+
+test('plan_categorization posts the validated operation; nothing else is called', async () => {
+  const plan = { kind: 'recategorize', rows: [], planToken: TOKEN };
+  const { client, calls } = await connect({ '/categorization/plan': plan });
+  const res = (await client.callTool({ name: 'plan_categorization', arguments: { op: recategorize } })) as {
+    isError?: boolean;
+    content: Array<{ text: string }>;
+  };
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(calls, [{ method: 'post', path: '/categorization/plan', arg: { op: recategorize } }]);
+  assert.deepEqual(JSON.parse(res.content[0].text), plan);
+  assert.equal(res.content.length, 1, 'no freshness block');
+});
+
+test('apply_categorization posts the operation with its plan token', async () => {
+  const { client, calls } = await connect({ '/categorization/apply': { id: 'set-1', actor: 'hermes' } });
+  const res = await client.callTool({ name: 'apply_categorization', arguments: { op: recategorize, planToken: TOKEN } });
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(calls, [{ method: 'post', path: '/categorization/apply', arg: { op: recategorize, planToken: TOKEN } }]);
+});
+
+test('categorization tools reject invalid operations before the API is called', async () => {
+  const { client, calls } = await connect();
+  const tooMany = Array.from({ length: 501 }, (_, i) => `tx-${i}`);
+  for (const [name, args] of [
+    ['plan_categorization', { op: { kind: 'delete_everything' } }],
+    ['plan_categorization', { op: { kind: 'recategorize', transactionIds: tooMany, categoryId: 'c' } }],
+    ['plan_categorization', { op: { kind: 'create_rule', pattern: 'ab', matchField: 'counterparty', categoryId: 'c' } }],
+    ['apply_categorization', { op: recategorize, planToken: 'not-a-token' }],
+    ['apply_categorization', { op: recategorize }],
+    ['get_category_change', {}],
+    ['list_category_changes', { limit: 1000 }],
+  ] as const) {
+    const res = await client.callTool({ name, arguments: args });
+    assert.equal(res.isError, true, `${name} ${JSON.stringify(args).slice(0, 80)}`);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('a stale plan comes back as a tool error with the API code', async () => {
+  const { client } = await connect({
+    '/categorization/apply': new ApiError(409, { error: 'plan_stale', details: { hint: 'plan again' } }),
+  });
+  const res = await client.callTool({ name: 'apply_categorization', arguments: { op: recategorize, planToken: TOKEN } });
+  assert.equal(res.isError, true);
+  assert.match(textOf(res), /Finance API error 409/);
+  assert.match(textOf(res), /"error":"plan_stale"/);
+});
+
+test('change sets and rules are read with their query defaults', async () => {
+  const { client, calls } = await connect({
+    '/categorization/change-sets': { total: 0, items: [] },
+    '/categorization/change-sets/set%2F1': { id: 'set/1' },
+    '/categorization/rules': [],
+  });
+  await client.callTool({ name: 'list_category_changes', arguments: {} });
+  await client.callTool({ name: 'list_category_changes', arguments: { limit: 5, offset: 10 } });
+  await client.callTool({ name: 'get_category_change', arguments: { id: 'set/1' } });
+  await client.callTool({ name: 'list_category_rules', arguments: {} });
+  await client.callTool({ name: 'list_category_rules', arguments: { includeDisabled: true } });
+  assert.deepEqual(calls, [
+    { method: 'get', path: '/categorization/change-sets', arg: { limit: 20, offset: 0 } },
+    { method: 'get', path: '/categorization/change-sets', arg: { limit: 5, offset: 10 } },
+    { method: 'get', path: '/categorization/change-sets/set%2F1', arg: undefined },
+    { method: 'get', path: '/categorization/rules', arg: { includeDisabled: false } },
+    { method: 'get', path: '/categorization/rules', arg: { includeDisabled: true } },
+  ]);
+});
+
+test('the plan token and ids survive redaction', async () => {
+  // Hex that reads like an IBAN (two letters, then many digits) once was masked.
+  const token = 'ab1234567890123456' + 'c'.repeat(46);
+  const { client } = await connect({ '/categorization/plan': { planToken: token } });
+  const res = await client.callTool({ name: 'plan_categorization', arguments: { op: recategorize } });
+  assert.equal(JSON.parse(textOf(res)).planToken, token);
 });

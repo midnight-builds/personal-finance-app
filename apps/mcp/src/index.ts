@@ -33,13 +33,17 @@ function startHttp(config: HttpConfig, buildServer: () => McpServer, apiUrl: str
 
 async function main(config: Config) {
   const tools = selectTools(config.disabledTools);
-  const ctx = { api: createApiClient(config.apiUrl), proposalSource: config.proposalSource };
+  const ctx = {
+    api: createApiClient(config.apiUrl, fetch, { actor: config.actor }),
+    proposalSource: config.proposalSource,
+  };
   const buildServer = () => {
     const server = new McpServer(SERVER_INFO);
     registerTools(server, tools, ctx);
     return server;
   };
   console.error(`Tools: ${tools.map((t) => t.name).join(', ')}`);
+  console.error(`Changes are recorded as actor "${config.actor}"`);
 
   if (config.transport.kind === 'http') {
     startHttp(config.transport, buildServer, config.apiUrl);

@@ -1,6 +1,9 @@
 // Thin HTTP client over the finance API. The MCP server never touches the
 // database directly, so all business rules (transfer exclusion, grouping,
-// categorization) stay in one place.
+// categorization) stay in one place. Every request names the configured actor
+// in `X-Finance-Actor`, so the API attributes this server's changes to it.
+
+import { ACTOR_HEADER } from '@finance-app/shared';
 
 export class ApiError extends Error {
   constructor(
@@ -16,11 +19,17 @@ export type ApiClient = {
   post(path: string, body: unknown): Promise<unknown>;
 };
 
-export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = fetch): ApiClient {
+export type ApiClientOptions = {
+  /** Sent as `X-Finance-Actor` on every request; none = the API records `user`. */
+  actor?: string;
+};
+
+export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = fetch, options: ApiClientOptions = {}): ApiClient {
   const base = baseUrl.replace(/\/+$/, '');
+  const actorHeaders: Record<string, string> = options.actor ? { [ACTOR_HEADER]: options.actor } : {};
 
   async function send(path: string, init: RequestInit) {
-    const res = await fetchImpl(base + path, init);
+    const res = await fetchImpl(base + path, { ...init, headers: { ...actorHeaders, ...(init.headers as Record<string, string>) } });
     const text = await res.text();
     let body: unknown = null;
     if (text) {

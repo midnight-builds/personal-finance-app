@@ -11,27 +11,62 @@ over the REST API and never opens the database.
 | `search_transactions` | Filtered, paginated transactions (`GET /transactions/search`) |
 | `get_summary`, `get_monthly_overview`, `get_insights`, `get_latest_briefing`, `get_forecast` | Read reports |
 | `get_balance_history` | Balances and net worth per day/week/month with coverage (`GET /balances/history`) |
-| `list_categories`, `list_accounts`, `list_recurring` | Read reference data |
+| `list_categories`, `list_accounts`, `list_recurring` | Read reference data (`list_categories` includes each category's `role`) |
+| `list_category_rules` | Categorization rules in match order (`GET /categorization/rules`) |
+| `plan_categorization` | Works out a categorization change without writing (`POST /categorization/plan`) |
+| `apply_categorization` | Applies a planned change with its plan token (`POST /categorization/apply`) |
+| `list_category_changes`, `get_category_change` | Change log of categorization: who changed what, and undo state (`GET /categorization/change-sets[/:id]`) |
 | `list_feature_proposals` | Earlier proposals and bug reports with their status, notes, resolution and history |
 | `propose_feature` | Adds a feature proposal or bug report (`kind`) to the local review queue |
 
-Everything except `propose_feature` is read-only; no tool changes or deletes data.
+Two tools write: `propose_feature` adds to the review queue, and
+`apply_categorization` changes categorization. Every other tool is read-only, and
+no tool deletes anything.
 
-Tools backed by imported bank data (all except `list_categories` and the proposal
-tools) return a second content block `{ "meta": { generatedAt, lastImportAt, dataAsOf } }`
+### Category management
+
+The agent manages categories as the user does in the web UI, without asking the
+user to confirm (decided with the user; `docs/CATEGORIES.md`). Every change is
+planned first (`plan_categorization`, writes nothing), then applied with the
+plan's token (`apply_categorization`). Applying refuses with `409 plan_stale` when
+the data has changed since the plan, and the same token applied twice returns the
+same change set. Undo is the `undo` operation through the same two tools; there is
+no separate undo tool, so an undo is also planned and reviewable first.
+
+- **Attribution.** The MCP server sends `X-Finance-Actor` (`MCP_ACTOR`) on every
+  request, so each change set and decision records the agent as its actor next to
+  the user's own (`user`). `list_category_changes` shows both.
+- **Money is out of reach.** The operations change only categories, rules and
+  categorization decisions: never amounts, dates, accounts, counterparties,
+  balances, transfers or imports. Nothing is deleted (categories are archived,
+  rules disabled), and a rule never overrides a manual decision.
+- API errors come back as tool errors `Finance API error <status>: {"error": <code>, "details": ...}`,
+  with the codes listed in `docs/CATEGORIES.md` (REST).
+- To keep an agent read-only for categories, hide `apply_categorization` with
+  `MCP_DISABLED_TOOLS`.
+
+### Responses
+
+Tools backed by imported bank data (all except `list_categories`, the category
+management tools and the proposal tools) return a second content block `{ "meta": { generatedAt, lastImportAt, dataAsOf } }`
 from `GET /data-status`; `get_forecast` adds `forecastStartMonth`. The first block
 is the API response unchanged. If the status lookup fails, the timestamps are `null`
-and the tool still succeeds.
+and the tool still succeeds. Category management tools return the API response
+alone: they show categorization state, not imported bank data, and a plan is
+checked against current state by its token anyway.
 
 Every response is passed through `redactDeep` (`packages/shared`): keys containing
 `iban` are dropped and IBANs, old Finnish account numbers and Finnish personal ids
-inside text are replaced with `[REDACTED]`. `search_transactions` excludes transfers
-and collapses duplicate rows from overlapping imports by default.
+inside text are replaced with `[REDACTED]`. A string that is wholly a UUID or a
+64-character hex digest (ids, plan tokens) is left alone, so the agent can send it
+back. `search_transactions` excludes transfers and collapses duplicate rows from
+overlapping imports by default.
 
-> **The read-only guarantee holds only through MCP.** The finance API has no auth,
-> and the web UI (port 5173) proxies `/api` to it. If the agent must not be able to
-> write, keep the API on loopback (`HOST=127.0.0.1`, the default) **and** block the
-> agent's host from the UI port (firewall), or bind the UI to loopback too.
+> **Limits on what the agent can write hold only through MCP.** The finance API has
+> no auth, and the web UI (port 5173) proxies `/api` to it. If the agent must not be
+> able to write more than its tools allow, keep the API on loopback
+> (`HOST=127.0.0.1`, the default) **and** block the agent's host from the UI port
+> (firewall), or bind the UI to loopback too.
 
 ### Adding a tool
 
@@ -78,6 +113,7 @@ an invalid value stops the server with a message.
 | `MCP_TRANSPORT` | `stdio` | `stdio` (agent spawns the process) or `http` |
 | `MCP_DISABLED_TOOLS` | — | Comma-separated tool names to hide, e.g. `propose_feature`. Unknown names are an error |
 | `MCP_PROPOSAL_SOURCE` | `hermes` | Stored as a proposal's `source` |
+| `MCP_ACTOR` | `MCP_PROPOSAL_SOURCE` | Sent as `X-Finance-Actor`; recorded as the actor of every change. `a-z`, `0-9`, `_`, `-`, 1–40 characters (startup fails otherwise, also when the default from `MCP_PROPOSAL_SOURCE` does not fit) |
 | `MCP_HOST` / `MCP_PORT` | `127.0.0.1` / `3030` | http: listen address |
 | `MCP_TOKEN_FILE` / `MCP_TOKEN` | — | http: bearer token, ≥ 32 chars. Prefer the file |
 | `MCP_TLS_CERT` / `MCP_TLS_KEY` | — | http: HTTPS certificate and key. **Required unless `MCP_HOST` is loopback** |
@@ -157,7 +193,7 @@ mcp_servers:
    ```
 
    On startup the log shows the URL, the certificate's SHA-256 fingerprint, the
-   allow-list and the enabled tools (`journalctl -u finance-app-mcp`).
+   allow-list, the enabled tools and the actor (`journalctl -u finance-app-mcp`).
 
 4. Copy **only** `server.crt` and the token to the agent host (never `server.key`)
    and compare the fingerprint with the server log:

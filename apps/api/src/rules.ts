@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import type { CategoryRuleListItem } from '@finance-app/shared';
 import { db, type CategoryRole } from './db.js';
 import { LATEST_DECISION_ORDER, latestCategoryDecisionJoin } from './sql/transactions.js';
 
@@ -179,6 +180,51 @@ export function listCategories(options: { includeArchived?: boolean } = {}) {
   return db
     .prepare(`SELECT id, name, built_in, role FROM categories ${where} ORDER BY built_in DESC, name ASC`)
     .all() as CategoryListItem[];
+}
+
+/**
+ * Rules in the order `chooseCategoryFor` tries them (priority, then newest
+ * first), with their category's name; disabled ones only when asked for.
+ */
+export function listRules(options: { includeDisabled?: boolean } = {}): CategoryRuleListItem[] {
+  const where = options.includeDisabled ? '' : 'WHERE r.disabled_at IS NULL';
+  const rows = db
+    .prepare(
+      `SELECT r.id, r.category_id, c.name AS category_name, r.pattern, r.match_field, r.match_type, r.amount_sign,
+              r.builtin, r.disabled_at, r.priority, r.created_at, r.actor
+       FROM category_rules r
+       JOIN categories c ON c.id = r.category_id
+       ${where}
+       ORDER BY r.priority DESC, r.created_at DESC, r.rowid DESC`
+    )
+    .all() as Array<{
+    id: string;
+    category_id: string;
+    category_name: string;
+    pattern: string;
+    match_field: string;
+    match_type: CategoryRuleListItem['matchType'];
+    amount_sign: CategoryRuleListItem['amountSign'];
+    builtin: number;
+    disabled_at: string | null;
+    priority: number;
+    created_at: string;
+    actor: string | null;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    categoryId: r.category_id,
+    categoryName: r.category_name,
+    pattern: r.pattern,
+    matchField: r.match_field,
+    matchType: r.match_type,
+    amountSign: r.amount_sign,
+    builtin: r.builtin === 1,
+    disabledAt: r.disabled_at,
+    priority: r.priority,
+    createdAt: r.created_at,
+    actor: r.actor,
+  }));
 }
 
 /** True when the category exists and is not archived. */

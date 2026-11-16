@@ -66,7 +66,28 @@ export const changeSetListFields = {
   offset: z.number().int().min(0).default(0),
 };
 
-export type RowChange = { transactionId: string; fromCategoryId: string | null; toCategoryId: string };
+export const categoryRuleListFields = {
+  includeDisabled: z.boolean().default(false).describe('Also list disabled rules (kept for history, never match)'),
+};
+
+/** A rule as `GET /categorization/rules` lists it, in match order. */
+export type CategoryRuleListItem = {
+  id: string;
+  categoryId: string;
+  categoryName: string;
+  pattern: string;
+  matchField: string;
+  matchType: 'contains' | 'regex';
+  amountSign: 'positive' | 'negative' | null;
+  builtin: boolean;
+  disabledAt: string | null;
+  priority: number;
+  createdAt: string;
+  /** Who created it; null for built-in rules and rules from before actors existed. */
+  actor: string | null;
+};
+
+export type RowChange ={ transactionId: string; fromCategoryId: string | null; toCategoryId: string };
 
 export type CategoryChange =
   | { id: string | null; change: 'created'; name: string }
