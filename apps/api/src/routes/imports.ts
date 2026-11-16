@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import multipart from '@fastify/multipart';
 import { importPreviewFieldsSchema, importTargetFieldsSchema } from '@finance-app/shared';
+import { actorOf } from '../http/actor.js';
 import { DomainError } from '../http/errors.js';
 import { checksum, parseCsv, parseXlsx, processImport, type ImportTarget } from '../importer.js';
 import { previewImport } from '../importPreview.js';
@@ -67,6 +68,7 @@ export const importRoutes: FastifyPluginAsync = async (app) => {
         format: format.toUpperCase(),
         target,
         allowIbanMismatch: importTargetFieldsSchema.parse(upload.fields).allowIbanMismatch === '1',
+        actor: actorOf(request),
       });
     });
   }

@@ -6,7 +6,6 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { initDb, seedDefaultCategories, db } from './db.js';
 import { listTransactions } from './query.js';
-import { listCategories, upsertDecision, createCategory, renameCategory, deleteCategory } from './rules.js';
 import { getSummary, getHouseholdSummary } from './summary.js';
 import { getDataStatus } from './dataStatus.js';
 import { getInsights } from './insights.js';
@@ -18,7 +17,6 @@ import { listLog } from './logger.js';
 import { listAccounts, updateAccount } from './accounts.js';
 import { listBalanceAdjustments, createBalanceAdjustment, deleteBalanceAdjustment } from './balanceAdjustments.js';
 import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
-import { listPendingRuleSuggestions, acceptRuleSuggestion, rejectRuleSuggestion } from './ruleSuggestions.js';
 import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
 import { getForecast } from './forecast.js';
 import { redetectPatternsIfRulesChanged } from './patterns.js';
@@ -66,7 +64,6 @@ server.get('/backup', async (_request, reply) => {
 });
 
 server.get('/transactions', async () => listTransactions());
-server.get('/categories', async () => listCategories());
 server.get('/summary', async () => getSummary());
 server.get('/data-status', async () => getDataStatus());
 server.get('/insights', async () => getInsights());
@@ -109,26 +106,6 @@ server.delete("/balance-adjustments/:id", async (request, reply) => {
   if (!ok) return reply.code(404).send({ error: "not_found" });
   return reply.send({ ok: true });
 });
-server.post<{ Params: { id: string }; Body: { categoryId: string } }>(
-  '/transactions/:id/category',
-  async (request, reply) => {
-    const { id } = request.params;
-    const { categoryId } = request.body || {};
-    if (!categoryId) return reply.code(400).send({ error: 'category_missing' });
-    const tx = db
-      .prepare('SELECT counterparty_name, description FROM normalized_transactions WHERE id = ?')
-      .get(id) as { counterparty_name: string | null; description: string | null } | undefined;
-    upsertDecision({
-      transactionId: id,
-      categoryId,
-      source: 'user',
-      counterparty: tx?.counterparty_name ?? null,
-      description: tx?.description ?? null,
-    });
-    return reply.send({ ok: true });
-  }
-);
-
 server.post('/debug/clear', async () => {
   db.exec('PRAGMA foreign_keys=OFF;');
   db.exec(`
@@ -202,44 +179,6 @@ server.patch('/accounts/:id', async (request, reply) => {
     return reply.code(404).send({ error: 'not_found' });
   }
   return { ok: true };
-});
-
-server.post('/categories', async (request, reply) => {
-  const body = request.body as any;
-  const { name } = body ?? {};
-  try {
-    const created = createCategory(String(name ?? ''));
-    return reply.send(created);
-  } catch (err: any) {
-    const msg = err?.message ?? 'unknown';
-    const status = msg === 'name_exists' || msg === 'name_required' ? 400 : 400;
-    return reply.code(status).send({ error: msg });
-  }
-});
-
-server.patch<{ Params: { id: string }; Body: { name: string } }>('/categories/:id', async (request, reply) => {
-  const { id } = request.params;
-  const { name } = request.body || {};
-  try {
-    renameCategory(id, name);
-    return reply.send({ ok: true });
-  } catch (err: any) {
-    const msg = err?.message ?? 'unknown';
-    const status = msg === 'name_exists' || msg === 'name_required' || msg === 'reserved_name' ? 400 : 404;
-    return reply.code(status).send({ error: msg });
-  }
-});
-
-server.delete<{ Params: { id: string } }>('/categories/:id', async (request, reply) => {
-  const { id } = request.params;
-  try {
-    const res = deleteCategory(id);
-    return reply.send({ ok: true, reassignedTo: res.reassignedTo });
-  } catch (err: any) {
-    const msg = err?.message ?? 'unknown';
-    const status = msg === 'cannot_delete_misc' ? 400 : 404;
-    return reply.code(status).send({ error: msg });
-  }
 });
 
 // Household summary
@@ -350,19 +289,6 @@ server.get<{ Params: { accountId: string } }>('/balance-snapshots/:accountId', a
   return getBalanceSnapshotsForAccount(request.params.accountId);
 });
 
-server.get('/rule-suggestions', async () => listPendingRuleSuggestions());
-
-server.post<{ Params: { id: string } }>('/rule-suggestions/:id/accept', async (request, reply) => {
-  const { id } = request.params;
-  try {
-    acceptRuleSuggestion(id);
-    return reply.send({ ok: true });
-  } catch (err: any) {
-    const code = err.message === 'not_found' ? 404 : err.message === 'not_pending' ? 409 : 500;
-    return reply.code(code).send({ error: err.message });
-  }
-});
-
 server.get('/forecast', async () => getForecast());
 
 server.get('/pattern-confirmations', async () => listPendingConfirmations());
@@ -371,16 +297,6 @@ server.post<{ Params: { id: string } }>('/pattern-confirmations/:id/confirm', as
   const { id } = request.params;
   try {
     confirmPatternConfirmation(id);
-    return reply.send({ ok: true });
-  } catch (err: any) {
-    return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });
-  }
-});
-
-server.post<{ Params: { id: string } }>('/rule-suggestions/:id/reject', async (request, reply) => {
-  const { id } = request.params;
-  try {
-    rejectRuleSuggestion(id);
     return reply.send({ ok: true });
   } catch (err: any) {
     return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });

@@ -65,6 +65,15 @@ test('acceptRuleSuggestion creates category_rule and marks accepted', () => {
   assert.equal(rule.match_field, 'counterparty');
 });
 
+test('acceptRuleSuggestion refuses a suggestion whose category was archived meanwhile', () => {
+  const id = mkSuggestion('Viihde ja harrastukset', 'leffateatteri');
+  // Archived while the suggestion was being generated: it stayed pending.
+  db.prepare('UPDATE categories SET archived_at = ? WHERE name = ?').run(new Date().toISOString(), 'Viihde ja harrastukset');
+
+  assert.throws(() => acceptRuleSuggestion(id), /category_archived/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM category_rules WHERE pattern = 'leffateatteri'").get()!.n, 0);
+});
+
 test('acceptRuleSuggestion skips duplicate rule if one already exists', () => {
   const catId = getCategoryId('Ruoka ja päivittäistavarat');
   db.prepare(
@@ -88,4 +97,32 @@ test('rejectRuleSuggestion marks rejected without creating a rule', () => {
 
   const rule = db.prepare("SELECT * FROM category_rules WHERE pattern = 'neste'").get() as any;
   assert.equal(rule, undefined, 'should not create rule on rejection');
+});
+
+test('acceptRuleSuggestion moves fallback rows by role, whatever the fallback is named, with the actor', () => {
+  const misc = db.prepare("SELECT id FROM categories WHERE role = 'fallback'").get() as { id: string };
+  db.prepare('UPDATE categories SET name = ? WHERE id = ?').run('Sekalaiset', misc.id);
+  const now = new Date().toISOString();
+  const [acct, sess, tx] = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+  db.prepare('INSERT INTO accounts (id, created_at, name, type) VALUES (?, ?, ?, ?)').run(acct, now, 'Testitili', 'bank');
+  db.prepare('INSERT INTO import_sessions (id, created_at, source_bank, format) VALUES (?, ?, ?, ?)').run(sess, now, 'Test', 'CSV');
+  db.prepare(
+    `INSERT INTO normalized_transactions (id, created_at, import_session_id, account_id, booking_date, amount, currency, counterparty_name)
+     VALUES (?, ?, ?, ?, '2026-11-01', -9, 'EUR', 'Kulmakioski Oy')`
+  ).run(tx, now, sess, acct);
+  db.prepare(
+    `INSERT INTO categorization_decisions (id, created_at, transaction_id, category_id, source) VALUES (?, ?, ?, ?, 'rule')`
+  ).run(crypto.randomUUID(), '2026-11-01T00:00:00.000Z', tx, misc.id);
+
+  const id = mkSuggestion('Ruoka ja päivittäistavarat', 'kulmakioski');
+  acceptRuleSuggestion(id, { actor: 'hermes' });
+
+  const latest = db
+    .prepare('SELECT category_id, actor FROM categorization_decisions WHERE transaction_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1')
+    .get(tx) as any;
+  assert.equal(latest.category_id, getCategoryId('Ruoka ja päivittäistavarat'));
+  assert.equal(latest.actor, 'hermes');
+  const rule = db.prepare("SELECT actor FROM category_rules WHERE pattern = 'kulmakioski'").get() as any;
+  assert.equal(rule.actor, 'hermes');
+  db.prepare('UPDATE categories SET name = ? WHERE id = ?').run('Muut ja epäselvät', misc.id);
 });

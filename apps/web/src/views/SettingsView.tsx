@@ -205,12 +205,12 @@ export default function SettingsView({
         getTransactions().catch(() => null),
       ]);
       if (cat) setCategories(cat);
-      showToast(setToast, 'Kategoria poistettu ja rivit siirretty');
+      showToast(setToast, 'Kategoria poistettu käytöstä ja rivit siirretty');
       if (tx) await refreshAll();
     } else {
       const data = await res.json().catch(() => ({}));
-      if (data.error === 'cannot_delete_misc') {
-        showToast(setToast, 'Muut ja epäselvät -kategoriaa ei voi poistaa', 4000);
+      if (data.error === 'category_has_role') {
+        showToast(setToast, 'Tätä kategoriaa ei voi poistaa', 4000);
       } else {
         showToast(setToast, 'Kategorian poisto epäonnistui', 4000);
       }
@@ -343,16 +343,15 @@ export default function SettingsView({
                         const val = e.target.value;
                         if (val !== c.name) renameCategoryApi(c.id, val);
                       }}
-                      disabled={c.name === 'Muut ja epäselvät'}
                     />
-                    {c.name === 'Muut ja epäselvät' && <small className="muted">Suojattu</small>}
+                    {c.role && <small className="muted">Suojattu</small>}
                   </span>
                   <span className="actions-row">
                     <button
                       className="ghost mini"
                       type="button"
                       onClick={() => deleteCategoryApi(c.id)}
-                      disabled={c.name === 'Muut ja epäselvät'}
+                      disabled={Boolean(c.role)}
                     >
                       Poista
                     </button>

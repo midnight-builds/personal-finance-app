@@ -328,37 +328,139 @@ export function initDb() {
       AND NOT EXISTS (SELECT 1 FROM feature_proposal_events e WHERE e.proposal_id = p.id)
   `);
 
+  // Categories: a role marks the special ones (found by role, never by name);
+  // archived categories are hidden but keep their decisions.
+  safeExec(`ALTER TABLE categories ADD COLUMN role TEXT`);
+  safeExec(`ALTER TABLE categories ADD COLUMN archived_at TEXT`);
+  safeExec(`ALTER TABLE categories ADD COLUMN merged_into_id TEXT`);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_role ON categories(role) WHERE role IS NOT NULL`);
+  // Databases from before roles: the default categories take their roles by
+  // their (then fixed) names, unless some category already has the role.
+  const assignRole = db.prepare(
+    `UPDATE categories SET role = ? WHERE name = ? AND role IS NULL
+       AND NOT EXISTS (SELECT 1 FROM categories WHERE role = ?)`
+  );
+  for (const [role, name] of Object.entries(ROLE_DEFAULT_NAMES)) assignRole.run(role, name, role);
+
+  // Rules: built-in rules live in the table too, below user rules; a disabled
+  // rule stops matching but is kept.
+  safeExec(`ALTER TABLE category_rules ADD COLUMN match_type TEXT NOT NULL DEFAULT 'contains'`);
+  safeExec(`ALTER TABLE category_rules ADD COLUMN amount_sign TEXT`);
+  safeExec(`ALTER TABLE category_rules ADD COLUMN builtin INTEGER NOT NULL DEFAULT 0`);
+  safeExec(`ALTER TABLE category_rules ADD COLUMN disabled_at TEXT`);
+  safeExec(`ALTER TABLE category_rules ADD COLUMN actor TEXT`);
+
+  // Decisions: who made them (null = before actors existed) and why.
+  safeExec(`ALTER TABLE categorization_decisions ADD COLUMN actor TEXT`);
+  safeExec(`ALTER TABLE categorization_decisions ADD COLUMN reason TEXT`);
+
   safeExec(`
     DELETE FROM category_rules WHERE rowid NOT IN (
-      SELECT MIN(rowid) FROM category_rules GROUP BY pattern, category_id, match_field
+      SELECT MIN(rowid) FROM category_rules
+      GROUP BY pattern, category_id, match_field, match_type, amount_sign
     )
   `);
 }
 
+export type CategoryRole = 'fallback' | 'income' | 'refund';
+
+/** The name a role category gets when it has to be created. */
+const ROLE_DEFAULT_NAMES: Record<CategoryRole, string> = {
+  fallback: 'Muut ja epäselvät',
+  income: 'Tulopuoli ja palkka',
+  refund: 'Palautukset ja hyvitykset',
+};
+
+const DEFAULT_CATEGORIES = [
+  'Ruoka ja päivittäistavarat',
+  'Asuminen ja asumiskulut',
+  'Auto ja liikkuminen',
+  'Autojen lyhennys',
+  'Terveys ja hyvinvointi',
+  'Vakuutukset',
+  'Laskut ja sopimukset',
+  'Viihde ja harrastukset',
+  'Lapsiin liittyvät kulut',
+  'Sijoitukset ja säästäminen',
+  ROLE_DEFAULT_NAMES.income,
+  ROLE_DEFAULT_NAMES.refund,
+  ROLE_DEFAULT_NAMES.fallback,
+];
+
+/**
+ * The keyword heuristics categorization started with, as built-in rules:
+ * matched case-insensitively against counterparty + description, in this
+ * order, after every user rule. A target is a role or a default category's
+ * name, resolved to an id when the rules are seeded, so renaming the category
+ * later changes nothing.
+ */
+const BUILTIN_RULES: Array<{
+  pattern: string;
+  target: { role: CategoryRole } | { name: string };
+  amountSign?: 'positive';
+}> = [
+  { pattern: 'palkka|salary|payroll', target: { role: 'income' }, amountSign: 'positive' },
+  { pattern: 'hyvitys|palautus|refund', target: { role: 'refund' }, amountSign: 'positive' },
+  { pattern: 'sähkö|energia|läm[p]?ö|electric', target: { name: 'Laskut ja sopimukset' } },
+  { pattern: 'jäte|jätteen|waste|trash|recycling', target: { name: 'Laskut ja sopimukset' } },
+  { pattern: 'puhelin|internet|laajakaista|mobiili|mobile|broadband', target: { name: 'Laskut ja sopimukset' } },
+  { pattern: 'vakuutus', target: { name: 'Vakuutukset' } },
+  { pattern: 'ruoka|market|k[- ]?market|s-market|prisma|lid[l]?', target: { name: 'Ruoka ja päivittäistavarat' } },
+  { pattern: 'auto|bensa|poltto|tankkaus|fuel|huolto', target: { name: 'Auto ja liikkuminen' } },
+  { pattern: 'palkka|salary|payroll', target: { role: 'income' } },
+];
+
+/** Priority of the first built-in rule, the rest count down; user rules use 10. */
+const BUILTIN_TOP_PRIORITY = 0;
+
+/**
+ * Default categories go only into an empty table, so a renamed default is not
+ * brought back. Afterwards every role has a category, and the built-in rules
+ * exist.
+ */
 export function seedDefaultCategories() {
-  const defaults = [
-    'Ruoka ja päivittäistavarat',
-    'Asuminen ja asumiskulut',
-    'Auto ja liikkuminen',
-    'Autojen lyhennys',
-    'Terveys ja hyvinvointi',
-    'Vakuutukset',
-    'Laskut ja sopimukset',
-    'Viihde ja harrastukset',
-    'Lapsiin liittyvät kulut',
-    'Sijoitukset ja säästäminen',
-    'Tulopuoli ja palkka',
-    'Palautukset ja hyvitykset',
-    'Muut ja epäselvät',
-  ];
   const now = new Date().toISOString();
-  const existing = db.prepare('SELECT name FROM categories').all() as Array<{ name: string }>;
-  const existingNames = new Set(existing.map((c) => c.name));
   const insert = db.prepare(
-    'INSERT INTO categories (id, created_at, name, built_in) VALUES (?, ?, ?, ?)'
+    'INSERT INTO categories (id, created_at, name, built_in, role) VALUES (?, ?, ?, 1, ?)'
   );
-  for (const name of defaults) {
-    if (existingNames.has(name)) continue;
-    insert.run(crypto.randomUUID(), now, name, 1);
+  if (!db.prepare('SELECT 1 FROM categories LIMIT 1').get()) {
+    const roleOf = new Map<string, string>(Object.entries(ROLE_DEFAULT_NAMES).map(([role, name]) => [name, role]));
+    for (const name of DEFAULT_CATEGORIES) insert.run(crypto.randomUUID(), now, name, roleOf.get(name) ?? null);
   }
+  for (const [role, name] of Object.entries(ROLE_DEFAULT_NAMES)) {
+    if (db.prepare('SELECT 1 FROM categories WHERE role = ?').get(role)) continue;
+    // A category without a role may hold the default name: it takes the role
+    // (and is back in use, since a role category cannot be archived). A name
+    // held by another role's category is left alone; the role stays unfilled.
+    const named = db
+      .prepare('UPDATE categories SET role = ?, archived_at = NULL WHERE name = ? AND role IS NULL')
+      .run(role, name);
+    if (Number(named.changes) > 0) continue;
+    if (!db.prepare('SELECT 1 FROM categories WHERE name = ?').get(name)) insert.run(crypto.randomUUID(), now, name, role);
+  }
+  seedBuiltinRules(now);
 }
+
+/**
+ * Inserts the built-in rules unless they are there. Rules are disabled, never
+ * deleted, so any built-in row means they were seeded. A rule whose target
+ * category does not exist is skipped.
+ */
+function seedBuiltinRules(now: string) {
+  if (db.prepare('SELECT 1 FROM category_rules WHERE builtin = 1 LIMIT 1').get()) return;
+  const insert = db.prepare(
+    `INSERT INTO category_rules
+       (id, created_at, category_id, pattern, match_field, priority, match_type, amount_sign, builtin)
+     VALUES (?, ?, ?, ?, 'text', ?, 'regex', ?, 1)`
+  );
+  BUILTIN_RULES.forEach((rule, i) => {
+    const target = (
+      'role' in rule.target
+        ? db.prepare('SELECT id FROM categories WHERE role = ?').get(rule.target.role)
+        : db.prepare('SELECT id FROM categories WHERE name = ? AND archived_at IS NULL').get(rule.target.name)
+    ) as { id: string } | undefined;
+    if (!target) return;
+    insert.run(crypto.randomUUID(), now, target.id, rule.pattern, BUILTIN_TOP_PRIORITY - i, rule.amountSign ?? null);
+  });
+}
+

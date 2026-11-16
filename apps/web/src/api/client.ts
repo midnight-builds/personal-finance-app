@@ -43,7 +43,8 @@ export type Transaction = {
   isTransfer?: boolean;
 };
 
-export type Category = { id: string; name: string };
+/** `role`: the special job of the category (cannot be archived), null for ordinary ones. */
+export type Category = { id: string; name: string; role?: 'fallback' | 'income' | 'refund' | null };
 
 export type Summary = {
   /** Sum of known balances; partial when `isComplete` is false. */
