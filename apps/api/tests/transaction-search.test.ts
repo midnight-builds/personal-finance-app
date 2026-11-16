@@ -16,16 +16,15 @@ function mkTx(
   amount: number,
   counterparty: string,
   description = '',
-  groupId: string | null = null,
   createdAt = new Date().toISOString(),
   account = accountId
 ) {
   const id = crypto.randomUUID();
   db.prepare(
     `INSERT INTO normalized_transactions
-       (id, created_at, import_session_id, account_id, booking_date, amount, currency, counterparty_name, description, transaction_group_id)
-     VALUES (?, ?, ?, ?, ?, ?, 'EUR', ?, ?, ?)`
-  ).run(id, createdAt, sessionId, account, date, amount, counterparty, description, groupId);
+       (id, created_at, import_session_id, account_id, booking_date, amount, currency, counterparty_name, description)
+     VALUES (?, ?, ?, ?, ?, ?, 'EUR', ?, ?)`
+  ).run(id, createdAt, sessionId, account, date, amount, counterparty, description);
   return id;
 }
 
@@ -117,19 +116,6 @@ test('pagination and validation', () => {
   assert.throws(() => searchTransactions({ to: '2026-02-30' }));
 });
 
-test('overlapping imports are collapsed to one row per group by default', () => {
-  const group = crypto.randomUUID();
-  const first = mkTx('2026-10-03', -30, 'Cafe', '', group, '2026-10-04T00:00:00.000Z');
-  mkTx('2026-10-03', -30, 'Cafe', '', group, '2026-10-10T00:00:00.000Z');
-  mkTx('2026-10-04', -7, 'Kiosk');
-
-  const res = searchTransactions({});
-  assert.equal(res.total, 2);
-  assert.equal(res.items.find((t) => t.counterpartyName === 'Cafe')?.id, first);
-
-  assert.equal(searchTransactions({ includeDuplicates: true }).total, 3);
-});
-
 test('filters by account and by the latest category decision only', () => {
   const food = mkCategory('Food');
   const fun = mkCategory('Fun');
@@ -139,7 +125,7 @@ test('filters by account and by the latest category decision only', () => {
   categorize(recategorized, fun, '2026-03-02T10:00:00Z'); // the user changed their mind
   const groceries = mkTx('2026-03-02', -30, 'Market');
   categorize(groceries, food, '2026-03-02T10:00:00Z');
-  mkTx('2026-03-03', -5, 'Kiosk', '', null, new Date().toISOString(), other);
+  mkTx('2026-03-03', -5, 'Kiosk', '', new Date().toISOString(), other);
 
   assert.deepEqual(searchTransactions({ categoryId: food }).items.map((t) => t.counterpartyName), ['Market']);
   const [cinema] = searchTransactions({ categoryId: fun }).items;

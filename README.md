@@ -48,7 +48,7 @@ Fallback: if AI is unavailable the app still starts as a manual browser/editor â
 - Demo data: a fictional household (two overlapping exports, transfers, recurring bills),
   `apps/api/src/demo/demoData.ts`. `npm run demo:reset -w apps/api` recreates it with history
   ending today.
-- Domain terms (Ledger, duplicate group, transfer, balance): see `GLOSSARY.md`.
+- Domain terms (Ledger, duplicate, transfer, balance): see `GLOSSARY.md`.
 
 ### Running on a remote server and using the UI locally
 If you run the dev server on a remote machine, use SSH port-forwarding:

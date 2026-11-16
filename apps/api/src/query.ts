@@ -51,8 +51,6 @@ export function listTransactions() {
               nt.currency,
               nt.counterparty_name AS counterpartyName,
               nt.description,
-              nt.transaction_group_id AS transactionGroupId,
-              (SELECT COUNT(*) FROM normalized_transactions ng WHERE ng.transaction_group_id = nt.transaction_group_id) AS groupSize,
               tl.from_transaction_id AS tlFrom,
               tl.to_transaction_id   AS tlTo,
               cd.category_id AS categoryId,
@@ -80,8 +78,6 @@ export function listTransactions() {
       currency: row.currency,
       counterpartyName: row.counterpartyName,
       description: row.description,
-      transactionGroupId: row.transactionGroupId,
-      groupSize: row.transactionGroupId ? Number(row.groupSize) : null,
       transfer:
         row.tlFrom || row.tlTo
           ? {

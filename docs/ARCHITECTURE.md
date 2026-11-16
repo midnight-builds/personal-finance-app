@@ -12,7 +12,7 @@ Adapterikerros lukee pankkikohtaiset CSV ja XLSX exportit ja tuottaa raakatapaht
 
 Normalisointikerros muuntaa raakatapahtumat sisäiseen NormalizedTransaction malliin.
 
-Linkitys- ja deduplikointikerros yhdistää päällekkäiset tapahtumat ja tunnistaa tilisiirtoparit.
+Deduplikointi- ja linkityskerros jättää jo tallennetut tapahtumat tallentamatta (tapahtuma tallennetaan kerran) ja tunnistaa tilisiirtoparit.
 
 Kategorisointikerros päättää kategorian sääntöjen, käyttäjän aiempien päätösten, heuristiikoiden ja tarvittaessa OpenAI-ehdotusten avulla (gpt-4o-mini).
 

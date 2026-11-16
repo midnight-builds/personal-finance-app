@@ -30,7 +30,6 @@ type Transaction = {
   account: { id: string; name: string; iban: string | null };
   categoryId?: string | null;
   categoryName?: string | null;
-  groupSize?: number | null;
   transfer?: { direction: 'in' | 'out'; otherId: string | null } | null;
   isTransfer?: boolean;
   recurringDaily?: boolean;
@@ -439,7 +438,6 @@ export default function HomeView({
                     {tx.transfer.direction === 'out' ? 'Siirto ulos' : 'Siirto sisään'}
                   </span>
                 )}
-                {tx.groupSize && tx.groupSize > 1 && <span className="chip chip-dupe">Dupl {tx.groupSize}x</span>}
                 {tx.recurringDaily ? (
                   <span className="chip chip-recurring">Toistuva (pv)</span>
                 ) : tx.recurringWeekly ? (

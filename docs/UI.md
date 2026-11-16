@@ -15,7 +15,6 @@ Desktop-first UI is enough.
   - category dropdown
   - AI suggest button (optional)
   - transfer chips
-  - duplicate/group chips
 - Toggle: show/hide transfers (default: hide)
 
 ### Categories

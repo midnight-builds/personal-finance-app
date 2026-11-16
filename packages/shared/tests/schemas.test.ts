@@ -34,7 +34,6 @@ test('feature proposal schema trims, defaults source and rejects sensitive ids',
 test('transaction search schema applies defaults and limits', () => {
   assert.deepEqual(transactionSearchSchema.parse({}), {
     includeTransfers: false,
-    includeDuplicates: false,
     limit: 50,
     offset: 0,
   });

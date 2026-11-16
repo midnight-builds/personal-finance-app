@@ -3,15 +3,13 @@
 // balance was. The rules behind those answers live here and nowhere else:
 //
 // - Pending rows (no booking date) never count.
-// - Of a duplicate group only the canonical row counts (`includeDuplicates`).
-// - Transfers between own accounts are left out (`includeTransfers`); a
-//   duplicate of a linked transfer is a transfer too.
+// - Transfers between own accounts are left out (`includeTransfers`).
 // - A transaction's category is its most recent categorization decision.
 // - Dates are calendar days (YYYY-MM-DD); "today" is today in Helsinki.
 // - An account's balance is its latest snapshot on or before the day, plus
 //   balance adjustments dated on or before that snapshot.
 import { db } from './db.js';
-import { isCanonicalGroupRow, latestCategoryDecisionJoin } from './sql/transactions.js';
+import { latestCategoryDecisionJoin } from './sql/transactions.js';
 
 export type LedgerScope = {
   /** First day included, YYYY-MM-DD. */
@@ -21,7 +19,6 @@ export type LedgerScope = {
   /** Only these account ids. */
   accounts?: string[];
   includeTransfers?: boolean;
-  includeDuplicates?: boolean;
 };
 
 export type LedgerEntry = {
@@ -40,7 +37,6 @@ export type LedgerEntry = {
   categoryId: string | null;
   categoryName: string | null;
   isTransfer: boolean;
-  transactionGroupId: string | null;
 };
 
 export type LedgerTotal = {
@@ -82,17 +78,11 @@ function assertDay(name: string, value: string | undefined) {
   if (value !== undefined && !DAY.test(value)) throw new Error(`ledger: ${name} must be YYYY-MM-DD, got ${value}`);
 }
 
-// Transfer-ness belongs to the duplicate group: the linker pairs one copy of an
-// overlapping transfer, and the other copies are the same money movement.
-// Linked rows and their groups are collected once, so each row costs two
-// indexed lookups instead of a scan of every link.
+// Linked rows are collected once, so each row costs an indexed lookup instead
+// of a scan of every link.
 const TRANSFER_SETS = `linked(id) AS (
     SELECT from_transaction_id FROM transfer_links
-    UNION SELECT to_transaction_id FROM transfer_links),
-  linked_groups(g) AS (
-    SELECT DISTINCT n.transaction_group_id FROM normalized_transactions n
-    JOIN linked l ON l.id = n.id
-    WHERE n.transaction_group_id IS NOT NULL)`;
+    UNION SELECT to_transaction_id FROM transfer_links)`;
 
 /** Transactions that count, oldest first. */
 export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
@@ -116,20 +106,17 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
   }
   const outer: string[] = [];
   if (!scope.includeTransfers) outer.push('NOT nt.is_transfer');
-  if (!scope.includeDuplicates) outer.push(isCanonicalGroupRow('nt'));
 
   const rows = db
     .prepare(
       `WITH ${TRANSFER_SETS},
        scoped AS (
          SELECT t.*,
-                (t.id IN (SELECT id FROM linked)
-                 OR (t.transaction_group_id IS NOT NULL
-                     AND t.transaction_group_id IN (SELECT g FROM linked_groups))) AS is_transfer
+                t.id IN (SELECT id FROM linked) AS is_transfer
          FROM normalized_transactions t
          WHERE ${where.join('\n           AND ')})
        SELECT nt.id, nt.account_id, substr(nt.booking_date, 1, 10) AS day, nt.booking_date, nt.amount, nt.currency,
-              nt.counterparty_name, nt.counterparty_iban, nt.description, nt.transaction_group_id,
+              nt.counterparty_name, nt.counterparty_iban, nt.description,
               cd.category_id, c.name AS category_name, nt.is_transfer
        FROM scoped nt
        ${latestCategoryDecisionJoin('nt', 'cd')}
@@ -147,7 +134,6 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
       counterparty_name: string | null;
       counterparty_iban: string | null;
       description: string | null;
-      transaction_group_id: string | null;
       category_id: string | null;
       category_name: string | null;
       is_transfer: number;
@@ -166,7 +152,6 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
     categoryId: r.category_id,
     categoryName: r.category_name,
     isTransfer: Boolean(r.is_transfer),
-    transactionGroupId: r.transaction_group_id,
   }));
 }
 

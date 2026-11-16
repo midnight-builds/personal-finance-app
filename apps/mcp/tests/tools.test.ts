@@ -99,7 +99,7 @@ test('search_transactions forwards validated filters with defaults to the API', 
     {
       method: 'get',
       path: '/transactions/search',
-      arg: { from: '2026-01-01', q: 'market', limit: 10, offset: 0, includeTransfers: false, includeDuplicates: false },
+      arg: { from: '2026-01-01', q: 'market', limit: 10, offset: 0, includeTransfers: false },
     },
   ]);
 });

@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'crypto';
+import { collapseDuplicateGroups } from './migrations/collapseDuplicates.js';
 
 const IN_MEMORY = ':memory:';
 
@@ -129,16 +130,9 @@ export function initDb() {
       counterparty_name TEXT,
       counterparty_iban TEXT,
       description TEXT,
-      transaction_group_id TEXT,
       FOREIGN KEY(raw_transaction_id) REFERENCES raw_transactions(id),
       FOREIGN KEY(import_session_id) REFERENCES import_sessions(id),
       FOREIGN KEY(account_id) REFERENCES accounts(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS transaction_groups (
-      id TEXT PRIMARY KEY,
-      created_at TEXT NOT NULL,
-      canonical_transaction_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS transfer_links (
@@ -287,8 +281,6 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_import_sessions_overlap ON import_sessions(overlap_key);
     CREATE INDEX IF NOT EXISTS idx_normalized_booking_date ON normalized_transactions(booking_date);
     CREATE INDEX IF NOT EXISTS idx_normalized_account_date ON normalized_transactions(account_id, booking_date);
-    CREATE INDEX IF NOT EXISTS idx_normalized_group ON normalized_transactions(transaction_group_id);
-    CREATE INDEX IF NOT EXISTS idx_transaction_groups_canonical ON transaction_groups(canonical_transaction_id);
     CREATE INDEX IF NOT EXISTS idx_normalized_counterparty_iban ON normalized_transactions(counterparty_iban);
     DROP INDEX IF EXISTS idx_catdec_tx;
     CREATE INDEX IF NOT EXISTS idx_catdec_tx_latest ON categorization_decisions(transaction_id, created_at);
@@ -381,6 +373,10 @@ export function initDb() {
       GROUP BY pattern, category_id, match_field, match_type, amount_sign
     )
   `);
+
+  // A transaction is stored once: databases that still hold re-imported
+  // copies grouped with the first one are collapsed (runs once).
+  collapseDuplicateGroups(db);
 }
 
 export type CategoryRole = 'fallback' | 'income' | 'refund';

@@ -21,7 +21,6 @@ type Transaction = {
   account: { id: string; name: string; iban: string | null };
   categoryId?: string | null;
   categoryName?: string | null;
-  groupSize?: number | null;
   transfer?: { direction: 'in' | 'out'; otherId: string | null } | null;
   isTransfer?: boolean;
   recurringDaily?: boolean;

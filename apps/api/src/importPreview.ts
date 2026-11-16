@@ -32,7 +32,6 @@ import {
   parseDate,
 } from './importer.js';
 import { cents, dayEnds, type SaldoRow } from './saldoChain.js';
-import { isCanonicalGroupRow } from './sql/transactions.js';
 
 type BookedRow = { day: string; amount: number; saldo: number | null; counterparty: string | null };
 
@@ -123,7 +122,7 @@ export function summarizeFile(records: Record<string, unknown>[], filename: stri
   };
 }
 
-/** Every account with the booked range of its rows (one per duplicate group). */
+/** Every account with the booked range of its rows. */
 export function previewAccounts(): ImportPreviewAccount[] {
   const rows = db
     .prepare(
@@ -133,7 +132,7 @@ export function previewAccounts(): ImportPreviewAccount[] {
               COUNT(t.id) AS transactionCount
        FROM accounts a
        LEFT JOIN normalized_transactions t
-         ON t.account_id = a.id AND t.booking_date IS NOT NULL AND ${isCanonicalGroupRow('t')}
+         ON t.account_id = a.id AND t.booking_date IS NOT NULL
        GROUP BY a.id
        ORDER BY a.created_at ASC, a.id ASC`
     )
@@ -326,7 +325,7 @@ function overlapScore(account: ImportPreviewAccount, rows: BookedRow[], file: Im
       `SELECT substr(t.booking_date, 1, 10) AS day, t.amount, t.counterparty_name AS counterparty
        FROM normalized_transactions t
        WHERE t.account_id = ? AND t.booking_date IS NOT NULL
-         AND t.booking_date >= ? AND t.booking_date < ? AND ${isCanonicalGroupRow('t')}`
+         AND t.booking_date >= ? AND t.booking_date < ?`
     )
     .all(account.id, from, daysBefore(to, -1)) as Array<{ day: string; amount: number; counterparty: string | null }>;
   // A charge the account pays in two or more months (a card fee, a
@@ -337,7 +336,7 @@ function overlapScore(account: ImportPreviewAccount, rows: BookedRow[], file: Im
         .prepare(
           `SELECT t.counterparty_name AS counterparty, t.amount
            FROM normalized_transactions t
-           WHERE t.account_id = ? AND t.booking_date IS NOT NULL AND ${isCanonicalGroupRow('t')}
+           WHERE t.account_id = ? AND t.booking_date IS NOT NULL
            GROUP BY t.counterparty_name, t.amount
            HAVING COUNT(DISTINCT substr(t.booking_date, 1, 7)) >= 2`
         )
