@@ -16,8 +16,8 @@ const parseListQuery = queryParser(featureProposalListQuerySchema.shape);
 
 export const featureProposalRoutes: FastifyPluginAsync = async (app) => {
   app.get('/feature-proposals', async (request) => {
-    const { status } = parseListQuery(request.query);
-    return listFeatureProposals(status);
+    const { status, changedSince } = parseListQuery(request.query);
+    return listFeatureProposals(status, changedSince);
   });
 
   app.post('/feature-proposals', async (request, reply) => {

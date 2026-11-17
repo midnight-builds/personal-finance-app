@@ -14,7 +14,9 @@ export const proposalTools: ToolDefinition[] = [
       '"accepted" = approved but not built yet, "done" = implemented (resolution names the commit ' +
       'or PR), "rejected" = will not be done (decisionNote says why). history lists every status ' +
       'change with time and note. A proposal that is new or accepted counts as open. The user may ' +
-      'edit the text of an open proposal; updatedAt is then set and the edited text is authoritative.',
+      'edit the text of an open proposal; updatedAt is then set and the edited text is authoritative. ' +
+      'To follow changes cheaply, pass changedSince = the largest changedAt you have seen: only ' +
+      'proposals created, edited or decided after it are returned, and an empty list means nothing changed.',
     inputSchema: featureProposalListQuerySchema.shape,
     annotations: READ_ONLY,
     run: (args, { api }) => api.get('/feature-proposals', args),

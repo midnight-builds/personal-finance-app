@@ -20,7 +20,7 @@ over the REST API and never opens the database.
 | `answer_recurring_question` | Records a pattern decision: recurring, subscription or not_recurring (`POST /patterns/:id/decision`) |
 | `list_pattern_decisions` | Decision history of recurring patterns with actor (`GET /patterns/decisions`) |
 | `get_glossary` | The app's terms with short definitions, generated from `GLOSSARY.md` |
-| `list_feature_proposals` | Earlier proposals and bug reports with their status, notes, resolution and history |
+| `list_feature_proposals` | Earlier proposals and bug reports with their status, notes, resolution and history; `changedSince` (largest `changedAt` seen) returns only what changed, so polling is cheap |
 | `propose_feature` | Adds a feature proposal or bug report (`kind`) to the local review queue |
 
 Three tools write: `propose_feature` adds to the review queue,
@@ -123,6 +123,13 @@ Lifecycle (`POST /feature-proposals/:id/<action>`, body `{ note?, resolution? }`
 Every change is appended to `feature_proposal_events` and returned as `history`
 (`at`, `status`, `note`, `resolution`). This is the agent's feedback channel:
 `list_feature_proposals` tells it what was fixed, where, and why something was declined.
+
+To follow the queue without re-reading it, the agent keeps the largest `changedAt`
+it has seen and calls `list_feature_proposals` with `changedSince` set to it. Only
+proposals created, edited or decided after that time come back; an empty list
+means nothing changed. There is no push notification (webhook or MCP resource
+subscription): a push would only reach a client that keeps a stream open, and the
+cheap poll covers the need.
 
 The schema lives in `packages/shared/src/featureProposals.ts` and is used by both
 the API and the MCP tool:
