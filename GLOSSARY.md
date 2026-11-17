@@ -28,12 +28,14 @@ counts it. It is one transaction from reservation to booking, with its life in
 
 - *seen again* — a later export lists the same reservation (same account,
   amount and counterparty, last listed within 35 days): not stored again
-  (`pendingSeenCount`);
+  (`pendingSeenCount`). So is an older export imported again that still lists
+  a reservation a newer export has booked;
 - *booked* — a later export has its booking (same account, amount and
   counterparty, booked from 3 days before the export that first listed it to
   35 days after the newest that did): the pending row is promoted in place,
   keeping its id, decisions and links; its raw link moves to the booked raw
-  row and the pending raw row is kept (`bookedPendingCount`). Bookings pair
+  row and the pending raw row is kept (`bookedPendingCount`). Rules
+  categorize it again from the booked text unless its category is manual. Bookings pair
   one-to-one, in day order, with the oldest reservation first;
 - *void* — a newer export of its period lists it neither pending nor booked
   (a cancelled authorisation, or a booking with another amount): kept, but
@@ -41,7 +43,8 @@ counts it. It is one transaction from reservation to booking, with its life in
   pending again by a newer export, it is pending again.
 
 An export's day is its latest booked day (an export does not say when it was
-made). "Newer export of its period": its latest booked day is on or after
+made); a file of reservations only takes the account's latest booked day.
+"Newer export of its period": its latest booked day is on or after
 that of the newest export that listed the reservation, and its booked rows
 reach back 3 days before the export that first listed it. A shorter or older
 export changes nothing.

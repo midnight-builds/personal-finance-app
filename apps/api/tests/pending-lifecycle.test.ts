@@ -105,6 +105,47 @@ test('the booked version promotes the pending row in place', async () => {
   assert.equal(again.duplicateCount, 13);
 });
 
+const latestCategory = (id: string) =>
+  (db.prepare('SELECT category_id AS c, source FROM categorization_decisions WHERE transaction_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(id) as { c: string; source: string });
+const categoryNamed = (name: string) => (db.prepare('SELECT id FROM categories WHERE name = ?').get(name) as { id: string }).id;
+
+test('a booking is categorized again from its booked text, unless the user chose', async () => {
+  await run([pending('Kortti 1234'), pending('Kortti 5678'), ...filler(1, 10)]);
+  const [auto] = rowsOf('Kortti 1234');
+  const [manual] = rowsOf('Kortti 5678');
+  const leisure = categoryNamed('Viihde ja harrastukset');
+  appendDecision({ transactionId: manual.id, categoryId: leisure, source: 'user', actor: 'user' });
+  // The booked rows name the shop in their text: a built-in rule knows it.
+  await run([
+    rec('2026/10/11', 'Kortti 1234', '-4,50', 'K-Market Esimerkki'),
+    rec('2026/10/11', 'Kortti 5678', '-4,50', 'K-Market Esimerkki'),
+    ...filler(1, 11),
+  ]);
+  assert.equal(latestCategory(auto.id).c, categoryNamed('Ruoka ja päivittäistavarat'));
+  assert.equal(latestCategory(manual.id).c, leisure, 'manual beats rule');
+});
+
+test('an older export imported again after the booking adds no pending row', async () => {
+  const older = [pending('Kahvila Papu'), ...filler(1, 10)];
+  await run(older);
+  await run([rec('2026/10/12', 'Kahvila Papu'), ...filler(1, 12)]);
+  const again = await run(older);
+  assert.equal(again.normalizedCount, 0);
+  assert.equal(again.pendingSeenCount, 1);
+  assert.deepEqual(rowsOf('Kahvila Papu').map((x) => x.status), ['booked']);
+  // A newer export listing such a reservation is another one.
+  const newer = await run([pending('Kahvila Papu'), ...filler(1, 13)]);
+  assert.equal(newer.normalizedCount, 2);
+});
+
+test('a file of reservations only is dated by the account, so a later export books them', async () => {
+  await run(filler(1, 10));
+  await run([pending('Kahvila Papu')]);
+  const r = await run([rec('2026/10/11', 'Kahvila Papu'), ...filler(1, 11)]);
+  assert.equal(r.bookedPendingCount, 1);
+  assert.deepEqual(rowsOf('Kahvila Papu').map((x) => x.status), ['booked']);
+});
+
 test('one of two identical pending rows booked: one booked, one still pending', async () => {
   await run([pending('Kahvila Papu'), pending('Kahvila Papu'), ...filler(1, 10)]);
   const r = await run([pending('Kahvila Papu'), rec('2026/10/11', 'Kahvila Papu'), ...filler(1, 11)]);

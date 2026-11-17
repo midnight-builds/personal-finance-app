@@ -9,6 +9,8 @@ import { runBriefing } from './briefing.js';
 import { generateRuleSuggestions } from './ruleSuggestions.js';
 import { daysBefore, today } from './ledger.js';
 import { DomainError } from './http/errors.js';
+import { isManual } from './categorization.js';
+import { LATEST_DECISION_ORDER } from './sql/transactions.js';
 import { dayEnds, type SaldoRow } from './saldoChain.js';
 import type { AccountSubtype } from '@finance-app/shared';
 
@@ -570,7 +572,8 @@ type PendingCandidate = {
   amount: number;
   counterparty: string | null;
   createdAt: string;
-  status: 'pending' | 'void';
+  /** `booked`: a reservation already booked, only for recognising an older export that still lists it. */
+  status: 'pending' | 'void' | 'booked';
   firstSeenDay: string;
   lastSeenDay: string;
   resolvedDay: string | null;
@@ -646,7 +649,9 @@ const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
  * 2. A pending row the account already has as pending (same amount and
  *    counterparty, last listed within PENDING_MAX_AGE_DAYS) is seen again and
  *    not stored. Of several, the most recently seen one is taken: the
- *    reservations still pending are the newest.
+ *    reservations still pending are the newest. A reservation already booked
+ *    by an export at least as new as this file counts too (last): an older
+ *    export imported again lists it pending.
  * 3. Any other booked row may be the booking of a stored reservation: same
  *    amount and counterparty, dated from PENDING_BACKDATE_DAYS before the
  *    export that first listed it to PENDING_MAX_AGE_DAYS after the newest that
@@ -688,14 +693,15 @@ function planRows(rows: FileRow[], accountId: string, fileDay: string): { action
       .prepare(
         `SELECT t.id, t.amount, t.counterparty_name, t.created_at, p.status, p.first_seen_day, p.last_seen_day, p.resolved_day
          FROM normalized_transactions t JOIN pending_transactions p ON p.transaction_id = t.id
-         WHERE t.account_id = ? AND t.booking_date IS NULL AND p.status IN ('pending', 'void')`
+         WHERE t.account_id = ?
+           AND ((t.booking_date IS NULL AND p.status IN ('pending', 'void')) OR p.status = 'booked')`
       )
       .all(accountId) as Array<{
       id: string;
       amount: number;
       counterparty_name: string | null;
       created_at: string;
-      status: 'pending' | 'void';
+      status: 'pending' | 'void' | 'booked';
       first_seen_day: string;
       last_seen_day: string;
       resolved_day: string | null;
@@ -713,14 +719,20 @@ function planRows(rows: FileRow[], accountId: string, fileDay: string): { action
     })
   );
   const claimed = new Set<string>();
-  const pendingFirst = (a: PendingCandidate, b: PendingCandidate) => (a.status === b.status ? 0 : a.status === 'pending' ? -1 : 1);
+  const RANK = { pending: 0, void: 1, booked: 2 } as const;
+  const pendingFirst = (a: PendingCandidate, b: PendingCandidate) => RANK[a.status] - RANK[b.status];
+  /**
+   * A booked reservation still listed pending by this file: the file is not
+   * newer than the export that booked it (an older export imported again).
+   */
+  const bookedLater = (c: PendingCandidate) => c.status !== 'booked' || (c.resolvedDay !== null && fileDay <= c.resolvedDay);
 
   // 2. Reservations seen again: the most recently seen first.
   const recentEnough = daysBefore(fileDay, PENDING_MAX_AGE_DAYS);
   for (const r of rows) {
     if (r.amount === null || r.day) continue;
     const pick = candidates
-      .filter((c) => !claimed.has(c.id) && sameKey(c, r) && c.lastSeenDay >= recentEnough)
+      .filter((c) => !claimed.has(c.id) && sameKey(c, r) && c.lastSeenDay >= recentEnough && bookedLater(c))
       .sort(
         (a, b) =>
           pendingFirst(a, b) ||
@@ -745,6 +757,7 @@ function planRows(rows: FileRow[], accountId: string, fileDay: string): { action
       .filter(
         (c) =>
           !claimed.has(c.id) &&
+          c.status !== 'booked' &&
           sameKey(c, r) &&
           day >= daysBefore(c.firstSeenDay, PENDING_BACKDATE_DAYS) &&
           day <= daysBefore(c.lastSeenDay, -PENDING_MAX_AGE_DAYS)
@@ -804,8 +817,11 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
   const bookedDays = rows.map((r) => r.day).filter((d): d is string => d !== null).sort();
   const firstDay = bookedDays[0] ?? null;
   const lastDay = bookedDays[bookedDays.length - 1] ?? null;
-  // The export's day: its latest booked day (an export does not say when it was made).
-  const fileDay = lastDay ?? today();
+  // The export's day: its latest booked day (an export does not say when it
+  // was made). Set once the account is known: a file of reservations only
+  // takes the account's latest booked day, so a later export's bookings of
+  // them still fall in their window; an account without any, today.
+  let fileDay = lastDay ?? today();
 
   // One transaction up to COMMIT: a failed or interrupted import leaves no
   // account, session or rows behind, and never rows that are not yet linked
@@ -819,6 +835,13 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
     overlapRow = db
       .prepare('SELECT id, row_count FROM import_sessions WHERE overlap_key = ?')
       .get(overlapKey) as { id: string; row_count: number } | undefined;
+
+    if (!lastDay) {
+      const latest = db
+        .prepare('SELECT MAX(substr(booking_date, 1, 10)) AS d FROM normalized_transactions WHERE account_id = ? AND booking_date IS NOT NULL')
+        .get(accountId) as { d: string | null };
+      if (latest.d) fileDay = latest.d;
+    }
 
     // Decided before this import writes a row, so its own rows are never matched.
     const { actions, unclaimed } = planRows(rows, accountId, fileDay);
@@ -864,7 +887,9 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
       `UPDATE pending_transactions SET status = ?, resolved_session_id = ?, resolved_day = ?, resolved_at = ?
        WHERE transaction_id = ? AND status IN ('pending', 'void')`
     );
-    const hasDecision = db.prepare('SELECT 1 FROM categorization_decisions WHERE transaction_id = ? LIMIT 1');
+    const latestDecisionSource = db.prepare(
+      `SELECT source FROM categorization_decisions WHERE transaction_id = ? ORDER BY ${LATEST_DECISION_ORDER} LIMIT 1`
+    );
     const insertBalance = db.prepare(
       'INSERT OR REPLACE INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES (?, ?, ?, ?, ?, ?)'
     );
@@ -919,8 +944,9 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
 
       if (action.kind === 'pending_seen') {
         // The same reservation again: not stored again, only seen later.
-        seenAgain.run(importSessionId, fileDay, fileDay, fileDay, fileDay, fileDay, action.target.id);
         pendingSeenCount += 1;
+        if (action.target.status === 'booked') continue;
+        seenAgain.run(importSessionId, fileDay, fileDay, fileDay, fileDay, fileDay, action.target.id);
         continue;
       }
 
@@ -933,7 +959,10 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
         const id = action.target.id;
         promote.run(rawId, bookingDate, bookingDate, currency, r.description, r.counterpartyIban, id);
         resolvePending.run('booked', importSessionId, fileDay, now, id);
-        if (!hasDecision.get(id)) categorize(id, r);
+        // The booked text may say more than the reservation's: rules decide
+        // again, unless the user chose the category (manual beats rule).
+        const latest = latestDecisionSource.get(id) as { source: string } | undefined;
+        if (!latest || !isManual(id, latest)) categorize(id, r);
         linkIds.push(id);
         bookedPendingCount += 1;
         continue;
