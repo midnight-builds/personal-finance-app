@@ -183,3 +183,29 @@ test('updateFeatureProposal refuses final statuses, unknown ids and duplicate op
     (e) => e instanceof DomainError && e.statusCode === 404
   );
 });
+
+test('changedSince returns proposals created, edited or decided after the given time', () => {
+  const created = createFeatureProposal(valid).proposal;
+  const edited = createFeatureProposal({ ...valid, title: 'Edited later' }).proposal;
+  const decided = createFeatureProposal({ ...valid, title: 'Decided later' }).proposal;
+  const quiet = createFeatureProposal({ ...valid, title: 'Nothing happened' }).proposal;
+  db.exec("UPDATE feature_proposals SET created_at = '2026-01-01T00:00:00.000Z'");
+  db.prepare("UPDATE feature_proposals SET created_at = '2026-03-01T00:00:00.000Z' WHERE id = ?").run(created.id);
+  updateFeatureProposal(edited.id, { problem: 'Reworded problem statement for the proposal.' });
+  resolveFeatureProposal(decided.id, 'accepted', 'go');
+
+  const since = '2026-02-01T00:00:00.000Z';
+  const ids = listFeatureProposals(undefined, since).map((p) => p.id).sort();
+  assert.deepEqual(ids, [created.id, edited.id, decided.id].sort());
+  assert.ok(!ids.includes(quiet.id));
+  assert.deepEqual(listFeatureProposals('accepted', since).map((p) => p.id), [decided.id]);
+});
+
+test('changedAt is the latest of creation, edit and status change', () => {
+  const p = createFeatureProposal(valid).proposal;
+  assert.equal(p.changedAt, p.createdAt);
+  const decided = resolveFeatureProposal(p.id, 'accepted', 'go');
+  assert.equal(decided.changedAt, decided.resolvedAt);
+  const cursor = decided.changedAt;
+  assert.deepEqual(listFeatureProposals(undefined, cursor), []);
+});

@@ -16,7 +16,7 @@ over the REST API and never opens the database.
 | `plan_categorization` | Works out a categorization change without writing (`POST /categorization/plan`) |
 | `apply_categorization` | Applies a planned change with its plan token (`POST /categorization/apply`) |
 | `list_category_changes`, `get_category_change` | Change log of categorization: who changed what, and undo state (`GET /categorization/change-sets[/:id]`) |
-| `list_feature_proposals` | Earlier proposals and bug reports with their status, notes, resolution and history |
+| `list_feature_proposals` | Earlier proposals and bug reports with their status, notes, resolution and history; `changedSince` (largest `changedAt` seen) returns only what changed, so polling is cheap |
 | `propose_feature` | Adds a feature proposal or bug report (`kind`) to the local review queue |
 
 Two tools write: `propose_feature` adds to the review queue, and
@@ -96,6 +96,13 @@ Lifecycle (`POST /feature-proposals/:id/<action>`, body `{ note?, resolution? }`
 Every change is appended to `feature_proposal_events` and returned as `history`
 (`at`, `status`, `note`, `resolution`). This is the agent's feedback channel:
 `list_feature_proposals` tells it what was fixed, where, and why something was declined.
+
+To follow the queue without re-reading it, the agent keeps the largest `changedAt`
+it has seen and calls `list_feature_proposals` with `changedSince` set to it. Only
+proposals created, edited or decided after that time come back; an empty list
+means nothing changed. There is no push notification (webhook or MCP resource
+subscription): a push would only reach a client that keeps a stream open, and the
+cheap poll covers the need.
 
 The schema lives in `packages/shared/src/featureProposals.ts` and is used by both
 the API and the MCP tool:

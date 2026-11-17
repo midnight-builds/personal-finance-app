@@ -83,6 +83,11 @@ export const featureProposalDecisionSchema = z.object({
 
 export const featureProposalListQuerySchema = z.object({
   status: z.enum(FEATURE_PROPOSAL_STATUSES).optional(),
+  /**
+   * Only proposals created, edited or decided strictly after this time. Pass the
+   * largest `changedAt` seen so far; an empty list means nothing has changed.
+   */
+  changedSince: z.string().datetime({ offset: true }).optional(),
 });
 
 /** One status change, oldest first in `FeatureProposal.history`. */
@@ -105,6 +110,8 @@ export type FeatureProposal = z.output<typeof featureProposalInputSchema> & {
   decisionNote: string | null;
   /** Set when `status` is `done`. */
   resolution: string | null;
+  /** Latest of createdAt, updatedAt and resolvedAt: the cursor for `changedSince`. */
+  changedAt: string;
   history: FeatureProposalEvent[];
 };
 
