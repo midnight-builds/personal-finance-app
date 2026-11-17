@@ -140,6 +140,9 @@ export type RecurringPattern = {
   last_seen: string;
   occurrence_count: number;
   is_active: number;
+  state?: 'unconfirmed' | 'confirmed_recurring' | 'confirmed_subscription' | 'rejected';
+  confidence?: number | null;
+  established?: boolean | null;
 };
 
 export type InsightFinding = {
@@ -173,15 +176,23 @@ export type PatternConfirmationRecord = {
   status: string;
 };
 
-export type ForecastItem = { counterparty: string; amount: number };
+export type ForecastItem = { counterparty: string; amount: number; patternId?: string; confidence?: number | null };
 export type AnnualForecastItem = { counterparty: string; amount: number; month: number };
 export type MonthlyForecast = {
   targetMonth: string;
+  /** Established patterns: confirmed, or confident enough. */
   knownFixed: ForecastItem[];
   historicalAvg: number;
   annualItems: AnnualForecastItem[];
   projectedTotal: number;
+  knownFixedTotal: number;
+  /** Unconfirmed patterns below the confidence threshold, kept apart. */
+  uncertainRecurring: ForecastItem[];
+  uncertainRecurringTotal: number;
+  projectedTotalWithUncertain: number;
 };
+
+export type PatternDecision = 'recurring' | 'subscription' | 'not_recurring';
 
 export type ImportResult = {
   importSessionId: string;
@@ -461,6 +472,16 @@ export async function rejectPatternConfirmation(id: string): Promise<void> {
 // ============================================================================
 // Recurring Patterns
 // ============================================================================
+
+/** Answers "Onko tämä toistuva?" for a monthly or weekly pattern; recorded as the user's decision. */
+export async function decidePattern(patternId: string, decision: PatternDecision): Promise<void> {
+  const res = await safeFetch(`${API}/patterns/${encodeURIComponent(patternId)}/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  });
+  if (!res.ok) throw new Error(`decidePattern failed: ${res.statusText}`);
+}
 
 export async function getSubscriptions(): Promise<RecurringPattern[]> {
   const res = await safeFetch(`${API}/subscriptions`);

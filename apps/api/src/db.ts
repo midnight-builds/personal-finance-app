@@ -309,6 +309,26 @@ export function initDb() {
 
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN typical_month INTEGER`);
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN user_confirmed INTEGER`);
+  // Evidence of a monthly/weekly pattern, set by detection (patterns.ts, `scorePattern`).
+  safeExec(`ALTER TABLE recurring_patterns ADD COLUMN confidence REAL`);
+  safeExec(`ALTER TABLE recurring_patterns ADD COLUMN confidence_factors TEXT`);
+  safeExec(`ALTER TABLE recurring_patterns ADD COLUMN amount_fixed INTEGER`);
+  safeExec(`ALTER TABLE recurring_patterns ADD COLUMN payment_method TEXT`);
+  // What the user or an agent said a pattern is. History: rows are appended, never
+  // changed; the latest per account and counterparty is the decision. Detection
+  // never writes here, so a decision survives every re-detection.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pattern_decisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      account_id TEXT NOT NULL REFERENCES accounts(id),
+      counterparty_name TEXT NOT NULL,
+      pattern_id TEXT NOT NULL,
+      decision TEXT NOT NULL CHECK (decision IN ('recurring', 'subscription', 'not_recurring')),
+      actor TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pattern_decisions_key ON pattern_decisions(account_id, counterparty_name, id);
+  `);
 
   safeExec(`ALTER TABLE feature_proposals ADD COLUMN kind TEXT NOT NULL DEFAULT 'feature'`);
   safeExec(`ALTER TABLE feature_proposals ADD COLUMN resolution TEXT`);

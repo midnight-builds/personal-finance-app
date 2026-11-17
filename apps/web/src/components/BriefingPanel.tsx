@@ -3,6 +3,7 @@ import { getLatestBriefing, dismissFinding } from '../api/client';
 import type { BriefingSession } from '../api/client';
 import FindingCard from './FindingCard';
 import PatternConfirmationCard from './PatternConfirmationCard';
+import RecurringQuestionCard from './RecurringQuestionCard';
 
 type BriefingPanelProps = {
   setToast: (v: string) => void;
@@ -61,6 +62,13 @@ export default function BriefingPanel({ setToast, onFilterTransactions, refreshK
               finding={finding}
               onResolved={handleResolved}
               setToast={setToast}
+            />
+          ) : finding.findingType === 'recurring_question' ? (
+            <RecurringQuestionCard
+              finding={finding}
+              onResolved={handleResolved}
+              setToast={setToast}
+              onShowTransactions={onFilterTransactions}
             />
           ) : (
             <>

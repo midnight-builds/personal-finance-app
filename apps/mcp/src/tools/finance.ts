@@ -86,8 +86,12 @@ const dataTools: ToolDefinition[] = [
     readEndpoint(
       'get_forecast',
       'Forecast',
-      'Forecast of upcoming months based on recurring and annual patterns. meta.forecastStartMonth is the first ' +
-        'forecast month (YYYY-MM).',
+      'Forecast of upcoming months based on recurring and annual patterns. Per month: knownFixed (established ' +
+        'monthly/weekly patterns: confirmed, or confidence >= 0.75) with knownFixedTotal; uncertainRecurring ' +
+        '(unconfirmed patterns below 0.75, maybe fixed costs) with uncertainRecurringTotal; annualItems; ' +
+        'historicalAvg (same month in earlier years); projectedTotal = max(historicalAvg, knownFixedTotal) + annual ' +
+        'items, and projectedTotalWithUncertain as if every uncertain pattern were a fixed cost. Patterns the user ' +
+        'rejected are left out. meta.forecastStartMonth is the first forecast month (YYYY-MM).',
       '/forecast'
     ),
     forecastStart
@@ -110,7 +114,12 @@ const dataTools: ToolDefinition[] = [
   readEndpoint(
     'list_recurring',
     'Recurring payments',
-    'Active recurring patterns (subscriptions, monthly and annual payments).',
+    'Active recurring patterns (subscriptions, monthly and annual payments), the user\'s decisions applied: ' +
+      'pattern_type is the decided type when there is one (detected_type is what detection found), state is ' +
+      'unconfirmed, confirmed_recurring or confirmed_subscription, user_confirmed 1 when confirmed, confidence ' +
+      '(0-1) with confidence_factors, established (counts as a fixed cost and, as a subscription, in the ' +
+      'subscription total), decided_by and decided_at. Patterns the user rejected are not listed ' +
+      '(list_pattern_decisions has them). The id is the patternId of answer_recurring_question.',
     '/recurring'
   ),
 ];

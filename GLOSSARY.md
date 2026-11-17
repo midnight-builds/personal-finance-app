@@ -140,19 +140,56 @@ cash withdrawal missing from the export.
 detected from its countable expenses in the last 180 days (`patterns.ts`).
 Monthly or weekly patterns need at least three charges with a steady interval
 and amount; two charges are one interval and prove nothing. The forecast
-counts every active monthly/weekly pattern as a fixed cost. Stored as
-`recurring_patterns`; `pattern_type` is `recurring`, `subscription` or
-`annual`.
+counts established ones as fixed costs and lists uncertain ones apart. Stored
+as `recurring_patterns`; `pattern_type` is `recurring`, `subscription` or
+`annual`, with a pattern decision applied (`patternDecisions.ts`).
 
 **Subscription** — a recurring pattern told apart by its charges, not by who
 the merchant is: the same amount every time, booked on about the same day
 each month (3 days early to 5 days late), with no other charge to the
 counterparty in between. A counterparty paid only to an IBAN (a person, an
-e-invoice biller) is never one. Fixed monthly savings paid by card look the
-same and are counted as subscriptions too.
+e-invoice biller) is never one unless the user says so. Fixed monthly savings
+paid by card look the same, so every unconfirmed subscription is a recurring
+question. The monthly subscription total and the subscription-creep finding
+count established subscriptions only.
 
 **Recurring (pattern type)** — a monthly or weekly pattern that is not a
 subscription: varying amount or day, or paid to an IBAN.
+
+**Confidence (of a pattern)** — how strongly a monthly or weekly pattern's
+charges show a steady rhythm, 0–1, scored at detection (`scorePattern`):
+0.4 × charges + 0.3 × interval + 0.3 × amount, where charges = min(1, (n − 2) / 3)
+for n charges, interval = max(0, 1 − cv / 0.5) of the days between charges and
+amount = max(0, 1 − cv / 0.15) of the amounts (cv: standard deviation over
+mean). Three charges never reach 0.75; four steady ones do. The factors are
+returned with it.
+
+**Established pattern** — a monthly or weekly pattern that counts as a fixed
+cost (and, if a subscription, in the subscription total): confirmed by a
+pattern decision, or unconfirmed with confidence at least 0.75 (`CONFIDENT`).
+
+**Uncertain pattern** — an unconfirmed monthly or weekly pattern below 0.75.
+The forecast lists it in `uncertainRecurring`, outside `knownFixed` and
+`projectedTotal`.
+
+**Pattern decision** — what the user or an agent (its actor) says a monthly or
+weekly pattern is: `recurring`, `subscription` or `not_recurring`. Its state is
+then `confirmed_recurring`, `confirmed_subscription` or `rejected`; without one
+it is `unconfirmed`. Decisions are history in `pattern_decisions`, keyed by
+account and counterparty: a new one is appended, the latest counts, and
+re-stating it appends nothing. Detection never writes them, so they survive
+every re-detection. A decision sets the pattern's type; a rejected pattern is
+left out of the forecast, totals, briefing and `/recurring`, and never asked
+about again. A decided pattern is deactivated only when its charges stop, and
+its decision applies again if they resume.
+_Avoid_: user_confirmed (the legacy flag of confirmed annual patterns)
+
+**Recurring question** — "Onko tämä toistuva?": an unconfirmed monthly or
+weekly pattern offered to the user, with its charges as evidence, because its
+confidence is below 0.75 or its amount is the same every time (paid to an IBAN
+it may be savings, rent or a person; by card, savings or a subscription). A
+steady bill of varying amount is not asked. Answered with a pattern decision
+(`GET /patterns/questions`, `POST /patterns/:id/decision`).
 
 **Annual pattern** — a charge about once a year (330–400 days apart), or one
 the user confirmed as annual.

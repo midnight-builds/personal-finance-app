@@ -51,7 +51,67 @@ function isSubscription(occurrences: Array<{ amount: number; date: string; viaIb
  */
 const MIN_OCCURRENCES = 3;
 
-type Occurrence = { counterparty: string; amount: number; date: string; viaIban: boolean };
+type Occurrence = { id: string; counterparty: string; amount: number; date: string; viaIban: boolean };
+type Charge = Omit<Occurrence, 'counterparty' | 'id'>;
+
+/**
+ * Confidence a monthly or weekly pattern reaches without the user's word: from this
+ * on it counts as a fixed cost in the forecast and, if a subscription, in the
+ * subscription total. Below it the pattern is uncertain (GLOSSARY.md).
+ */
+export const CONFIDENT = 0.75;
+
+export type ConfidenceFactors = { charges: number; interval: number; amount: number };
+export type PatternScore = {
+  confidence: number;
+  factors: ConfidenceFactors;
+  /** Every charge had the same amount, to the cent. */
+  amountFixed: boolean;
+  /** `account_payment`: every charge went to an IBAN (a person or an e-invoice biller); `card`: none did. */
+  paymentMethod: 'account_payment' | 'card' | 'mixed';
+};
+
+const round2 = (x: number) => Math.round(x * 100) / 100;
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+
+/** Coefficient of variation: population standard deviation over the mean (0 for a single value). */
+function variation(xs: number[]): number {
+  const mean = xs.reduce((s, x) => s + x, 0) / xs.length;
+  if (mean === 0) return 0;
+  const variance = xs.reduce((s, x) => s + (x - mean) ** 2, 0) / xs.length;
+  return Math.sqrt(variance) / mean;
+}
+
+/**
+ * How strongly a pattern's charges (in date order) show a steady rhythm, 0–1:
+ *
+ *   confidence = 0.4 × charges + 0.3 × interval + 0.3 × amount
+ *   charges  = min(1, (n − 2) / 3)               3 charges 0.33, 4 0.67, 5+ 1
+ *   interval = max(0, 1 − cv(days between) / 0.5)
+ *   amount   = max(0, 1 − cv(amounts) / 0.15)
+ *
+ * cv is the coefficient of variation. Factors and the result are rounded to two
+ * decimals, so the stored factors reproduce the confidence. Three charges never reach
+ * CONFIDENT; four steady ones do.
+ */
+export function scorePattern(charges: Charge[]): PatternScore {
+  const days = charges.map((c) => Date.parse(c.date.slice(0, 10)) / 86400_000);
+  const intervals = days.slice(1).map((d, i) => d - days[i]);
+  const amounts = charges.map((c) => Math.abs(c.amount));
+  const factors: ConfidenceFactors = {
+    charges: round2(clamp01((charges.length - 2) / 3)),
+    interval: round2(intervals.length === 0 ? 0 : clamp01(1 - variation(intervals) / 0.5)),
+    amount: round2(clamp01(1 - variation(amounts) / 0.15)),
+  };
+  const cents = Math.round(amounts[0] * 100);
+  const viaIban = charges.filter((c) => c.viaIban).length;
+  return {
+    confidence: round2(0.4 * factors.charges + 0.3 * factors.interval + 0.3 * factors.amount),
+    factors,
+    amountFixed: amounts.every((a) => Math.round(a * 100) === cents),
+    paymentMethod: viaIban === charges.length ? 'account_payment' : viaIban === 0 ? 'card' : 'mixed',
+  };
+}
 
 /**
  * An account's countable expenses with a counterparty since `from`, ordered by
@@ -73,6 +133,7 @@ function recurringCandidates(entries: LedgerEntry[], from: string): Occurrence[]
         !transferCounterparties.has(e.counterparty)
     )
     .map((e) => ({
+      id: e.id,
       counterparty: e.counterparty!,
       amount: e.amount,
       date: e.bookedAt,
@@ -85,7 +146,7 @@ function recurringCandidates(entries: LedgerEntry[], from: string): Occurrence[]
 const binary = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 function byCounterparty(rows: Occurrence[]) {
-  const groups = new Map<string, Array<{ amount: number; date: string; viaIban: boolean }>>();
+  const groups = new Map<string, Charge[]>();
   for (const r of rows) {
     if (!groups.has(r.counterparty)) groups.set(r.counterparty, []);
     groups.get(r.counterparty)!.push({ amount: r.amount, date: r.date, viaIban: r.viaIban });
@@ -93,12 +154,30 @@ function byCounterparty(rows: Occurrence[]) {
   return groups;
 }
 
+/** Detection window of monthly and weekly patterns, in days up to the detection day. */
+const WINDOW_DAYS = 180;
+
+/**
+ * The charges a monthly/weekly pattern rests on: the account's countable expenses to
+ * the counterparty in the detection window ending on `lastSeen` (the pattern's last charge),
+ * found exactly as detection finds them. Oldest first.
+ */
+export function patternCharges(accountId: string, counterparty: string, lastSeen: string): Occurrence[] {
+  const to = lastSeen.slice(0, 10);
+  const entries = ledgerEntries({ accounts: [accountId], to, includeTransfers: true });
+  return recurringCandidates(entries, daysBefore(to, WINDOW_DAYS)).filter((o) => o.counterparty === counterparty);
+}
+
+const SCORE_COLUMNS = ['confidence', 'confidence_factors', 'amount_fixed', 'payment_method'] as const;
+const scoreValues = (s: PatternScore) =>
+  [s.confidence, JSON.stringify(s.factors), s.amountFixed ? 1 : 0, s.paymentMethod] as const;
+
 /** Detects recurring, annual and confirmation-worthy payments of one account as of `asOf` (default: today). */
 export function detectPatterns(accountId: string, asOf: string = today()): void {
   const now = new Date().toISOString();
   // Transfers are included only to find the counterparties to leave out.
   const entries = ledgerEntries({ accounts: [accountId], to: asOf, includeTransfers: true });
-  const rows = recurringCandidates(entries, daysBefore(asOf, 180));
+  const rows = recurringCandidates(entries, daysBefore(asOf, WINDOW_DAYS));
   const groups = byCounterparty(rows);
   const detected = new Set<string>();
 
@@ -129,6 +208,7 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
     if (!consistent) continue;
 
     const patternType = isSubscription(sorted) ? 'subscription' : 'recurring';
+    const score = scorePattern(sorted);
     detected.add(counterparty);
     const firstSeen = sorted[0].date;
     const lastSeen = sorted[sorted.length - 1].date;
@@ -142,18 +222,19 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
       db.prepare(`
         UPDATE recurring_patterns
         SET updated_at = ?, pattern_type = ?, interval_days = ?, typical_amount = ?,
-            last_seen = ?, occurrence_count = ?, is_active = 1
+            last_seen = ?, occurrence_count = ?, is_active = 1, ${SCORE_COLUMNS.map((c) => `${c} = ?`).join(', ')}
         WHERE id = ?
-      `).run(now, patternType, Math.round(avgInterval), avgAmount, lastSeen, sorted.length, existing.id);
+      `).run(now, patternType, Math.round(avgInterval), avgAmount, lastSeen, sorted.length, ...scoreValues(score), existing.id);
     } else {
       db.prepare(`
         INSERT INTO recurring_patterns
           (id, created_at, updated_at, account_id, counterparty_name, pattern_type,
-           interval_days, typical_amount, currency, first_seen, last_seen, occurrence_count, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EUR', ?, ?, ?, 1)
+           interval_days, typical_amount, currency, first_seen, last_seen, occurrence_count, is_active,
+           ${SCORE_COLUMNS.join(', ')})
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EUR', ?, ?, ?, 1, ?, ?, ?, ?)
       `).run(
         crypto.randomUUID(), now, now, accountId, counterparty, patternType,
-        Math.round(avgInterval), avgAmount, firstSeen, lastSeen, sorted.length
+        Math.round(avgInterval), avgAmount, firstSeen, lastSeen, sorted.length, ...scoreValues(score)
       );
     }
   }
@@ -170,27 +251,45 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
  * found on fewer than MIN_OCCURRENCES charges was detected on too little evidence, and one
  * with fewer such charges left in the window has stopped: both are deactivated. Otherwise
  * it stays active, since a varying price or a skipped month says nothing against a known
- * bill, but a subscription that no longer qualifies as one becomes recurring.
- * User-confirmed patterns stay as is.
+ * bill, but a subscription that no longer qualifies as one becomes recurring; its
+ * confidence is scored again from the charges left.
+ * A pattern with a user decision (pattern_decisions) is only ever deactivated when it
+ * has stopped; the decision itself is not touched and applies again if the charges
+ * resume. User-confirmed annual patterns stay as is.
  */
 function reviseUndetected(
   accountId: string,
-  groups: Map<string, Array<{ amount: number; date: string; viaIban: boolean }>>,
+  groups: Map<string, Charge[]>,
   detected: Set<string>,
   now: string
 ): void {
   const rows = db.prepare(`
-    SELECT id, counterparty_name, pattern_type, occurrence_count FROM recurring_patterns
-    WHERE account_id = ? AND is_active = 1 AND pattern_type IN ('subscription', 'recurring')
-      AND user_confirmed IS NOT 1
-  `).all(accountId) as Array<{ id: string; counterparty_name: string | null; pattern_type: string; occurrence_count: number }>;
+    SELECT p.id, p.counterparty_name, p.pattern_type, p.occurrence_count,
+           EXISTS (SELECT 1 FROM pattern_decisions d
+                   WHERE d.account_id = p.account_id AND d.counterparty_name = p.counterparty_name) AS decided
+    FROM recurring_patterns p
+    WHERE p.account_id = ? AND p.is_active = 1 AND p.pattern_type IN ('subscription', 'recurring')
+      AND p.user_confirmed IS NOT 1
+  `).all(accountId) as Array<{
+    id: string; counterparty_name: string | null; pattern_type: string; occurrence_count: number; decided: number;
+  }>;
   const deactivate = db.prepare('UPDATE recurring_patterns SET is_active = 0, updated_at = ? WHERE id = ?');
   const demote = db.prepare("UPDATE recurring_patterns SET pattern_type = 'recurring', updated_at = ? WHERE id = ?");
+  const rescore = db.prepare(
+    `UPDATE recurring_patterns SET ${SCORE_COLUMNS.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`
+  );
   for (const r of rows) {
     if (r.counterparty_name !== null && detected.has(r.counterparty_name)) continue;
     const occurrences = r.counterparty_name === null ? [] : groups.get(r.counterparty_name) ?? [];
-    if (r.occurrence_count < MIN_OCCURRENCES || occurrences.length < MIN_OCCURRENCES) deactivate.run(now, r.id);
-    else if (r.pattern_type === 'subscription' && !isSubscription(occurrences)) demote.run(now, r.id);
+    const stopped = occurrences.length < MIN_OCCURRENCES;
+    const tooLittleEvidence = r.occurrence_count < MIN_OCCURRENCES && !r.decided;
+    if (stopped || tooLittleEvidence) {
+      deactivate.run(now, r.id);
+      continue;
+    }
+    const sorted = [...occurrences].sort((a, b) => a.date.localeCompare(b.date));
+    rescore.run(...scoreValues(scorePattern(sorted)), r.id);
+    if (r.pattern_type === 'subscription' && !isSubscription(sorted)) demote.run(now, r.id);
   }
 }
 
@@ -198,8 +297,9 @@ function reviseUndetected(
  * Version of the detection rules. Bump it when they change, so the stored patterns of
  * every account are re-detected on the next API start instead of the next import.
  * 2: three charges minimum, subscriptions told by their charges (2026-11).
+ * 3: confidence, amount_fixed and payment_method scored for every pattern (2026-11).
  */
-export const PATTERN_RULES_VERSION = '2';
+export const PATTERN_RULES_VERSION = '3';
 const RULES_VERSION_KEY = 'patternRulesVersion';
 
 /** Re-runs detection for every account, in one transaction, once per rules version. Returns whether it ran. */

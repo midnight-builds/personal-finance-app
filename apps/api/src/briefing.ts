@@ -3,6 +3,7 @@ import { db } from './db.js';
 import { getOpenAIApiKey } from './settings.js';
 import { enhanceBriefingDescriptions } from './ai/briefingEnhancer.js';
 import { listPendingConfirmations } from './patternConfirmations.js';
+import { activePatterns, establishedSubscriptions, recurringQuestions } from './patternDecisions.js';
 import { computeMonthlyForecast } from './forecast.js';
 import { accountBalances, daysBefore, ledgerEntries, ledgerTotals, today } from './ledger.js';
 
@@ -23,12 +24,12 @@ function fmt(n: number) {
 // ── Generators ────────────────────────────────────────────────────
 
 function subscriptionCreep(): FindingInput[] {
-  const subs = db.prepare(`
-    SELECT counterparty_name, typical_amount, account_id, created_at
-    FROM recurring_patterns
-    WHERE pattern_type = 'subscription' AND is_active = 1
-    ORDER BY typical_amount DESC
-  `).all() as Array<{ counterparty_name: string; typical_amount: number; account_id: string; created_at: string }>;
+  // Confirmed or confident enough only (patternDecisions.ts).
+  const subs = establishedSubscriptions().map((p) => ({
+    counterparty_name: p.counterparty_name!,
+    typical_amount: p.typical_amount ?? 0,
+    created_at: p.created_at,
+  }));
 
   if (subs.length === 0) return [];
 
@@ -58,28 +59,22 @@ function subscriptionCreep(): FindingInput[] {
 
 function newRecurring(): FindingInput[] {
   const cutoff = new Date(Date.now() - 60 * 86400_000).toISOString();
-  const patterns = db.prepare(`
-    SELECT counterparty_name, pattern_type, typical_amount, interval_days
-    FROM recurring_patterns
-    WHERE is_active = 1 AND created_at >= ?
-    ORDER BY typical_amount DESC
-  `).all(cutoff) as Array<{ counterparty_name: string; pattern_type: string; typical_amount: number; interval_days: number }>;
+  // A pattern the user rejected is not news; an open question is asked separately.
+  const patterns = activePatterns().filter((p) => p.created_at >= cutoff);
 
   return patterns.map((p) => ({
     finding_type: 'new_recurring',
     title: `Uusi toistuva veloitus: ${p.counterparty_name}`,
-    description: `Uusi ${p.pattern_type === 'subscription' ? 'tilaus' : 'toistuva maksu'} tunnistettu: ${p.counterparty_name} noin ${fmt(p.typical_amount)} n. ${p.interval_days} päivän välein.`,
+    description: `Uusi ${p.pattern_type === 'subscription' ? 'tilaus' : 'toistuva maksu'} tunnistettu: ${p.counterparty_name} noin ${fmt(p.typical_amount ?? 0)} n. ${p.interval_days} päivän välein.`,
     severity: 'info' as const,
-    impact_eur: p.typical_amount,
+    impact_eur: p.typical_amount ?? 0,
   }));
 }
 
 /** Counterparties of active recurring patterns: their charges are not one-offs. */
 function recurringCounterparties(): Set<string> {
-  const rows = db.prepare(
-    'SELECT counterparty_name FROM recurring_patterns WHERE is_active = 1 AND counterparty_name IS NOT NULL'
-  ).all() as Array<{ counterparty_name: string }>;
-  return new Set(rows.map((r) => r.counterparty_name));
+  // Rejected ones are left out: the user said their charges are not recurring.
+  return new Set(activePatterns().flatMap((p) => (p.counterparty_name === null ? [] : [p.counterparty_name])));
 }
 
 function oneOffImpact(asOf: string): FindingInput[] {
@@ -254,6 +249,35 @@ function pendingConfirmations(): FindingInput[] {
   }));
 }
 
+const QUESTION_REASON_TEXT: Record<string, string> = {
+  low_confidence: 'näyttöä on vielä vähän',
+  fixed_amount_account_payment: 'sama summa tilille joka kerta (esim. säästö, vuokra tai henkilö)',
+  fixed_amount_card: 'sama summa kortilla joka kerta (tilaus vai esim. säästö?)',
+};
+
+/** "Onko tämä toistuva?": the largest open questions, with their charges as evidence. */
+function recurringQuestionFindings(): FindingInput[] {
+  return recurringQuestions().slice(0, 3).map((q) => {
+    const { chargeCount, firstDate, lastDate } = q.evidence;
+    const why = q.reasons.map((r) => QUESTION_REASON_TEXT[r]).join('; ');
+    return {
+      finding_type: 'recurring_question',
+      title: `Onko tämä toistuva? ${q.counterparty}`,
+      description: `${chargeCount} veloitusta ${firstDate}–${lastDate}, tyypillisesti ${fmt(q.typicalAmount ?? 0)} n. ${q.intervalDays} päivän välein. Varmuus ${Math.round((q.confidence ?? 0) * 100)} %: ${why}.`,
+      severity: 'info' as const,
+      impact_eur: q.typicalAmount ?? 0,
+      transaction_ids: q.evidence.transactions.map((t) => t.id),
+      metadata: {
+        patternId: q.patternId,
+        counterparty: q.counterparty,
+        suggestedAnswer: q.suggestedAnswer,
+        reasons: q.reasons,
+        confidence: q.confidence,
+      },
+    };
+  });
+}
+
 function monthlyForecast(asOf: string): FindingInput[] {
   const MONTHS = ['tammikuu', 'helmikuu', 'maaliskuu', 'huhtikuu', 'toukokuu', 'kesäkuu',
                   'heinäkuu', 'elokuu', 'syyskuu', 'lokakuu', 'marraskuu', 'joulukuu'];
@@ -272,6 +296,10 @@ function monthlyForecast(asOf: string): FindingInput[] {
   const [year, month] = forecast.targetMonth.split('-');
   const monthName = MONTHS[parseInt(month, 10) - 1];
 
+  const uncertainNote =
+    forecast.uncertainRecurring.length > 0
+      ? `, lisäksi ${forecast.uncertainRecurring.length} epävarmaa toistuvaa maksua (${fmt(forecast.uncertainRecurringTotal)})`
+      : '';
   const annualNote =
     forecast.annualItems.length > 0
       ? ` + vuosikuluja: ${forecast.annualItems.map((i) => `${i.counterparty} ${fmt(i.amount)}`).join(', ')}`
@@ -280,13 +308,14 @@ function monthlyForecast(asOf: string): FindingInput[] {
   return [{
     finding_type: 'monthly_forecast',
     title: `Ennuste ${monthName}lle ${year}: ${fmt(forecast.projectedTotal)}`,
-    description: `Tiedossa: ${forecast.knownFixed.length} kuukausimaksua (${fmt(forecast.knownFixed.reduce((s, i) => s + i.amount, 0))})${annualNote}. Historiakeskiarvo ${monthName}lle: ${forecast.historicalAvg > 0 ? fmt(forecast.historicalAvg) : 'ei dataa'}.`,
+    description: `Tiedossa: ${forecast.knownFixed.length} kuukausimaksua (${fmt(forecast.knownFixedTotal)})${uncertainNote}${annualNote}. Historiakeskiarvo ${monthName}lle: ${forecast.historicalAvg > 0 ? fmt(forecast.historicalAvg) : 'ei dataa'}.`,
     severity: isExpensive ? 'warn' : 'info',
     impact_eur: forecast.projectedTotal,
     metadata: {
       targetMonth: forecast.targetMonth,
       projectedTotal: forecast.projectedTotal,
       knownFixedCount: forecast.knownFixed.length,
+      uncertainRecurringCount: forecast.uncertainRecurring.length,
       annualItemsCount: forecast.annualItems.length,
     },
   }];
@@ -302,6 +331,7 @@ const GENERATORS: Array<(asOf: string) => FindingInput[]> = [
   creditHealth,
   spendingAnomaly,
   pendingConfirmations,
+  recurringQuestionFindings,
   monthlyForecast,
 ];
 

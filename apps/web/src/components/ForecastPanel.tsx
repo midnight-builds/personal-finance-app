@@ -45,6 +45,8 @@ export default function ForecastPanel() {
               )}
               <div className="forecast-meta">
                 {f.knownFixed.length} kuukausimaksua
+                {(f.uncertainRecurring?.length ?? 0) > 0 &&
+                  ` · lisäksi ${f.uncertainRecurring.length} epävarmaa (${fmt(f.uncertainRecurringTotal)})`}
                 {f.historicalAvg > 0 && ` · historia: ${fmt(f.historicalAvg)}`}
               </div>
             </div>

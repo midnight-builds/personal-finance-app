@@ -37,14 +37,15 @@ function mkTx(accountId: string, sessionId: string, counterparty: string, amount
   return id;
 }
 
-function mkPattern(accountId: string, counterparty: string, type = 'subscription', amount = 15.99, daysAgo = 5) {
+// Confidence above CONFIDENT: an established pattern, counted in totals without confirmation.
+function mkPattern(accountId: string, counterparty: string, type = 'subscription', amount = 15.99, daysAgo = 5, confidence = 0.9) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const date = new Date(Date.now() - daysAgo * 86400_000).toISOString().slice(0, 10);
   db.prepare(`INSERT INTO recurring_patterns
-    (id, created_at, updated_at, account_id, counterparty_name, pattern_type, interval_days, typical_amount, currency, first_seen, last_seen, occurrence_count, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, 30, ?, 'EUR', ?, ?, 3, 1)`)
-    .run(id, now, now, accountId, counterparty, type, amount, date, date);
+    (id, created_at, updated_at, account_id, counterparty_name, pattern_type, interval_days, typical_amount, currency, first_seen, last_seen, occurrence_count, is_active, confidence)
+    VALUES (?, ?, ?, ?, ?, ?, 30, ?, 'EUR', ?, ?, 3, 1, ?)`)
+    .run(id, now, now, accountId, counterparty, type, amount, date, date, confidence);
   return id;
 }
 
