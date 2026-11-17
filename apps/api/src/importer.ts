@@ -44,7 +44,8 @@ type RecordValue = string | number | null | undefined;
  */
 export function parseAmount(value?: RecordValue): number | null {
   if (value === null || value === undefined || value === '') return null;
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  // A spreadsheet number may carry float noise (-12.499999999999998): amounts are cents.
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
   const s = String(value).replace(/\s/g, '').replace(/−/g, '-');
   const comma = s.lastIndexOf(',');
   const dot = s.lastIndexOf('.');

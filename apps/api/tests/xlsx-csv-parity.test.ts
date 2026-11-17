@@ -117,6 +117,7 @@ test('amount and date strings in other notations', () => {
   assert.equal(parseAmount('-1,234.50'), -1234.5);
   assert.equal(parseAmount('−7,00'), -7);
   assert.equal(parseAmount(-12.5), -12.5);
+  assert.equal(parseAmount(-12.499999999999998), -12.5);
   assert.equal(parseDate('2026/10/12'), '2026-10-12T00:00:00.000Z');
   assert.equal(parseDate('12.10.2026'), '2026-10-12T00:00:00.000Z');
   assert.equal(parseDate('2026-10-12 00:00:00'), '2026-10-12T00:00:00.000Z');
