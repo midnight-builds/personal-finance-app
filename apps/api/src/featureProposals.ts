@@ -53,6 +53,7 @@ function toProposal(row: Row, history: FeatureProposalEvent[]): FeatureProposal 
     resolvedAt: row.resolved_at,
     decisionNote: row.decision_note,
     resolution: row.resolution,
+    changedAt: [row.created_at, row.updated_at ?? '', row.resolved_at ?? ''].reduce((a, b) => (b > a ? b : a)),
     history,
   };
 }
@@ -127,10 +128,25 @@ export function createFeatureProposal(input: unknown): CreateFeatureProposalResp
   return { duplicate: false, proposal: getProposal(id)! };
 }
 
-export function listFeatureProposals(status?: FeatureProposalStatus): FeatureProposal[] {
-  const rows = status
-    ? db.prepare('SELECT * FROM feature_proposals WHERE status = ? ORDER BY created_at DESC').all(status)
-    : db.prepare('SELECT * FROM feature_proposals ORDER BY created_at DESC').all();
+/** All timestamps are ISO strings from `toISOString()`, so text order is time order. */
+const CHANGED_AT_SQL = "MAX(created_at, COALESCE(updated_at, ''), COALESCE(resolved_at, ''))";
+
+export function listFeatureProposals(status?: FeatureProposalStatus, changedSince?: string): FeatureProposal[] {
+  const where: string[] = [];
+  const params: string[] = [];
+  if (status) {
+    where.push('status = ?');
+    params.push(status);
+  }
+  if (changedSince) {
+    where.push(`${CHANGED_AT_SQL} > ?`);
+    params.push(new Date(changedSince).toISOString());
+  }
+  const rows = db
+    .prepare(
+      `SELECT * FROM feature_proposals ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC`
+    )
+    .all(...params);
   return withHistory(rows as Row[]);
 }
 
