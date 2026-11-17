@@ -25,6 +25,7 @@ import {
   accountNameTaken,
   chooseCounterparty,
   dryRunImport,
+  type ImportCounts,
   getField,
   inferAccount,
   isNewestFirst,
@@ -252,7 +253,7 @@ function analyze(
   rows: BookedRow[],
   file: ImportPreviewFile,
   account: ImportPreviewAccount | null,
-  dry: { duplicateCount: number; overlap: { from: string; to: string } | null; transferCount: number }
+  dry: Pick<ImportCounts, 'duplicateCount' | 'overlap' | 'transferCount' | 'pendingSeenCount' | 'bookedPendingCount' | 'voidedPendingCount'>
 ): ImportPreviewAnalysis {
   let gapBefore: DataGap | null = null;
   let gapAfter: DataGap | null = null;
@@ -287,7 +288,10 @@ function analyze(
   return {
     accountId: account?.id ?? null,
     duplicates: dry.duplicateCount,
-    newRows: file.bookedCount - dry.duplicateCount,
+    newRows: file.bookedCount - dry.duplicateCount - dry.bookedPendingCount,
+    bookedPending: dry.bookedPendingCount,
+    pendingSeen: dry.pendingSeenCount,
+    voidedPending: dry.voidedPendingCount,
     overlap: dry.overlap,
     transfers: dry.transferCount,
     gapBefore,

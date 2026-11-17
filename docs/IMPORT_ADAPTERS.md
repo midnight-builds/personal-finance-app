@@ -11,6 +11,9 @@ Käyttäjä toimittaa CSV ja XLSX mallit. Codex toteuttaa mappingin niiden mukaa
 Nordea-esimerkkien perusteella CSV sarakkeet ovat:
 Kirjauspäivä, Määrä, Maksaja, Maksunsaaja, Nimi, Otsikko, Viesti, Viitenumero, Saldo, Valuutta.
 Kirjauspäivä voi sisältää arvon "Varaus" (varaustila), ja desimaalit ovat pilkulla.
+XLSX-adapteri palauttaa solujen arvot sellaisinaan (luvut lukuina, päiväsolut
+Excelin päivänumeroina); normalisointi (`parseAmount`, `parseDate`) tulkitsee ne
+samoin kuin CSV:n tekstin, joten sama export kummassakin muodossa tuo samat rivit.
 
 ## Laajennus
 

@@ -1,6 +1,6 @@
 import { db } from "./db.js";
 import { getSettings } from "./settings.js";
-import { latestCategoryDecisionJoin, transferLinkJoin } from "./sql/transactions.js";
+import { latestCategoryDecisionJoin, notVoid, transferLinkJoin } from "./sql/transactions.js";
 import { ledgerEntries } from "./ledger.js";
 
 type RecurringFlags = { daily: boolean; weekly: boolean; monthly: boolean };
@@ -63,6 +63,7 @@ export function listTransactions() {
        ${latestCategoryDecisionJoin()}
        LEFT JOIN categories c ON c.id = cd.category_id
        ${transferLinkJoin()}
+       WHERE ${notVoid('nt')}
        ORDER BY nt.booking_date DESC
        LIMIT 200`
     )

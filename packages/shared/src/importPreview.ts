@@ -116,8 +116,17 @@ export type ImportPreviewAnalysis = {
   accountId: string | null;
   /** Rows the import would skip because the account already has them. */
   duplicates: number;
-  /** Booked rows the import would store; pending rows ("Varaus") are not counted. */
+  /**
+   * Booked rows that would be new transactions; pending rows ("Varaus") and
+   * bookings of stored pending rows (`bookedPending`) are not counted.
+   */
   newRows: number;
+  /** Booked rows that are the booking of a pending row the account has: it becomes booked, no new row. */
+  bookedPending: number;
+  /** Pending rows of the file the account already has as pending. */
+  pendingSeen: number;
+  /** Pending rows of the account this newer export shows cancelled: they would become void. */
+  voidedPending: number;
   overlap: { from: string; to: string } | null;
   /** Rows the import would link as transfers between own accounts. */
   transfers: number;

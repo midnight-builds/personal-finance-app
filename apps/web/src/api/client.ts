@@ -193,6 +193,12 @@ export type ImportResult = {
   alreadyImportedCount: number;
   duplicateCount: number;
   transferCount: number;
+  /** Pending rows already stored as pending. */
+  pendingSeenCount?: number;
+  /** Booked rows that booked a stored pending row in place. */
+  bookedPendingCount?: number;
+  /** Stored pending rows this export shows cancelled. */
+  voidedPendingCount?: number;
   briefingSessionId?: string;
 };
 

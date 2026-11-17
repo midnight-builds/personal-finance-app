@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'crypto';
 import { collapseDuplicateGroups } from './migrations/collapseDuplicates.js';
+import { ensurePendingTransactions } from './migrations/pendingTransactions.js';
 
 const IN_MEMORY = ':memory:';
 
@@ -377,6 +378,9 @@ export function initDb() {
   // A transaction is stored once: databases that still hold re-imported
   // copies grouped with the first one are collapsed (runs once).
   collapseDuplicateGroups(db);
+
+  // Pending rows: one transaction from reservation to booking (or void).
+  ensurePendingTransactions(db);
 }
 
 export type CategoryRole = 'fallback' | 'income' | 'refund';

@@ -21,6 +21,12 @@ Stored once: a re-imported row that matches an existing transaction (same
 account, booking date, amount, counterparty) is not stored (see `GLOSSARY.md`,
 "Duplicate"). There are no duplicate groups.
 
+A pending row (no booking_date) stays the same row when it is booked: the
+booking promotes it in place. Its lifecycle (`pending` / `booked` / `void`,
+when it was first and last listed, the pending raw row) is kept beside it in
+`pending_transactions`, so this table keeps its shape (see `GLOSSARY.md`,
+"Pending row").
+
 ## TransferLink
 Links two transactions that are the two sides of an account-to-account transfer.
 

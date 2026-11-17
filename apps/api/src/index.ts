@@ -115,6 +115,7 @@ server.post('/debug/clear', async () => {
     DELETE FROM category_rules;
     DELETE FROM categories;
     DELETE FROM transfer_links;
+    DELETE FROM pending_transactions;
     DELETE FROM normalized_transactions;
     DELETE FROM raw_transactions;
     DELETE FROM insight_findings;
@@ -137,6 +138,7 @@ server.post('/debug/clear-imports', async () => {
     DELETE FROM balance_snapshots;
     DELETE FROM balance_adjustments;
     DELETE FROM categorization_decisions;
+    DELETE FROM pending_transactions;
     DELETE FROM normalized_transactions;
     DELETE FROM raw_transactions;
     DELETE FROM insight_findings;
