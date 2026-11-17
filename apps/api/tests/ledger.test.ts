@@ -38,16 +38,16 @@ test('the overlapping month is not doubled', () => {
   const october = { from: '2026-10-01', to: '2026-10-31' };
   const expected = checking.filter((r) => r.date.startsWith('2026-10') && !isTransfer(r));
   assert.equal(sum(ledgerEntries(october)), sum(expected));
-  // Both exports' copies are still there when asked for.
-  assert.equal(ledgerEntries({ ...october, includeDuplicates: true }).length, expected.length * 2);
+  // The second export's copies of October were not stored.
+  assert.equal(ledgerEntries(october).length, expected.length);
 });
 
-test('both copies of an overlapping transfer are transfers', () => {
-  // The linker pairs only one copy of the October savings transfer.
-  const copies = ledgerEntries({ from: '2026-10-16', to: '2026-10-16', includeDuplicates: true, includeTransfers: true })
-    .filter((e) => e.counterparty === 'Oma säästötili');
-  assert.equal(copies.length, 2);
-  assert.ok(copies.every((e) => e.isTransfer));
+test('the transfer in the overlapping month is stored and linked once', () => {
+  const transfer = ledgerEntries({ from: '2026-10-16', to: '2026-10-16', includeTransfers: true }).filter(
+    (e) => e.counterparty === 'Oma säästötili'
+  );
+  assert.equal(transfer.length, 1);
+  assert.ok(transfer[0].isTransfer);
 });
 
 test('transfers between own accounts can be included', () => {

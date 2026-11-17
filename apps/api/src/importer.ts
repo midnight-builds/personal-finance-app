@@ -7,7 +7,6 @@ import { chooseCategoryFor, upsertDecision } from './rules.js';
 import { detectPatterns } from './patterns.js';
 import { runBriefing } from './briefing.js';
 import { generateRuleSuggestions } from './ruleSuggestions.js';
-import { canonicalGroupOrder, isCanonicalGroupRow } from './sql/transactions.js';
 import { daysBefore } from './ledger.js';
 import { DomainError } from './http/errors.js';
 import { dayEnds, type SaldoRow } from './saldoChain.js';
@@ -21,7 +20,7 @@ export type ImportResult = {
   skippedCount: number;
   overlapDetected: boolean;
   alreadyImportedCount: number;
-  /** Rows grouped with already imported rows (overlap with earlier exports). */
+  /** Rows not stored because the account already has them (overlap with earlier exports). */
   duplicateCount: number;
   /** Rows linked as one side of a transfer between own accounts. */
   transferCount: number;
@@ -219,91 +218,9 @@ export function chooseCounterparty(record: Record<string, unknown>, amount: numb
   return { name, iban };
 }
 
-function assignDuplicateGroup(txId: string, candidateId: string) {
-  const candidate = db
-    .prepare('SELECT transaction_group_id FROM normalized_transactions WHERE id = ?')
-    .get(candidateId) as { transaction_group_id: string | null } | undefined;
-
-  const current = db
-    .prepare('SELECT transaction_group_id FROM normalized_transactions WHERE id = ?')
-    .get(txId) as { transaction_group_id: string | null } | undefined;
-
-  const groupId = candidate?.transaction_group_id ?? current?.transaction_group_id ?? createId();
-
-  db.prepare('UPDATE normalized_transactions SET transaction_group_id = ? WHERE id IN (?, ?)')
-    .run(groupId, txId, candidateId);
-
-  // Ensure a corresponding transaction_groups row exists and choose canonical deterministically.
-  const now = new Date().toISOString();
-  db.prepare(
-    'INSERT OR IGNORE INTO transaction_groups (id, created_at, canonical_transaction_id) VALUES (?, ?, NULL)'
-  ).run(groupId, now);
-
-  const canonical = db
-    .prepare(
-      `SELECT id FROM normalized_transactions WHERE transaction_group_id = ? ORDER BY ${canonicalGroupOrder()} LIMIT 1`
-    )
-    .get(groupId) as { id: string } | undefined;
-
-  if (canonical?.id) {
-    db.prepare('UPDATE transaction_groups SET canonical_transaction_id = ? WHERE id = ?').run(
-      canonical.id,
-      groupId
-    );
-  }
-}
-
-function dedupeInserted(ids: string[]) {
-  for (const id of ids) {
-    const row = db
-      .prepare(
-        'SELECT account_id, import_session_id, booking_date, amount, counterparty_name, description FROM normalized_transactions WHERE id = ?'
-      )
-      .get(id) as any;
-    if (!row || !row.booking_date) continue;
-    const candidates = db
-      .prepare(
-        `SELECT c.id
-         FROM normalized_transactions c
-         WHERE c.id != ?
-           AND c.import_session_id != ?
-           -- pair one-to-one: skip rows already matched by an earlier row of this import
-           AND NOT EXISTS (
-             SELECT 1 FROM normalized_transactions o
-             WHERE c.transaction_group_id IS NOT NULL
-               AND o.transaction_group_id = c.transaction_group_id
-               AND o.import_session_id = ?
-           )
-           AND c.account_id = ?
-           AND c.booking_date = ?
-           AND c.amount = ?
-           AND (c.counterparty_name = ? OR (c.counterparty_name IS NULL AND ? IS NULL))
-         ORDER BY ${canonicalGroupOrder('c')}
-         LIMIT 1`
-      )
-      .get(
-        id,
-        row.import_session_id,
-        row.import_session_id,
-        row.account_id,
-        row.booking_date,
-        row.amount,
-        row.counterparty_name,
-        row.counterparty_name
-      ) as any;
-    if (candidates) {
-      assignDuplicateGroup(id, candidates.id);
-    }
-  }
-}
-
-/** True when `x` or a duplicate of it is already one side of a transfer. */
+/** True when `x` is already one side of a transfer. */
 function isLinked(x: string) {
-  return `(${x}.id IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)
-    OR (${x}.transaction_group_id IS NOT NULL AND ${x}.transaction_group_id IN (
-      SELECT n.transaction_group_id FROM normalized_transactions n
-      JOIN transfer_links l ON n.id IN (l.from_transaction_id, l.to_transaction_id)
-      WHERE n.transaction_group_id IS NOT NULL)))`;
+  return `${x}.id IN (SELECT from_transaction_id FROM transfer_links UNION SELECT to_transaction_id FROM transfer_links)`;
 }
 
 const normIban = (iban: string | null) => (iban ? iban.replace(/\s+/g, '').toUpperCase() : null);
@@ -320,7 +237,7 @@ type LinkSide = {
 /**
  * Pairs each new transaction with the other side of a transfer between own
  * accounts: the opposite amount on another account within two days. Each
- * transaction (and its duplicates) is in at most one transfer.
+ * transaction is in at most one transfer.
  *
  * Nordea exports name the other account's IBAN on a transfer, and a
  * merchant's name on a card payment. So:
@@ -344,7 +261,7 @@ function linkTransfers(ids: string[]) {
   const sideOf = db.prepare(
     `SELECT t.id, t.account_id, t.booking_date, t.amount, t.counterparty_iban, t.counterparty_name, a.iban AS account_iban
      FROM normalized_transactions t JOIN accounts a ON a.id = t.account_id
-     WHERE t.id = ? AND t.booking_date IS NOT NULL AND ${isCanonicalGroupRow('t')} AND NOT ${isLinked('t')}`
+     WHERE t.id = ? AND t.booking_date IS NOT NULL AND NOT ${isLinked('t')}`
   );
   const candidatesOf = db.prepare(
     `SELECT c.id, c.account_id, c.booking_date, c.amount, c.counterparty_iban, c.counterparty_name, a.iban AS account_iban,
@@ -353,8 +270,8 @@ function linkTransfers(ids: string[]) {
      WHERE c.account_id != ? AND c.amount = ?
        AND c.booking_date >= ? AND c.booking_date < ?
        AND ABS(julianday(substr(c.booking_date, 1, 10)) - julianday(substr(?, 1, 10))) <= 2
-       AND ${isCanonicalGroupRow('c')} AND NOT ${isLinked('c')}
-     ORDER BY dist ASC, ${canonicalGroupOrder('c')}`
+       AND NOT ${isLinked('c')}
+     ORDER BY dist ASC, c.created_at ASC, c.id ASC`
   );
   const carriesIbansStmt = db.prepare(
     'SELECT 1 FROM normalized_transactions WHERE account_id = ? AND counterparty_iban IS NOT NULL LIMIT 1'
@@ -511,7 +428,10 @@ export type ImportCounts = {
   accountId: string;
   normalizedCount: number;
   skippedCount: number;
-  /** Rows of this import grouped with already imported rows. */
+  /**
+   * Rows of this import not stored because the account already has them: same
+   * booking date, amount and counterparty, paired one-to-one with stored rows.
+   */
   duplicateCount: number;
   /** Day range of those rows. */
   overlap: { from: string; to: string } | null;
@@ -543,7 +463,8 @@ export function accountNameTaken(name: string): boolean {
 /**
  * Decides the account before anything is written. Without a target the
  * export must name its own IBAN: an IBAN-less export (a credit card) could
- * otherwise land on another card's account and its purchases dedupe away.
+ * otherwise land on another card's account, where purchases matching that
+ * card's are skipped as already stored.
  */
 function planAccount(options: ImportOptions): AccountPlan {
   const { target } = options;
@@ -606,13 +527,16 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
   let accountId = '';
   let normalizedCount = 0;
   let skippedCount = 0;
+  let duplicateCount = 0;
+  let overlapFrom: string | null = null;
+  let overlapTo: string | null = null;
   let overlapRow: { id: string; row_count: number } | undefined;
   const insertedIds: string[] = [];
-  let counts: Pick<ImportCounts, 'duplicateCount' | 'overlap' | 'transferCount'>;
+  let transferCount = 0;
 
   // One transaction up to COMMIT: a failed or interrupted import leaves no
-  // account, session or rows behind, and never rows that are not yet grouped
-  // with their duplicates or linked as transfers. BEGIN is outside the try: if
+  // account, session or rows behind, and never rows that are not yet linked
+  // as transfers. BEGIN is outside the try: if
   // it fails, there is no transaction of ours to roll back.
   db.exec('BEGIN');
   try {
@@ -639,8 +563,9 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
     );
 
     const insertNormalized = db.prepare(
-      'INSERT INTO normalized_transactions (id, created_at, raw_transaction_id, import_session_id, account_id, booking_date, transaction_date, amount, currency, counterparty_name, description, counterparty_iban, transaction_group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO normalized_transactions (id, created_at, raw_transaction_id, import_session_id, account_id, booking_date, transaction_date, amount, currency, counterparty_name, description, counterparty_iban) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
+    const alreadyStored = storedMatcher(accountId, importSessionId);
     const insertBalance = db.prepare(
       'INSERT OR REPLACE INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES (?, ?, ?, ?, ?, ?)'
     );
@@ -661,23 +586,38 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
       const saldoRaw = getField(record, 'Saldo');
       const saldo = parseAmount(saldoRaw);
 
-      const rawId = createId();
-      insertRaw.run(
-        rawId,
-        now,
-        importSessionId,
-        JSON.stringify(record),
-        bookingDate,
-        amount,
-        currency
-      );
+      const storeRaw = () => {
+        const rawId = createId();
+        insertRaw.run(rawId, now, importSessionId, JSON.stringify(record), bookingDate, amount, currency);
+        return rawId;
+      };
 
       if (amount === null) {
+        storeRaw();
         skippedCount += 1;
         continue;
       }
 
       const { name: counterparty, iban: counterpartyIban } = chooseCounterparty(record, amount);
+
+      // The file's balances count whether or not its rows are new.
+      if (saldo !== null && bookingDate) {
+        if (!dayRows.has(bookingDate)) dayRows.set(bookingDate, []);
+        dayRows.get(bookingDate)!.push({ amount, saldo, currency });
+      } else if (bookingDate) {
+        daysMissingSaldo.add(bookingDate);
+      }
+
+      // A transaction is stored once: a row the account already has is not
+      // stored again (pending rows have no date to match on).
+      if (bookingDate && alreadyStored(bookingDate, amount, counterparty || null)) {
+        duplicateCount += 1;
+        const day = bookingDate.slice(0, 10);
+        if (overlapFrom === null || day < overlapFrom) overlapFrom = day;
+        if (overlapTo === null || day > overlapTo) overlapTo = day;
+        continue;
+      }
+      const rawId = storeRaw();
 
       const descriptionParts = [getField(record, 'Otsikko'), getField(record, 'Viesti')]
         .filter((value) => typeof value === 'string' && value.trim().length > 0)
@@ -712,16 +652,8 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
         currency,
         counterparty || null,
         description || null,
-        counterpartyIban || null,
-        null
+        counterpartyIban || null
       );
-
-      if (saldo !== null && bookingDate) {
-        if (!dayRows.has(bookingDate)) dayRows.set(bookingDate, []);
-        dayRows.get(bookingDate)!.push({ amount, saldo, currency });
-      } else if (bookingDate) {
-        daysMissingSaldo.add(bookingDate);
-      }
 
       const categoryId = chooseCategoryFor({
         counterparty: counterparty || '',
@@ -745,10 +677,9 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
       insertBalance.run(createId(), now, accountId, day, saldo, byFileOrder.currency);
     }
 
-    // Post-processing: group duplicates, then link transfers between their canonical rows.
-    dedupeInserted(insertedIds);
+    // Post-processing: link the new rows as transfers.
     linkTransfers(insertedIds);
-    counts = countEffects(importSessionId);
+    transferCount = countTransfers(importSessionId);
 
     db.exec(dryRun ? 'ROLLBACK' : 'COMMIT');
   } catch (error) {
@@ -764,20 +695,41 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
     accountId,
     normalizedCount,
     skippedCount,
-    ...counts,
+    duplicateCount,
+    overlap: overlapFrom && overlapTo ? { from: overlapFrom, to: overlapTo } : null,
+    transferCount,
     overlapDetected: Boolean(overlapRow),
     alreadyImportedCount: overlapRow?.row_count ?? 0,
   };
 }
 
-/** Duplicates grouped and transfers linked by one import session's rows. */
-function countEffects(importSessionId: string): Pick<ImportCounts, 'duplicateCount' | 'overlap' | 'transferCount'> {
-  const dup = db
-    .prepare(
-      `SELECT COUNT(*) AS n, MIN(substr(booking_date, 1, 10)) AS f, MAX(substr(booking_date, 1, 10)) AS t
-       FROM normalized_transactions WHERE import_session_id = ? AND transaction_group_id IS NOT NULL`
-    )
-    .get(importSessionId) as { n: number; f: string | null; t: string | null };
+/**
+ * Whether a file row is a transaction the account already has: same booking
+ * date, amount and counterparty (a missing one matches a missing one), paired
+ * one-to-one. Stored rows are counted once per key, so a file with three
+ * identical rows where two are stored brings one new row. Rows of this import
+ * are never matched: two identical coffees in one file are two transactions.
+ */
+function storedMatcher(accountId: string, importSessionId: string) {
+  const stored = db.prepare(
+    `SELECT COUNT(*) AS n FROM normalized_transactions
+     WHERE account_id = ? AND booking_date = ? AND amount = ?
+       AND (counterparty_name = ? OR (counterparty_name IS NULL AND ? IS NULL))
+       AND import_session_id != ?`
+  );
+  const unmatched = new Map<string, number>();
+  return (bookingDate: string, amount: number, counterparty: string | null) => {
+    const key = JSON.stringify([bookingDate, amount, counterparty]);
+    const left =
+      unmatched.get(key) ??
+      Number((stored.get(accountId, bookingDate, amount, counterparty, counterparty, importSessionId) as { n: number }).n);
+    unmatched.set(key, Math.max(0, left - 1));
+    return left > 0;
+  };
+}
+
+/** Rows of one import session linked as one side of a transfer. */
+function countTransfers(importSessionId: string): number {
   const transfers = db
     .prepare(
       `SELECT COUNT(DISTINCT n.id) AS n FROM normalized_transactions n
@@ -785,11 +737,7 @@ function countEffects(importSessionId: string): Pick<ImportCounts, 'duplicateCou
        WHERE n.import_session_id = ?`
     )
     .get(importSessionId) as { n: number };
-  return {
-    duplicateCount: Number(dup.n),
-    overlap: dup.f && dup.t ? { from: dup.f, to: dup.t } : null,
-    transferCount: Number(transfers.n),
-  };
+  return Number(transfers.n);
 }
 
 /**
@@ -824,7 +772,7 @@ export async function processImport(options: ImportOptions): Promise<ImportResul
     type: 'import.done',
     scope: importSessionId,
     message: `Imported ${normalizedCount} rows (skipped ${skippedCount})`,
-    payload: { normalizedCount, skippedCount, overlapDetected, alreadyImportedCount },
+    payload: { normalizedCount, skippedCount, duplicateCount: run.duplicateCount, overlapDetected, alreadyImportedCount },
   });
 
   return {

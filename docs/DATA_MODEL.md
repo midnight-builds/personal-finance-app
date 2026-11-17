@@ -17,8 +17,9 @@ Canonical transaction record:
 - account
 - link to RawTransaction
 
-## TransactionGroup
-Groups duplicates across overlapping imports.
+Stored once: a re-imported row that matches an existing transaction (same
+account, booking date, amount, counterparty) is not stored (see `GLOSSARY.md`,
+"Duplicate"). There are no duplicate groups.
 
 ## TransferLink
 Links two transactions that are the two sides of an account-to-account transfer.

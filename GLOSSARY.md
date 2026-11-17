@@ -8,20 +8,21 @@ forecasts and AI tools ask the Ledger instead of querying
 `normalized_transactions` themselves.
 
 **Countable transaction** — a transaction the Ledger includes by default:
-booked (not pending), the canonical row of its duplicate group, and not a
-transfer between own accounts.
+booked (not pending) and not a transfer between own accounts.
 
-**Duplicate group** — normalized transactions from *different* imports that
-describe the same bank event (same account, day, amount, counterparty).
-Paired one-to-one: two identical purchases on the same day are two
-purchases, not duplicates. Nothing is deleted; the group just marks them.
-
-**Canonical row** — the earliest imported row of a duplicate group; the one
-that counts.
+**Duplicate** — a row of an import that the account already has: same
+booking date, amount and counterparty (a missing counterparty matches a
+missing one) as a stored row from an *earlier* import. A transaction is
+stored once, so a duplicate is not stored at all (neither raw nor
+normalized); the import counts it as `duplicateCount`. Paired one-to-one: a
+file with three identical rows where two are stored brings one new row, and
+two identical purchases in one file are two purchases, never duplicates.
+(Databases from before this rule held the copies in duplicate groups; the
+API collapses them into the earliest imported row once at start,
+`apps/api/src/migrations/collapseDuplicates.ts`.)
 
 **Transfer** — money moving between two own accounts, linked as a pair. Left
-out of spending and income by default. If one copy of a duplicate group is
-linked, every copy is a transfer.
+out of spending and income by default.
 
 **Card repayment** — the one transfer a credit card (an account without an
 IBAN) takes part in: a payment from checking into the card. Extra repayments
@@ -74,7 +75,7 @@ the set are left alone and reported.
 
 **Import preview** — what importing a file would do, computed before anything
 is written: the guessed target account, and for the chosen target the rows
-that would be grouped as duplicates, transfers, gaps and balance breaks. Its
+that are duplicates (would be skipped), transfers, gaps and balance breaks. Its
 counts come from a dry run.
 
 **Dry run** — the real import pipeline run inside a transaction that is

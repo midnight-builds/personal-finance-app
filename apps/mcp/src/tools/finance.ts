@@ -30,7 +30,8 @@ const dataTools: ToolDefinition[] = [
     title: 'Search transactions',
     description:
       'Search normalized bank transactions. Amounts are signed (negative = expense). ' +
-      'Transfers between own accounts and duplicates from overlapping imports are excluded by default. ' +
+      'Transfers between own accounts are excluded by default. Each transaction is stored once, ' +
+      'also when overlapping exports are imported. ' +
       'Returns { total, limit, offset, items }; page with limit/offset.',
     inputSchema: transactionSearchFields,
     annotations: READ_ONLY,
@@ -51,7 +52,7 @@ const dataTools: ToolDefinition[] = [
     'Income, expense and net per pay period, oldest first. A period is labelled by its month but is not the ' +
       'calendar month: it follows the payday setting, and from/to give its inclusive bookingDate range ' +
       '(bank booking days, no time zone). Same scope as search_transactions by default (booked only, ' +
-      'duplicates counted once, transfers excluded), so searching with the same from/to gives the same totals.',
+      'transfers excluded), so searching with the same from/to gives the same totals.',
     '/monthly'
   ),
   readEndpoint(

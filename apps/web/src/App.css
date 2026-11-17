@@ -269,11 +269,6 @@ h2 {
   color: #fecdd3;
 }
 
-.chip-dupe {
-  background: rgba(129, 140, 248, 0.18);
-  color: #e0e7ff;
-}
-
 .chip-recurring {
   background: rgba(59, 130, 246, 0.16);
   color: #bfdbfe;

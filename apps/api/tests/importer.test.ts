@@ -17,7 +17,6 @@ function clearDb() {
     DELETE FROM balance_snapshots;
     DELETE FROM balance_adjustments;
     DELETE FROM transfer_links;
-    DELETE FROM transaction_groups;
     DELETE FROM normalized_transactions;
     DELETE FROM raw_transactions;
     DELETE FROM import_sessions;
@@ -64,9 +63,10 @@ beforeEach(() => {
   clearDb();
 });
 
-test('deduplicates overlapping imports and assigns transaction groups', async () => {
+test('a re-imported file stores each transaction once', async () => {
+  // 'market' matches a built-in rule, so the import decides a category.
   const records = [
-    makeRecord({ date: '2026/01/20', amount: '-10,00', payee: 'Test Shop', payer: 'FI0011223344556677' }),
+    makeRecord({ date: '2026/01/20', amount: '-10,00', payee: 'Test Market', payer: 'FI0011223344556677' }),
   ];
   const buf = Buffer.from('dummy');
   const hash = checksum(buf);
@@ -88,37 +88,17 @@ test('deduplicates overlapping imports and assigns transaction groups', async ()
   });
 
   assert.equal(first.overlapDetected, false);
+  assert.equal(first.normalizedCount, 1);
+  assert.equal(first.duplicateCount, 0);
   assert.equal(second.overlapDetected, true);
+  assert.equal(second.normalizedCount, 0);
+  assert.equal(second.duplicateCount, 1);
 
-  const { c: total } = db.prepare('SELECT COUNT(*) as c FROM normalized_transactions').get() as any;
-  assert.equal(total, 2);
-
-  const { c: grouped } = db
-    .prepare('SELECT COUNT(*) as c FROM normalized_transactions WHERE transaction_group_id IS NOT NULL')
-    .get() as any;
-  assert.equal(grouped, 2);
-
-  const groups = db
-    .prepare('SELECT DISTINCT transaction_group_id as id FROM normalized_transactions WHERE transaction_group_id IS NOT NULL')
-    .all() as Array<{ id: string }>;
-  assert.equal(groups.length, 1);
-
-  const { c: groupRows } = db
-    .prepare('SELECT COUNT(*) as c FROM transaction_groups WHERE id = ?')
-    .get(groups[0].id) as any;
-  assert.equal(groupRows, 1);
-
-  const expected = db
-    .prepare(
-      'SELECT id FROM normalized_transactions WHERE transaction_group_id = ? ORDER BY created_at ASC, id ASC LIMIT 1'
-    )
-    .get(groups[0].id) as any;
-
-  const canonical = db
-    .prepare('SELECT canonical_transaction_id as id FROM transaction_groups WHERE id = ?')
-    .get(groups[0].id) as any;
-
-  assert.equal(canonical.id, expected.id);
+  const count = (table: string) => Number((db.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as { c: number }).c);
+  assert.equal(count('normalized_transactions'), 1);
+  assert.equal(count('raw_transactions'), 1, 'the skipped row is not stored raw either');
+  assert.equal(count('import_sessions'), 2, 'the second import is still recorded');
+  assert.equal(count('categorization_decisions'), 1);
 });
 
 test('links transfers across accounts with opposite amounts', async () => {

@@ -9,11 +9,11 @@ Tiedoston lataus luo ImportSessionin.
 
 Adapteri parsii rivit RawTransaction muotoon.
 
-Normalisointi muuntaa RawTransactionit NormalizedTransaction muotoon.
+Normalisointi muuntaa rivit NormalizedTransaction muotoon. Rivi, joka tilillä jo on
+(deduplikointi, ks. alla), ohitetaan: siitä ei tallenneta RawTransactionia eikä
+NormalizedTransactionia.
 
-Deduplikointi muodostaa TransactionGroupit ja merkitsee päällekkäisyydet.
-
-Siirtolinkitys muodostaa TransferLinkit.
+Siirtolinkitys muodostaa TransferLinkit tallennetuista uusista riveistä.
 
 Saldo tallennetaan BalanceSnapshotiksi, jos exportissa on saldo ja päivämäärä.
 
@@ -28,10 +28,20 @@ Kuukausikatsaus laskee per-kk tulot, menot ja neton (siirrot poissa).
 
 ## Päällekkäisyysperiaate
 
-Dataa ei koskaan poisteta. Päällekkäisyys merkitään ja ryhmitellään.
-Import overlap ratkaistaan yksinkertaisesti: jos ImportSessionin overlap-avain täsmää,
-uusi importti merkitään päällekkäiseksi ja sen NormalizedTransactionit linkitetään samaan TransactionGroupiin.
-UI voi tarjota käyttäjälle valinnan jättää päällekkäinen importti huomiotta.
+Tapahtuma tallennetaan kerran. Importin rivi, jolla on sama tili, kirjauspäivä, summa ja
+vastapuoli (puuttuva vastapuoli täsmää puuttuvaan) kuin aiemman importin tallennetulla
+rivillä, on duplikaatti eikä sitä tallenneta. Rivit paritetaan yksi yhteen: jos tiedostossa
+on kolme samanlaista riviä ja tilillä kaksi, tallennetaan yksi. Saman tiedoston samanlaisia
+rivejä ei verrata toisiinsa (kaksi samanlaista kahvia samana päivänä ovat kaksi tapahtumaa).
+Varausrivejä (ei kirjauspäivää) ei deduplikoida. ImportSession tallennetaan aina;
+`duplicateCount` kertoo ohitetut rivit ja `overlap` niiden päivävälin. Tiedoston saldot
+luetaan kaikista sen riveistä, myös ohitetuista.
+
+Jos ImportSessionin overlap-avain (tiedoston tarkiste, rivimäärä ja tili) täsmää,
+importti merkitään samaksi tiedostoksi (`overlapDetected`, `alreadyImportedCount`).
+
+Ennen tätä sääntöä tallennetut kopiot (TransactionGroup) yhdistetään API:n käynnistyessä
+kerran ryhmän ensin tuotuun riviin (`apps/api/src/migrations/collapseDuplicates.ts`).
 
 ## Siirtojen käsittely raporteissa
 

@@ -38,8 +38,8 @@ function visible() {
     JSON.stringify({
       list: listTransactions(),
       search: searchTransactions({ limit: 500 }),
-      searchAll: searchTransactions({ includeTransfers: true, includeDuplicates: true, limit: 500 }),
-      ledger: ledgerEntries({ includeTransfers: true, includeDuplicates: true }),
+      searchAll: searchTransactions({ includeTransfers: true, limit: 500 }),
+      ledger: ledgerEntries({ includeTransfers: true }),
       byCategory: ledgerTotals('category'),
       byMonth: ledgerTotals('month'),
       insights: getInsights(ANCHOR),
@@ -119,7 +119,7 @@ test('three recategorizations do not fan out any reader', () => {
   assert.ok(decisions(tx.id).length >= 3);
   assert.deepEqual(visible(), baseline);
   assert.equal(listTransactions().filter((t: any) => t.id === tx.id).length, 1);
-  assert.equal(ledgerEntries({ includeTransfers: true, includeDuplicates: true }).filter((e) => e.id === tx.id).length, 1);
+  assert.equal(ledgerEntries({ includeTransfers: true }).filter((e) => e.id === tx.id).length, 1);
 });
 
 test('re-stating the latest decision does not grow the table', () => {

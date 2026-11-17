@@ -113,7 +113,7 @@ export const DEMO_SAVINGS_OPENING = 5000;
 /**
  * The exports a user would upload, in upload order. The second checking
  * export starts one month before the first one ends, so that month's rows
- * arrive twice and must be grouped as duplicates.
+ * arrive twice and must be stored once.
  */
 export function demoExports(anchor: string): DemoExport[] {
   const checking = toRecords(demoCheckingRows(anchor), DEMO_CHECKING_OPENING);

@@ -1,6 +1,6 @@
 import { db } from "./db.js";
 import { getSettings } from "./settings.js";
-import { latestCategoryDecisionJoin } from "./sql/transactions.js";
+import { latestCategoryDecisionJoin, transferLinkJoin } from "./sql/transactions.js";
 import { ledgerEntries } from "./ledger.js";
 
 type RecurringFlags = { daily: boolean; weekly: boolean; monthly: boolean };
@@ -51,8 +51,6 @@ export function listTransactions() {
               nt.currency,
               nt.counterparty_name AS counterpartyName,
               nt.description,
-              nt.transaction_group_id AS transactionGroupId,
-              (SELECT COUNT(*) FROM normalized_transactions ng WHERE ng.transaction_group_id = nt.transaction_group_id) AS groupSize,
               tl.from_transaction_id AS tlFrom,
               tl.to_transaction_id   AS tlTo,
               cd.category_id AS categoryId,
@@ -64,7 +62,7 @@ export function listTransactions() {
        JOIN accounts a ON a.id = nt.account_id
        ${latestCategoryDecisionJoin()}
        LEFT JOIN categories c ON c.id = cd.category_id
-       LEFT JOIN transfer_links tl ON tl.from_transaction_id = nt.id OR tl.to_transaction_id = nt.id
+       ${transferLinkJoin()}
        ORDER BY nt.booking_date DESC
        LIMIT 200`
     )
@@ -80,8 +78,6 @@ export function listTransactions() {
       currency: row.currency,
       counterpartyName: row.counterpartyName,
       description: row.description,
-      transactionGroupId: row.transactionGroupId,
-      groupSize: row.transactionGroupId ? Number(row.groupSize) : null,
       transfer:
         row.tlFrom || row.tlTo
           ? {

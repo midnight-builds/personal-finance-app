@@ -48,8 +48,8 @@ test('listTransactions does not throw (regression: sqlite syntax error near %)',
     INSERT INTO normalized_transactions (
       id, created_at, raw_transaction_id, import_session_id, account_id,
       booking_date, transaction_date, amount, currency,
-      counterparty_name, counterparty_iban, description, transaction_group_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      counterparty_name, counterparty_iban, description
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     nt,
     now,
@@ -62,8 +62,7 @@ test('listTransactions does not throw (regression: sqlite syntax error near %)',
     'EUR',
     'Coffee Shop',
     null,
-    'Latte',
-    null
+    'Latte'
   );
 
   const rows = listTransactions();

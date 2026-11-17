@@ -148,7 +148,7 @@ test('dry-run duplicates and transfers are what the import then does', async () 
   assert.equal(r2.statusCode, 200, r2.body);
   assert.equal(r2.json().duplicateCount, p2.analysis.duplicates);
   assert.equal(r2.json().transferCount, p2.analysis.transfers);
-  assert.equal(p2.analysis.newRows, r2.json().normalizedCount - r2.json().duplicateCount); // no pending rows in the demo
+  assert.equal(p2.analysis.newRows, r2.json().normalizedCount); // no pending rows in the demo
 
   // The savings export: its deposits link to the checking withdrawals.
   const ps = await preview(`Säästötili ${DEMO_SAVINGS_IBAN}.csv`, savings.records);

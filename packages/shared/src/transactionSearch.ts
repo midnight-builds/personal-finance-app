@@ -15,10 +15,6 @@ export const transactionSearchFields = {
   minAmount: z.number().finite().optional().describe('Signed amount lower bound (expenses are negative)'),
   maxAmount: z.number().finite().optional().describe('Signed amount upper bound (expenses are negative)'),
   includeTransfers: z.boolean().default(false).describe('Include account-to-account transfers'),
-  includeDuplicates: z
-    .boolean()
-    .default(false)
-    .describe('Return every row of overlapping imports instead of one row per duplicate group'),
   limit: z.number().int().min(1).max(TRANSACTION_SEARCH_MAX_LIMIT).default(50),
   offset: z.number().int().min(0).default(0),
 };
@@ -39,7 +35,6 @@ export type TransactionSearchRow = {
   accountId: string;
   accountName: string;
   isTransfer: boolean;
-  transactionGroupId: string | null;
 };
 
 export type TransactionSearchResult = {

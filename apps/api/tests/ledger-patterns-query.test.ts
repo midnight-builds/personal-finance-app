@@ -20,7 +20,7 @@ import { resetDb } from './setup/resetDb.js';
 
 // Characterization of pattern detection, transaction search, the account list
 // and the transaction list's recurring flags on the Ledger. The demo plan is
-// the oracle: the overlapping month's duplicate copies count once and the
+// the oracle: the overlapping month's rows are stored once and the
 // savings transfers never count as spending.
 const ANCHOR = '2026-11-05';
 const checking = demoCheckingRows(ANCHOR);
@@ -85,7 +85,7 @@ test('patterns: own-account transfers are never recurring spend', () => {
 });
 
 test('patterns: a one-off large payment becomes a confirmation candidate, even when imported twice', () => {
-  // Verkkokauppa.com falls in the overlapping month: two copies, one purchase.
+  // Verkkokauppa.com falls in the overlapping month: imported twice, stored once.
   assert.ok(overlap.some((r) => r.counterparty === 'Verkkokauppa.com'));
   const patterned = new Set(patterns().map((p) => p.counterparty_name));
   const expenses = checking.filter((r) => r.amount < 0 && !isTransfer(r));
@@ -134,16 +134,12 @@ test('search: counts each transaction once and leaves transfers out', () => {
   assert.equal(withTransfers.items.filter((i) => i.isTransfer).length, [...checking, ...savings].filter(isTransfer).length);
 });
 
-test('search: every copy of a duplicated transfer is a transfer', () => {
-  const dupes = searchTransactions({ includeDuplicates: true, limit: 500 });
-  assert.equal(dupes.total, checking.length + savings.length - [...checking, ...savings].filter(isTransfer).length + overlap.filter((r) => !isTransfer(r)).length);
-  assert.ok(!dupes.items.some((i) => i.counterpartyName?.startsWith('Oma ')));
-
-  const everything = searchTransactions({ includeDuplicates: true, includeTransfers: true, limit: 500 });
-  assert.equal(everything.total, checking.length + savings.length + overlap.length);
-  const transferRows = everything.items.filter((i) => i.counterpartyName?.startsWith('Oma '));
-  assert.ok(transferRows.length > [...checking, ...savings].filter(isTransfer).length, 'duplicate transfer copies are listed');
-  assert.ok(transferRows.every((i) => i.isTransfer));
+test('search: the overlapping export added no rows', () => {
+  const stored = Number((db.prepare('SELECT COUNT(*) AS n FROM normalized_transactions').get() as { n: number }).n);
+  assert.equal(stored, checking.length + savings.length);
+  const october = searchTransactions({ from: '2026-10-01', to: '2026-10-31', includeTransfers: true, limit: 500 });
+  assert.equal(october.total, overlap.length + savings.filter((r) => r.date.startsWith('2026-10')).length);
+  assert.ok(october.items.filter((i) => i.counterpartyName?.startsWith('Oma ')).every((i) => i.isTransfer));
 });
 
 test('search: filters, newest-first order and paging', () => {
@@ -180,12 +176,12 @@ test('accounts: latest balance per the Ledger, snapshot date in stored form', ()
   assert.equal(cAcc.account_subtype, 'checking');
 });
 
-test('transaction list: shows every row, recurring flags count each payment once', () => {
+test('transaction list: shows every row once, with recurring flags', () => {
   const rows = listTransactions();
   const stored = (db.prepare('SELECT COUNT(*) AS n FROM normalized_transactions').get() as { n: number }).n;
   assert.equal(rows.length, Math.min(200, stored));
   const netflix = rows.filter((r) => r.counterpartyName === 'Netflix');
-  assert.ok(netflix.length > checking.filter((r) => r.counterparty === 'Netflix').length, 'duplicate copies are listed');
+  assert.equal(netflix.length, checking.filter((r) => r.counterparty === 'Netflix').length);
   assert.ok(netflix.every((r) => r.recurringMonthly && !r.recurringWeekly && !r.recurringDaily));
   // Two Spotify payments are not yet a recurring series.
   assert.ok(rows.filter((r) => r.counterpartyName === 'Spotify').every((r) => !r.recurringMonthly));

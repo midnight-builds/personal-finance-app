@@ -59,8 +59,9 @@ Every response is passed through `redactDeep` (`packages/shared`): keys containi
 `iban` are dropped and IBANs, old Finnish account numbers and Finnish personal ids
 inside text are replaced with `[REDACTED]`. A string that is wholly a UUID or a
 64-character hex digest (ids, plan tokens) is left alone, so the agent can send it
-back. `search_transactions` excludes transfers and collapses duplicate rows from
-overlapping imports by default.
+back. `search_transactions` excludes transfers by default. Each transaction is
+stored once, also when overlapping exports are imported, so counts are real
+transactions.
 
 > **Limits on what the agent can write hold only through MCP.** The finance API has
 > no auth, and the web UI (port 5173) proxies `/api` to it. If the agent must not be

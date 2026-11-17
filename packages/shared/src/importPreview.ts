@@ -68,7 +68,7 @@ export type ImportPreviewAccount = {
   name: string;
   iban: string | null;
   subtype: AccountSubtype;
-  /** Booked range and count of its rows, one per duplicate group. */
+  /** Booked range and count of its rows. */
   firstDate: string | null;
   lastDate: string | null;
   transactionCount: number;
@@ -79,7 +79,7 @@ export type ImportGuessReason = 'iban' | 'overlap' | 'none';
 export type ImportPreviewGuess = {
   accountId: string | null;
   reason: ImportGuessReason;
-  /** Rows that would group as duplicates with the guessed account (reason 'overlap'). */
+  /** Rows the guessed account already has (reason 'overlap'). */
   overlapCount?: number;
   /** What to create when the user picks "new account". */
   newAccount: { name: string; subtype: AccountSubtype };
@@ -114,9 +114,9 @@ export type BalanceBreak = {
 export type ImportPreviewAnalysis = {
   /** The account the numbers are for; null = a new account. */
   accountId: string | null;
-  /** Rows the import would group with already imported rows. */
+  /** Rows the import would skip because the account already has them. */
   duplicates: number;
-  /** Booked rows that are not duplicates; pending rows ("Varaus") are not counted. */
+  /** Booked rows the import would store; pending rows ("Varaus") are not counted. */
   newRows: number;
   overlap: { from: string; to: string } | null;
   /** Rows the import would link as transfers between own accounts. */

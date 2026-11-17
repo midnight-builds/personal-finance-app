@@ -11,7 +11,7 @@ Easy import → automatic categorization → clear reports, powered by an **AI A
 - Support CSV and XLSX imports (start with Nordea).
 - Store raw rows for auditability.
 - Normalize into a canonical transaction schema.
-- Detect overlapping imports and dedupe/group without deleting data.
+- Detect overlapping imports; a transaction is stored once (re-imported rows that match a stored one are not stored).
 
 ### Categorization (AI-required)
 - Default categories (seed list) exist.
@@ -24,7 +24,7 @@ Easy import → automatic categorization → clear reports, powered by an **AI A
 ### Transfers / duplicates
 - Detect account-to-account transfers.
 - Transfers do not affect net/insights by default; user can show them.
-- Duplicate imports are grouped (TransactionGroup) and presented clearly.
+- Re-imported rows are skipped and the import reports how many (and their date range).
 
 ### Reporting
 - Dashboard: balances, net (30d), runway, monthly overview.

@@ -2,21 +2,6 @@
 // queries depend on lives here once, so the rule cannot drift between them.
 // Arguments are table aliases chosen by the caller, never user input.
 
-/** ORDER BY terms that pick a duplicate group's canonical row: the earliest imported. */
-export function canonicalGroupOrder(alias?: string) {
-  const col = alias ? `${alias}.` : '';
-  return `${col}created_at ASC, ${col}id ASC`;
-}
-
-/** True for rows that are not duplicates, or are their group's canonical row. */
-export function isCanonicalGroupRow(tx = 'nt') {
-  return `(${tx}.transaction_group_id IS NULL OR ${tx}.id = (
-    SELECT g.id FROM normalized_transactions g
-    WHERE g.transaction_group_id = ${tx}.transaction_group_id
-    ORDER BY ${canonicalGroupOrder('g')}
-    LIMIT 1))`;
-}
-
 /**
  * ORDER BY terms that put a transaction's most recent categorization decision
  * first. Decisions are kept as history; rowid breaks ties between decisions

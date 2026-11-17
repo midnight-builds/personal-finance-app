@@ -9,8 +9,8 @@ import { db } from './db.js';
 import { ledgerEntries, type LedgerEntry } from './ledger.js';
 
 // Filterable, paginated transaction lookup (GET /transactions/search).
-// The Ledger decides which transactions count: booked only, one row per
-// duplicate group and no transfers unless asked for.
+// The Ledger decides which transactions count: booked only and no transfers
+// unless asked for.
 // Returns only the fields needed for reasoning: no IBAN columns, no raw rows.
 // Free-text fields may still contain account numbers; agent-facing layers redact them.
 
@@ -46,7 +46,6 @@ export function searchTransactions(input: TransactionSearchInput): TransactionSe
     to: params.to,
     accounts: params.accountId ? [params.accountId] : undefined,
     includeTransfers: params.includeTransfers,
-    includeDuplicates: params.includeDuplicates,
   })
     .filter((e) => filters.every((f) => f(e)))
     .sort(newestFirst);
@@ -65,7 +64,6 @@ export function searchTransactions(input: TransactionSearchInput): TransactionSe
     categoryName: e.categoryName,
     accountId: e.accountId,
     accountName: accountNames.get(e.accountId) ?? '',
-    transactionGroupId: e.transactionGroupId,
     isTransfer: e.isTransfer,
   }));
 
