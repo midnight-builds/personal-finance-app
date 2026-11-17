@@ -208,6 +208,8 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
       const result = await importFile(file, target, { allowIbanMismatch: ibanConfirmed });
       const parts = [`${result.normalizedCount} riviä tilille ${targetName}`];
       if (result.duplicateCount) parts.push(`${result.duplicateCount} oli jo tuotu`);
+      if (result.bookedPendingCount) parts.push(`${result.bookedPendingCount} varausta kirjautui`);
+      if (result.voidedPendingCount) parts.push(`${result.voidedPendingCount} varausta peruuntui`);
       if (result.transferCount) parts.push(`${result.transferCount} siirtoa`);
       if (result.skippedCount) parts.push(`${result.skippedCount} ohitettu`);
       onDone({ filename: file.name, status: 'imported', message: `Tuotu: ${parts.join(', ')}` }, result);
@@ -315,6 +317,8 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
               <li>
                 <strong>{a.duplicates}</strong> tapahtumaa on jo tuotu (päällekkäin), <strong>{a.newRows}</strong> uutta
                 {f.pendingCount > 0 && ` · ${f.pendingCount} varausta erikseen`}
+                {a.bookedPending > 0 && ` · ${a.bookedPending} aiempaa varausta kirjautuu`}
+                {a.voidedPending > 0 && ` · ${a.voidedPending} aiempaa varausta peruuntuu`}
                 {a.overlap && ` · päällekkäin ${fiDate(a.overlap.from)}–${fiDate(a.overlap.to)}`}
               </li>
               {a.transfers > 0 && <li>{a.transfers} siirtoa omien tilien välillä tunnistettu</li>}

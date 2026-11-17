@@ -25,3 +25,11 @@ export function transferLinkJoin(tx = 'nt', as = 'tl') {
     WHERE from_transaction_id = ${tx}.id OR to_transaction_id = ${tx}.id
     LIMIT 1)`;
 }
+
+/**
+ * True unless the transaction is a void pending row: a reservation a newer
+ * export showed cancelled. Void rows are kept but are no transaction anywhere.
+ */
+export function notVoid(tx = 'nt') {
+  return `NOT EXISTS (SELECT 1 FROM pending_transactions pv WHERE pv.transaction_id = ${tx}.id AND pv.status = 'void')`;
+}

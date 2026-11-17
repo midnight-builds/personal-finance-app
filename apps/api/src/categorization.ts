@@ -17,7 +17,7 @@ import {
 import { db } from './db.js';
 import { DomainError } from './http/errors.js';
 import { USER_RULE_PRIORITY, appendDecision, categoryIdByRole, learnRuleFromChoice } from './rules.js';
-import { LATEST_DECISION_ORDER, latestCategoryDecisionJoin } from './sql/transactions.js';
+import { LATEST_DECISION_ORDER, latestCategoryDecisionJoin, notVoid } from './sql/transactions.js';
 
 // Change sets (docs/CATEGORIES.md, "Operations"): every change to
 // categorization is planned first, applied with the plan's token and undoable
@@ -139,7 +139,7 @@ function rowsInCategory(categoryId: string): Array<Latest & { txId: string }> {
     .prepare(
       `SELECT nt.id AS tx_id, cd.id, cd.category_id, cd.source FROM normalized_transactions nt
        ${latestCategoryDecisionJoin('nt', 'cd')}
-       WHERE cd.category_id = ? ORDER BY nt.rowid`
+       WHERE cd.category_id = ? AND ${notVoid('nt')} ORDER BY nt.rowid`
     )
     .all(categoryId)
     .map((r) => {
@@ -369,7 +369,8 @@ function draftCreateRule(op: Extract<Op, { kind: 'create_rule' }>): Draft {
   const candidates = db
     .prepare(
       `SELECT nt.id AS tx_id, nt.counterparty_name, nt.description, cd.id, cd.category_id, cd.source
-       FROM normalized_transactions nt ${latestCategoryDecisionJoin('nt', 'cd')} ORDER BY nt.rowid`
+       FROM normalized_transactions nt ${latestCategoryDecisionJoin('nt', 'cd')}
+       WHERE ${notVoid('nt')} ORDER BY nt.rowid`
     )
     .all() as Array<{ tx_id: string; counterparty_name: string | null; description: string | null } & Latest>;
   const seen: Array<[string, string | null]> = [];

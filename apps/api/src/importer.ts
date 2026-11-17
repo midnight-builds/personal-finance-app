@@ -7,7 +7,7 @@ import { chooseCategoryFor, upsertDecision } from './rules.js';
 import { detectPatterns } from './patterns.js';
 import { runBriefing } from './briefing.js';
 import { generateRuleSuggestions } from './ruleSuggestions.js';
-import { daysBefore } from './ledger.js';
+import { daysBefore, today } from './ledger.js';
 import { DomainError } from './http/errors.js';
 import { dayEnds, type SaldoRow } from './saldoChain.js';
 import type { AccountSubtype } from '@finance-app/shared';
@@ -24,22 +24,48 @@ export type ImportResult = {
   duplicateCount: number;
   /** Rows linked as one side of a transfer between own accounts. */
   transferCount: number;
+  /** Pending rows already stored as pending (not stored again). */
+  pendingSeenCount: number;
+  /** Booked rows that booked a stored pending row in place. */
+  bookedPendingCount: number;
+  /** Stored pending rows this export shows cancelled (void). */
+  voidedPendingCount: number;
   briefingSessionId?: string;
 };
 
 type RecordValue = string | number | null | undefined;
 
+/**
+ * An amount as a CSV writes it ("-1.234,50", "1 234,56") or as a spreadsheet
+ * cell holds it (a number, or text like "-12.50"). The decimal separator is the
+ * last of comma and dot when both appear; a lone comma is decimal (Nordea); a
+ * lone dot is decimal only before one or two final digits ("1.234" is a
+ * thousand).
+ */
 export function parseAmount(value?: RecordValue): number | null {
   if (value === null || value === undefined || value === '') return null;
-  if (typeof value === 'number') return value;
-  const normalized = value
-    .replace(/\s/g, '')
-    .replace(/\./g, '')
-    .replace(',', '.');
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const s = String(value).replace(/\s/g, '').replace(/−/g, '-');
+  const comma = s.lastIndexOf(',');
+  const dot = s.lastIndexOf('.');
+  let decimal: ',' | '.' | null;
+  if (comma >= 0 && dot >= 0) decimal = comma > dot ? ',' : '.';
+  else if (comma >= 0) decimal = ',';
+  else if (dot >= 0) decimal = /^[-+]?\d*\.\d{1,2}$/.test(s) ? '.' : null;
+  else decimal = null;
+  const thousands = decimal === ',' ? /\./g : decimal === '.' ? /,/g : /[.,]/g;
+  const normalized = decimal ? s.replace(thousands, '').replace(decimal, '.') : s.replace(thousands, '');
+  if (normalized === '' || normalized === '-' || normalized === '+') return null;
   const amount = Number(normalized);
   return Number.isNaN(amount) ? null : amount;
 }
 
+/**
+ * A booking day as an ISO timestamp at UTC midnight, or null (a pending
+ * "Varaus" row, or no date). Accepts Nordea's "YYYY/MM/DD", "DD.MM.YYYY", ISO
+ * days with a time after them, and spreadsheet day numbers (a time of day,
+ * the fraction, is dropped: a booking is a calendar day).
+ */
 export function parseDate(value?: RecordValue): string | null {
   if (value === null || value === undefined || value === '') return null;
   if (value && typeof value === 'object' && 'toISOString' in value) {
@@ -50,49 +76,59 @@ export function parseDate(value?: RecordValue): string | null {
     }
   }
   if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
     const epoch = Date.UTC(1899, 11, 30);
-    const date = new Date(epoch + value * 86400000);
+    const date = new Date(epoch + Math.floor(value) * 86400000);
     return date.toISOString();
   }
-  if (value === 'Varaus') return null;
+  const trimmed = String(value).trim();
+  if (trimmed === 'Varaus') return null;
 
-  const normalized = String(value).replace(/\./g, '/').replace(/-/g, '/');
+  const normalized = trimmed.split(/[\sT]/)[0].replace(/\./g, '/').replace(/-/g, '/');
   const parts = normalized.split('/');
   if (parts.length !== 3) return null;
 
-  let year = Number(parts[0]);
-  let month = Number(parts[1]);
-  let day = Number(parts[2]);
-
-  if (year < 100) {
-    year += 2000;
-  }
-
-  if (year > 31 && month > 0 && day > 0) {
-    const date = new Date(Date.UTC(year, month - 1, day));
-    return date.toISOString();
-  }
-
-  const altDay = Number(parts[0]);
-  const altMonth = Number(parts[1]);
-  const altYear = Number(parts[2]);
-  if (altYear > 31 && altMonth > 0 && altDay > 0) {
-    const date = new Date(Date.UTC(altYear, altMonth - 1, altDay));
-    return date.toISOString();
-  }
-
-  return null;
+  // A four-digit last part is a year (DD.MM.YYYY); otherwise year first (YYYY/MM/DD, YY/MM/DD).
+  const dayFirst = parts[2].trim().length === 4;
+  let year = Number(dayFirst ? parts[2] : parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(dayFirst ? parts[0] : parts[2]);
+  if (year < 100) year += 2000;
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  // No rolling over: 31.02. is not a day.
+  if (date.getUTCMonth() !== month - 1) return null;
+  return date.toISOString();
 }
 
 function createId(): string {
   return crypto.randomUUID();
 }
 
+/** A column name as the pipeline knows it: no BOM, no surrounding spaces, composed umlauts. */
+const canonicalColumn = (name: string) => name.replace(/^\ufeff/, '').normalize('NFC').trim();
+
+/**
+ * A column's value. Column names are compared in canonical form: the CSV
+ * reader trims its header, a spreadsheet header may carry a stray space, a BOM
+ * or decomposed umlauts, and those are the same column.
+ */
 export function getField(record: Record<string, unknown>, key: string): RecordValue {
   if (record[key] !== undefined && record[key] !== null) return record[key] as RecordValue;
-  const bomKey = `\ufeff${key}`;
-  if (record[bomKey] !== undefined && record[bomKey] !== null) return record[bomKey] as RecordValue;
+  for (const name of Object.keys(record)) {
+    if (name !== key && canonicalColumn(name) === key && record[name] !== undefined && record[name] !== null) {
+      return record[name] as RecordValue;
+    }
+  }
   return null;
+}
+
+/** A text column's value as text: a spreadsheet may store a message like "20261012" as a number. */
+function textOf(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '';
 }
 
 function ensureAccount(accountName: string, accountIban: string, now: string): string {
@@ -124,13 +160,9 @@ function extractIbanCandidates(records: Record<string, unknown>[]): string[] {
   for (const record of records) {
     const amount = parseAmount(getField(record, 'Määrä'));
     if (amount === null || amount === 0) continue;
-    const own = amount < 0 ? ['Maksaja', 'Maksaja '] : ['Maksunsaaja', 'Maksunsaaja '];
-    for (const field of own) {
-      const raw = getField(record, field);
-      if (!raw || typeof raw !== 'string') continue;
-      const compact = raw.replace(/\s+/g, '').toUpperCase();
-      if (looksLikeIban(compact)) candidates.push(compact);
-    }
+    const raw = textOf(getField(record, amount < 0 ? 'Maksaja' : 'Maksunsaaja'));
+    const compact = raw.replace(/\s+/g, '').toUpperCase();
+    if (looksLikeIban(compact)) candidates.push(compact);
   }
   return candidates;
 }
@@ -202,15 +234,12 @@ function looksLikeIban(value: string | null | undefined): boolean {
 
 export function chooseCounterparty(record: Record<string, unknown>, amount: number): { name: string | null; iban: string | null } {
   const nameFields = [
-    getField(record, 'Nimi'),
-    getField(record, 'Otsikko'),
-    getField(record, 'Viesti'),
-  ]
-    .filter((v) => typeof v === 'string' && v.trim().length > 0 && !looksLikeIban(v as string))
-    .map((v) => (v as string).trim());
+    textOf(getField(record, 'Nimi')),
+    textOf(getField(record, 'Otsikko')),
+    textOf(getField(record, 'Viesti')),
+  ].filter((v) => v.length > 0 && !looksLikeIban(v));
 
-  const otherParty = amount < 0 ? getField(record, 'Maksunsaaja') : getField(record, 'Maksaja');
-  const otherPartyStr = typeof otherParty === 'string' ? otherParty.trim() : '';
+  const otherPartyStr = textOf(amount < 0 ? getField(record, 'Maksunsaaja') : getField(record, 'Maksaja'));
 
   const name = nameFields[0] || (looksLikeIban(otherPartyStr) ? null : otherPartyStr) || null;
   const iban = looksLikeIban(otherPartyStr) ? otherPartyStr.replace(/\s+/g, '') : null;
@@ -433,6 +462,12 @@ export type ImportCounts = {
    * booking date, amount and counterparty, paired one-to-one with stored rows.
    */
   duplicateCount: number;
+  /** Pending rows of this import the account already has as pending: not stored again. */
+  pendingSeenCount: number;
+  /** Booked rows of this import that are the booking of a stored pending row, promoted in place. */
+  bookedPendingCount: number;
+  /** Stored pending rows this newer export lists neither pending nor booked: now void. */
+  voidedPendingCount: number;
   /** Day range of those rows. */
   overlap: { from: string; to: string } | null;
   /** Rows of this import linked as one side of a transfer. */
@@ -513,6 +548,232 @@ function resolveAccount(plan: AccountPlan, now: string): { accountId: string; ib
   return { accountId, iban: plan.iban };
 }
 
+/** A file row as the pipeline reads it. */
+type FileRow = {
+  record: Record<string, unknown>;
+  /** Index in the file. */
+  index: number;
+  /** ISO timestamp at UTC midnight; null for a pending row. */
+  bookingDate: string | null;
+  day: string | null;
+  amount: number | null;
+  currency: string;
+  counterparty: string | null;
+  counterpartyIban: string | null;
+  description: string | null;
+};
+
+/** A stored pending (or void) row of the account that a file row may be. */
+type PendingCandidate = {
+  id: string;
+  amount: number;
+  counterparty: string | null;
+  createdAt: string;
+  status: 'pending' | 'void';
+  firstSeenDay: string;
+  lastSeenDay: string;
+  resolvedDay: string | null;
+};
+
+/** What the import does with a file row. */
+type RowAction =
+  | { kind: 'skip' }
+  | { kind: 'duplicate' }
+  | { kind: 'pending_seen'; target: PendingCandidate }
+  | { kind: 'promote'; target: PendingCandidate }
+  | { kind: 'insert' };
+
+/**
+ * Days a booking may be dated before the export that first listed its
+ * reservation (the export's latest booked day stands in for when it was made,
+ * and a bank may date a booking a little back).
+ */
+export const PENDING_BACKDATE_DAYS = 3;
+/**
+ * Days after the newest export that still listed a reservation within which
+ * its booking (or the same reservation again) is looked for. Card
+ * authorisations lapse well within this; a later row of the same amount and
+ * counterparty is another purchase.
+ */
+export const PENDING_MAX_AGE_DAYS = 35;
+
+function descriptionOf(record: Record<string, unknown>, counterparty: string | null): string | null {
+  const descriptionParts = [textOf(getField(record, 'Otsikko')), textOf(getField(record, 'Viesti'))].filter((v) => v.length > 0);
+  const filteredParts = counterparty ? descriptionParts.filter((p) => !eqIgnoreCase(p, counterparty)) : descriptionParts;
+  let description = filteredParts.join(' | ');
+  if (counterparty && description.toLowerCase().startsWith(counterparty.toLowerCase())) {
+    const pattern = new RegExp(`^\\s*${escapeRegex(counterparty)}\\s*[|,:-]?\\s*`, 'i');
+    description = description.replace(pattern, '').trim();
+  }
+  if (description && counterparty && normalizeString(description) === normalizeString(counterparty)) {
+    description = '';
+  }
+  return description || null;
+}
+
+function readRow(record: Record<string, unknown>, index: number): FileRow {
+  const bookingDate = parseDate(getField(record, 'Kirjauspäivä'));
+  const amount = parseAmount(getField(record, 'Määrä'));
+  const currency = textOf(getField(record, 'Valuutta')) || 'EUR';
+  if (amount === null) {
+    return { record, index, bookingDate, day: bookingDate?.slice(0, 10) ?? null, amount, currency, counterparty: null, counterpartyIban: null, description: null };
+  }
+  const { name, iban } = chooseCounterparty(record, amount);
+  const counterparty = name || null;
+  return {
+    record,
+    index,
+    bookingDate,
+    day: bookingDate?.slice(0, 10) ?? null,
+    amount,
+    currency,
+    counterparty,
+    counterpartyIban: iban || null,
+    description: descriptionOf(record, counterparty),
+  };
+}
+
+const sameKey = (c: PendingCandidate, r: FileRow) => c.amount === r.amount && c.counterparty === r.counterparty;
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * Decides, before anything is written, what happens to every row of the file:
+ *
+ * 1. A booked row the account already has (same booking day, amount and
+ *    counterparty, paired one-to-one with stored rows of earlier imports) is
+ *    a duplicate and not stored.
+ * 2. A pending row the account already has as pending (same amount and
+ *    counterparty, last listed within PENDING_MAX_AGE_DAYS) is seen again and
+ *    not stored. Of several, the most recently seen one is taken: the
+ *    reservations still pending are the newest.
+ * 3. Any other booked row may be the booking of a stored reservation: same
+ *    amount and counterparty, dated from PENDING_BACKDATE_DAYS before the
+ *    export that first listed it to PENDING_MAX_AGE_DAYS after the newest that
+ *    did. Bookings are paired in day order with the oldest reservations
+ *    first, one-to-one; a still-pending reservation goes before a void one.
+ * 4. Everything else is new.
+ *
+ * Rows of this file are never matched with each other, and a reservation
+ * this file still lists pending is never booked by it. A booked row is only
+ * ever paired with one stored row that no report counts (a pending or void
+ * one), so promotion can never make two counted transactions one.
+ */
+function planRows(rows: FileRow[], accountId: string, fileDay: string): { actions: RowAction[]; unclaimed: PendingCandidate[] } {
+  const actions: RowAction[] = rows.map(() => ({ kind: 'insert' }) as RowAction);
+
+  // 1. Booked duplicates.
+  const storedCount = db.prepare(
+    `SELECT COUNT(*) AS n FROM normalized_transactions
+     WHERE account_id = ? AND booking_date >= ? AND booking_date < ? AND amount = ?
+       AND (counterparty_name = ? OR (counterparty_name IS NULL AND ? IS NULL))`
+  );
+  const unmatched = new Map<string, number>();
+  for (const r of rows) {
+    if (r.amount === null) {
+      actions[r.index] = { kind: 'skip' };
+      continue;
+    }
+    if (!r.day) continue;
+    const key = JSON.stringify([r.day, r.amount, r.counterparty]);
+    const left =
+      unmatched.get(key) ??
+      Number((storedCount.get(accountId, r.day, daysBefore(r.day, -1), r.amount, r.counterparty, r.counterparty) as { n: number }).n);
+    unmatched.set(key, Math.max(0, left - 1));
+    if (left > 0) actions[r.index] = { kind: 'duplicate' };
+  }
+
+  const candidates = (
+    db
+      .prepare(
+        `SELECT t.id, t.amount, t.counterparty_name, t.created_at, p.status, p.first_seen_day, p.last_seen_day, p.resolved_day
+         FROM normalized_transactions t JOIN pending_transactions p ON p.transaction_id = t.id
+         WHERE t.account_id = ? AND t.booking_date IS NULL AND p.status IN ('pending', 'void')`
+      )
+      .all(accountId) as Array<{
+      id: string;
+      amount: number;
+      counterparty_name: string | null;
+      created_at: string;
+      status: 'pending' | 'void';
+      first_seen_day: string;
+      last_seen_day: string;
+      resolved_day: string | null;
+    }>
+  ).map(
+    (c): PendingCandidate => ({
+      id: c.id,
+      amount: Number(c.amount),
+      counterparty: c.counterparty_name,
+      createdAt: c.created_at,
+      status: c.status,
+      firstSeenDay: c.first_seen_day,
+      lastSeenDay: c.last_seen_day,
+      resolvedDay: c.resolved_day,
+    })
+  );
+  const claimed = new Set<string>();
+  const pendingFirst = (a: PendingCandidate, b: PendingCandidate) => (a.status === b.status ? 0 : a.status === 'pending' ? -1 : 1);
+
+  // 2. Reservations seen again: the most recently seen first.
+  const recentEnough = daysBefore(fileDay, PENDING_MAX_AGE_DAYS);
+  for (const r of rows) {
+    if (r.amount === null || r.day) continue;
+    const pick = candidates
+      .filter((c) => !claimed.has(c.id) && sameKey(c, r) && c.lastSeenDay >= recentEnough)
+      .sort(
+        (a, b) =>
+          pendingFirst(a, b) ||
+          cmp(b.lastSeenDay, a.lastSeenDay) ||
+          cmp(b.firstSeenDay, a.firstSeenDay) ||
+          cmp(b.createdAt, a.createdAt) ||
+          cmp(b.id, a.id)
+      )[0];
+    if (pick) {
+      claimed.add(pick.id);
+      actions[r.index] = { kind: 'pending_seen', target: pick };
+    }
+  }
+
+  // 3. Bookings of reservations: in day order (file order within a day), oldest reservation first.
+  const bookings = rows
+    .filter((r) => r.day && r.amount !== null && actions[r.index].kind === 'insert')
+    .sort((a, b) => cmp(a.day!, b.day!) || a.index - b.index);
+  for (const r of bookings) {
+    const day = r.day!;
+    const pick = candidates
+      .filter(
+        (c) =>
+          !claimed.has(c.id) &&
+          sameKey(c, r) &&
+          day >= daysBefore(c.firstSeenDay, PENDING_BACKDATE_DAYS) &&
+          day <= daysBefore(c.lastSeenDay, -PENDING_MAX_AGE_DAYS)
+      )
+      .sort((a, b) => pendingFirst(a, b) || cmp(a.firstSeenDay, b.firstSeenDay) || cmp(a.createdAt, b.createdAt) || cmp(a.id, b.id))[0];
+    if (pick) {
+      claimed.add(pick.id);
+      actions[r.index] = { kind: 'promote', target: pick };
+    }
+  }
+
+  return { actions, unclaimed: candidates.filter((c) => !claimed.has(c.id)) };
+}
+
+/**
+ * Stored reservations this file proves gone: it lists them neither pending nor
+ * booked, and it is a newer export of their period. Newer: its latest booked
+ * day is on or after that of the newest export that listed the reservation.
+ * Of their period: its booked rows reach back to where the reservation's
+ * booking could be dated (PENDING_BACKDATE_DAYS before it was first listed).
+ * A shorter or older export proves nothing, and a file without booked rows
+ * has no period.
+ */
+function provenGone(unclaimed: PendingCandidate[], firstDay: string | null, lastDay: string | null): PendingCandidate[] {
+  if (!firstDay || !lastDay) return [];
+  return unclaimed.filter(
+    (c) => c.status === 'pending' && lastDay >= c.lastSeenDay && firstDay <= daysBefore(c.firstSeenDay, PENDING_BACKDATE_DAYS)
+  );
+}
+
 /**
  * The import's transactional part, all synchronous: node:sqlite shares one
  * connection, so an `await` before COMMIT/ROLLBACK would let another request
@@ -528,11 +789,22 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
   let normalizedCount = 0;
   let skippedCount = 0;
   let duplicateCount = 0;
+  let pendingSeenCount = 0;
+  let bookedPendingCount = 0;
+  let voidedPendingCount = 0;
   let overlapFrom: string | null = null;
   let overlapTo: string | null = null;
   let overlapRow: { id: string; row_count: number } | undefined;
-  const insertedIds: string[] = [];
+  /** Rows that got a booking date in this import: inserted booked rows and promoted reservations. */
+  const linkIds: string[] = [];
   let transferCount = 0;
+
+  const rows = records.map(readRow);
+  const bookedDays = rows.map((r) => r.day).filter((d): d is string => d !== null).sort();
+  const firstDay = bookedDays[0] ?? null;
+  const lastDay = bookedDays[bookedDays.length - 1] ?? null;
+  // The export's day: its latest booked day (an export does not say when it was made).
+  const fileDay = lastDay ?? today();
 
   // One transaction up to COMMIT: a failed or interrupted import leaves no
   // account, session or rows behind, and never rows that are not yet linked
@@ -546,6 +818,9 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
     overlapRow = db
       .prepare('SELECT id, row_count FROM import_sessions WHERE overlap_key = ?')
       .get(overlapKey) as { id: string; row_count: number } | undefined;
+
+    // Decided before this import writes a row, so its own rows are never matched.
+    const { actions, unclaimed } = planRows(rows, accountId, fileDay);
 
     db.prepare(
       'INSERT INTO import_sessions (id, created_at, source_bank, format, file_checksum, row_count, overlap_key) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -565,7 +840,30 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
     const insertNormalized = db.prepare(
       'INSERT INTO normalized_transactions (id, created_at, raw_transaction_id, import_session_id, account_id, booking_date, transaction_date, amount, currency, counterparty_name, description, counterparty_iban) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
-    const alreadyStored = storedMatcher(accountId, importSessionId);
+    const insertPending = db.prepare(
+      `INSERT INTO pending_transactions
+         (transaction_id, status, first_seen_session_id, first_seen_day, last_seen_session_id, last_seen_day, pending_raw_transaction_id)
+       VALUES (?, 'pending', ?, ?, ?, ?, ?)`
+    );
+    const seenAgain = db.prepare(
+      `UPDATE pending_transactions
+       SET last_seen_session_id = ?, last_seen_day = MAX(last_seen_day, ?),
+           status = CASE WHEN status = 'void' AND ? >= resolved_day THEN 'pending' ELSE status END,
+           resolved_session_id = CASE WHEN status = 'void' AND ? >= resolved_day THEN NULL ELSE resolved_session_id END,
+           resolved_at = CASE WHEN status = 'void' AND ? >= resolved_day THEN NULL ELSE resolved_at END,
+           resolved_day = CASE WHEN status = 'void' AND ? >= resolved_day THEN NULL ELSE resolved_day END
+       WHERE transaction_id = ?`
+    );
+    const promote = db.prepare(
+      `UPDATE normalized_transactions
+       SET raw_transaction_id = ?, booking_date = ?, transaction_date = ?, currency = ?, description = ?, counterparty_iban = ?
+       WHERE id = ? AND booking_date IS NULL`
+    );
+    const resolvePending = db.prepare(
+      `UPDATE pending_transactions SET status = ?, resolved_session_id = ?, resolved_day = ?, resolved_at = ?
+       WHERE transaction_id = ? AND status IN ('pending', 'void')`
+    );
+    const hasDecision = db.prepare('SELECT 1 FROM categorization_decisions WHERE transaction_id = ? LIMIT 1');
     const insertBalance = db.prepare(
       'INSERT OR REPLACE INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES (?, ?, ?, ?, ?, ?)'
     );
@@ -579,12 +877,14 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
     const dayRows = new Map<string, Array<SaldoRow & { currency: string }>>();
     const daysMissingSaldo = new Set<string>();
 
-    for (const record of records) {
-      const bookingDate = parseDate(getField(record, 'Kirjauspäivä'));
-      const amount = parseAmount(getField(record, 'Määrä'));
-      const currency = (getField(record, 'Valuutta') as string) || 'EUR';
-      const saldoRaw = getField(record, 'Saldo');
-      const saldo = parseAmount(saldoRaw);
+    const categorize = (id: string, r: FileRow) => {
+      const categoryId = chooseCategoryFor({ counterparty: r.counterparty || '', description: r.description || '', amount: r.amount! });
+      if (categoryId) upsertDecision({ transactionId: id, categoryId, source: 'rule', actor: options.actor ?? 'user' });
+    };
+
+    for (const r of rows) {
+      const { record, bookingDate, amount, currency } = r;
+      const action = actions[r.index];
 
       const storeRaw = () => {
         const rawId = createId();
@@ -592,15 +892,14 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
         return rawId;
       };
 
-      if (amount === null) {
+      if (amount === null || action.kind === 'skip') {
         storeRaw();
         skippedCount += 1;
         continue;
       }
 
-      const { name: counterparty, iban: counterpartyIban } = chooseCounterparty(record, amount);
-
       // The file's balances count whether or not its rows are new.
+      const saldo = parseAmount(getField(record, 'Saldo'));
       if (saldo !== null && bookingDate) {
         if (!dayRows.has(bookingDate)) dayRows.set(bookingDate, []);
         dayRows.get(bookingDate)!.push({ amount, saldo, currency });
@@ -608,35 +907,35 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
         daysMissingSaldo.add(bookingDate);
       }
 
-      // A transaction is stored once: a row the account already has is not
-      // stored again (pending rows have no date to match on).
-      if (bookingDate && alreadyStored(bookingDate, amount, counterparty || null)) {
+      if (action.kind === 'duplicate') {
+        // A transaction is stored once: a row the account already has is not stored again.
         duplicateCount += 1;
-        const day = bookingDate.slice(0, 10);
+        const day = r.day!;
         if (overlapFrom === null || day < overlapFrom) overlapFrom = day;
         if (overlapTo === null || day > overlapTo) overlapTo = day;
         continue;
       }
+
+      if (action.kind === 'pending_seen') {
+        // The same reservation again: not stored again, only seen later.
+        seenAgain.run(importSessionId, fileDay, fileDay, fileDay, fileDay, fileDay, action.target.id);
+        pendingSeenCount += 1;
+        continue;
+      }
+
       const rawId = storeRaw();
 
-      const descriptionParts = [getField(record, 'Otsikko'), getField(record, 'Viesti')]
-        .filter((value) => typeof value === 'string' && value.trim().length > 0)
-        .map((value) => String(value).trim());
-
-      let filteredParts = descriptionParts;
-      if (counterparty) {
-        filteredParts = filteredParts.filter((p) => !eqIgnoreCase(p, counterparty));
-      }
-
-      let description = filteredParts.join(' | ');
-
-      if (counterparty && description.toLowerCase().startsWith(counterparty.toLowerCase())) {
-        const pattern = new RegExp(`^\\s*${escapeRegex(counterparty)}\\s*[|,:-]?\\s*`, 'i');
-        description = description.replace(pattern, '').trim();
-      }
-
-      if (description && counterparty && normalizeString(description) === normalizeString(counterparty)) {
-        description = '';
+      if (action.kind === 'promote') {
+        // The reservation is booked: the same transaction (id, decisions,
+        // links) gets its booking date; the booked raw row becomes its source
+        // and the pending raw row stays as the reservation's.
+        const id = action.target.id;
+        promote.run(rawId, bookingDate, bookingDate, currency, r.description, r.counterpartyIban, id);
+        resolvePending.run('booked', importSessionId, fileDay, now, id);
+        if (!hasDecision.get(id)) categorize(id, r);
+        linkIds.push(id);
+        bookedPendingCount += 1;
+        continue;
       }
 
       const normalizedId = createId();
@@ -650,22 +949,21 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
         bookingDate,
         amount,
         currency,
-        counterparty || null,
-        description || null,
-        counterpartyIban || null
+        r.counterparty,
+        r.description,
+        r.counterpartyIban
       );
+      if (!bookingDate) insertPending.run(normalizedId, importSessionId, fileDay, importSessionId, fileDay, rawId);
+      categorize(normalizedId, r);
 
-      const categoryId = chooseCategoryFor({
-        counterparty: counterparty || '',
-        description: description || '',
-        amount,
-      });
-      if (categoryId) {
-        upsertDecision({ transactionId: normalizedId, categoryId, source: 'rule', actor: options.actor ?? 'user' });
-      }
-
-      insertedIds.push(normalizedId);
+      if (bookingDate) linkIds.push(normalizedId);
       normalizedCount += 1;
+    }
+
+    // Reservations this newer export no longer lists, pending or booked: cancelled.
+    for (const c of provenGone(unclaimed, firstDay, lastDay)) {
+      resolvePending.run('void', importSessionId, fileDay, now, c.id);
+      voidedPendingCount += 1;
     }
 
     for (const [day, rows] of dayRows) {
@@ -677,9 +975,9 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
       insertBalance.run(createId(), now, accountId, day, saldo, byFileOrder.currency);
     }
 
-    // Post-processing: link the new rows as transfers.
-    linkTransfers(insertedIds);
-    transferCount = countTransfers(importSessionId);
+    // Post-processing: link the rows that got a booking date as transfers.
+    linkTransfers(linkIds);
+    transferCount = countTransfers(linkIds);
 
     db.exec(dryRun ? 'ROLLBACK' : 'COMMIT');
   } catch (error) {
@@ -696,6 +994,9 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
     normalizedCount,
     skippedCount,
     duplicateCount,
+    pendingSeenCount,
+    bookedPendingCount,
+    voidedPendingCount,
     overlap: overlapFrom && overlapTo ? { from: overlapFrom, to: overlapTo } : null,
     transferCount,
     overlapDetected: Boolean(overlapRow),
@@ -703,41 +1004,10 @@ function runImport(options: ImportOptions, plan: AccountPlan, dryRun: boolean): 
   };
 }
 
-/**
- * Whether a file row is a transaction the account already has: same booking
- * date, amount and counterparty (a missing one matches a missing one), paired
- * one-to-one. Stored rows are counted once per key, so a file with three
- * identical rows where two are stored brings one new row. Rows of this import
- * are never matched: two identical coffees in one file are two transactions.
- */
-function storedMatcher(accountId: string, importSessionId: string) {
-  const stored = db.prepare(
-    `SELECT COUNT(*) AS n FROM normalized_transactions
-     WHERE account_id = ? AND booking_date = ? AND amount = ?
-       AND (counterparty_name = ? OR (counterparty_name IS NULL AND ? IS NULL))
-       AND import_session_id != ?`
-  );
-  const unmatched = new Map<string, number>();
-  return (bookingDate: string, amount: number, counterparty: string | null) => {
-    const key = JSON.stringify([bookingDate, amount, counterparty]);
-    const left =
-      unmatched.get(key) ??
-      Number((stored.get(accountId, bookingDate, amount, counterparty, counterparty, importSessionId) as { n: number }).n);
-    unmatched.set(key, Math.max(0, left - 1));
-    return left > 0;
-  };
-}
-
-/** Rows of one import session linked as one side of a transfer. */
-function countTransfers(importSessionId: string): number {
-  const transfers = db
-    .prepare(
-      `SELECT COUNT(DISTINCT n.id) AS n FROM normalized_transactions n
-       JOIN transfer_links l ON n.id IN (l.from_transaction_id, l.to_transaction_id)
-       WHERE n.import_session_id = ?`
-    )
-    .get(importSessionId) as { n: number };
-  return Number(transfers.n);
+/** Of these rows, those linked as one side of a transfer. */
+function countTransfers(ids: string[]): number {
+  const linked = db.prepare('SELECT 1 FROM transfer_links WHERE from_transaction_id = ? OR to_transaction_id = ? LIMIT 1');
+  return ids.filter((id) => linked.get(id, id) !== undefined).length;
 }
 
 /**
@@ -772,7 +1042,16 @@ export async function processImport(options: ImportOptions): Promise<ImportResul
     type: 'import.done',
     scope: importSessionId,
     message: `Imported ${normalizedCount} rows (skipped ${skippedCount})`,
-    payload: { normalizedCount, skippedCount, duplicateCount: run.duplicateCount, overlapDetected, alreadyImportedCount },
+    payload: {
+      normalizedCount,
+      skippedCount,
+      duplicateCount: run.duplicateCount,
+      pendingSeenCount: run.pendingSeenCount,
+      bookedPendingCount: run.bookedPendingCount,
+      voidedPendingCount: run.voidedPendingCount,
+      overlapDetected,
+      alreadyImportedCount,
+    },
   });
 
   return {
@@ -785,6 +1064,9 @@ export async function processImport(options: ImportOptions): Promise<ImportResul
     alreadyImportedCount,
     duplicateCount: run.duplicateCount,
     transferCount: run.transferCount,
+    pendingSeenCount: run.pendingSeenCount,
+    bookedPendingCount: run.bookedPendingCount,
+    voidedPendingCount: run.voidedPendingCount,
     briefingSessionId,
   };
 }
@@ -804,9 +1086,12 @@ export function parseXlsx(fileBuffer: Buffer): Record<string, unknown>[] {
   const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
+  // Cell values as stored: numbers stay numbers and date cells day numbers.
+  // Formatted text would come in the writer's locale ("3/5/26", "-12.5"),
+  // which reads as another day and amount than the CSV of the same export.
   return xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, {
     defval: '',
-    raw: false,
+    raw: true,
   });
 }
 

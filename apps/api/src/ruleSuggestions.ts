@@ -4,7 +4,7 @@ import { getOpenAIApiKey } from './settings.js';
 import { aiCategorize } from './ai.js';
 import { isManual } from './categorization.js';
 import { appendDecision, categoryIdByRole } from './rules.js';
-import { latestCategoryDecisionJoin } from './sql/transactions.js';
+import { latestCategoryDecisionJoin, notVoid } from './sql/transactions.js';
 
 export type RuleSuggestion = {
   id: string;
@@ -60,7 +60,7 @@ export function acceptRuleSuggestion(id: string, options: { actor?: string | nul
       db.prepare(`
         SELECT nt.id, nt.counterparty_name, cd.source FROM normalized_transactions nt
         ${latestCategoryDecisionJoin('nt', 'cd')}
-        WHERE cd.category_id = ?
+        WHERE cd.category_id = ? AND ${notVoid('nt')}
       `).all(miscId) as Array<{ id: string; counterparty_name: string | null; source: string }>
     ).filter((tx) => (tx.counterparty_name ?? '').toLowerCase().includes(pattern) && !isManual(tx.id, tx));
 

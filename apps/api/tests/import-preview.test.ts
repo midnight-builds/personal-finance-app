@@ -561,3 +561,25 @@ test('a file whose IBAN belongs to another account needs confirmation, also into
   assert.equal((await preview('t.csv', unknown, { accountId: cardId })).analysis.ibanMismatch, false);
   assert.equal((await upload('t.csv', unknown, { accountId: cardId })).statusCode, 200);
 });
+
+test('a booked reservation is not a new row in the preview, and the import agrees', async () => {
+  const days: Row[] = [1, 2, 3, 4, 5].map((d) => ({ date: `2026-10-0${d}`, amount: -2, name: `Kauppa ${d}` }));
+  const reserved = { ...nordea([{ date: '2026-10-05', amount: -7, name: 'Kahvila' }], { own: CHECKING })[0], Kirjauspäivä: 'Varaus', Saldo: '' };
+  const cancelled = { ...reserved, Määrä: fmt(-30), Nimi: 'Hotelli', Maksunsaaja: 'Hotelli' };
+  await importDirect([reserved, cancelled, ...nordea(days, { own: CHECKING })], 'Käyttötili', CHECKING);
+
+  const later = nordea([...days, { date: '2026-10-06', amount: -7, name: 'Kahvila' }, { date: '2026-10-06', amount: -3, name: 'Leipomo' }], { own: CHECKING });
+  const p = await preview(`Käyttötili ${CHECKING}.csv`, later, { accountId: accounts()[0].id });
+  assert.equal(p.analysis.duplicates, 5);
+  assert.equal(p.analysis.bookedPending, 1);
+  assert.equal(p.analysis.voidedPending, 1);
+  assert.equal(p.analysis.pendingSeen, 0);
+  assert.equal(p.analysis.newRows, 1, 'only the bakery is new');
+
+  const res = await upload(`Käyttötili ${CHECKING}.csv`, later, { accountId: accounts()[0].id });
+  assert.equal(res.statusCode, 200, res.body);
+  const r = res.json();
+  assert.equal(r.normalizedCount, p.analysis.newRows);
+  assert.equal(r.bookedPendingCount, 1);
+  assert.equal(r.voidedPendingCount, 1);
+});
