@@ -21,6 +21,7 @@ import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConf
 import { getForecast } from './forecast.js';
 import { redetectPatternsIfRulesChanged } from './patterns.js';
 import { activePatterns, establishedSubscriptions } from './patternDecisions.js';
+import { withoutAnsweredQuestions } from './briefing.js';
 import { routes } from './routes/index.js';
 
 initDb();
@@ -197,7 +198,7 @@ server.get('/briefing/latest', async (_request, reply) => {
     .get() as any;
   if (!session) return reply.code(404).send({ error: 'not_found' });
 
-  const findings = db
+  const stored = db
     .prepare(
       `SELECT id, finding_type, title, description, severity, impact_eur, transaction_ids, metadata, created_at
        FROM insight_findings
@@ -207,6 +208,7 @@ server.get('/briefing/latest', async (_request, reply) => {
          impact_eur DESC`
     )
     .all(session.id) as any[];
+  const findings = withoutAnsweredQuestions(stored);
 
   return {
     id: session.id,

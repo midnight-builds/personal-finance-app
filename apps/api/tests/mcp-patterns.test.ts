@@ -75,7 +75,7 @@ test('MCP: Hermes lists questions with evidence, answers one under its actor, an
   assert.deepEqual(fund.reasons, ['fixed_amount_account_payment']);
   assert.equal(fund.evidence.transactions.length, 6);
   assert.equal(fund.evidence.paymentMethod, 'account_payment');
-  assert.ok(!JSON.stringify(questions).includes('FI00'), 'no IBAN reaches the agent');
+  assert.ok(!JSON.stringify(questions).includes('FI00'), 'no IBAN field reaches the agent');
 
   const answered = await agent.call('answer_recurring_question', { patternId: fund.patternId, decision: 'not_recurring' });
   assert.equal(answered.recorded, true);
@@ -99,6 +99,34 @@ test('MCP: Hermes lists questions with evidence, answers one under its actor, an
   assert.deepEqual(money(), before.money);
   assert.deepEqual(categorization(), before.categorization);
   assert.deepEqual(detected(), before.detected);
+});
+
+test('MCP: an IBAN inside a counterparty name is redacted in questions and decisions', async () => {
+  const agent = await connectAgent();
+  const account = monthlyCharges('Vuokranantaja FI00 1234 5600 0007 85', -650, 1, null);
+  detectPatterns(account, '2026-06-30');
+
+  const [q] = await agent.call('list_recurring_questions');
+  assert.equal(q.counterparty, 'Vuokranantaja [REDACTED]');
+  await agent.call('answer_recurring_question', { patternId: q.patternId, decision: 'recurring' });
+  const log = await agent.call('list_pattern_decisions');
+  assert.equal(log.items[0].counterparty, 'Vuokranantaja [REDACTED]');
+  assert.ok(!JSON.stringify(log).includes('5600'));
+});
+
+test('MCP: Hermes cannot change a decision the user made', async () => {
+  const agent = await connectAgent();
+  const account = monthlyCharges('Suoratoisto Kuvavirta', -12.99, 3, null);
+  detectPatterns(account, '2026-06-30');
+  const [q] = await agent.call('list_recurring_questions');
+  const res = await app.inject({ method: 'POST', url: `/patterns/${q.patternId}/decision`, payload: { decision: 'subscription' } });
+  assert.equal(res.json().pattern.decided_by, 'user');
+
+  await assert.rejects(
+    agent.call('answer_recurring_question', { patternId: q.patternId, decision: 'not_recurring' }),
+    /409.*user_decision/
+  );
+  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM pattern_decisions').get() as { n: number }).n, 1);
 });
 
 test('MCP: answering an unknown pattern or with an unknown answer is a tool error', async () => {

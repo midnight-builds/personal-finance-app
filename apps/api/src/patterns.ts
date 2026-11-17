@@ -51,7 +51,7 @@ function isSubscription(occurrences: Array<{ amount: number; date: string; viaIb
  */
 const MIN_OCCURRENCES = 3;
 
-type Occurrence = { id: string; counterparty: string; amount: number; date: string; viaIban: boolean };
+export type Occurrence = { id: string; counterparty: string; amount: number; date: string; viaIban: boolean };
 type Charge = Omit<Occurrence, 'counterparty' | 'id'>;
 
 /**
@@ -154,18 +154,31 @@ function byCounterparty(rows: Occurrence[]) {
   return groups;
 }
 
-/** Detection window of monthly and weekly patterns, in days up to the detection day. */
+/**
+ * Detection window of monthly and weekly patterns: the 180 days up to the account's
+ * latest booking on or before the detection day. Ending it at the account's own data,
+ * not at the calendar day, keeps an account whose exports lag behind from looking as
+ * if its charges had stopped.
+ */
 const WINDOW_DAYS = 180;
 
+function windowStart(entries: LedgerEntry[], asOf: string): string {
+  return daysBefore(entries.at(-1)?.date ?? asOf, WINDOW_DAYS);
+}
+
 /**
- * The charges a monthly/weekly pattern rests on: the account's countable expenses to
- * the counterparty in the detection window ending on `lastSeen` (the pattern's last charge),
- * found exactly as detection finds them. Oldest first.
+ * The charges monthly/weekly patterns of an account rest on as of `asOf` (default:
+ * today), per counterparty: its countable expenses in the detection window, found as
+ * detection finds them. Oldest first.
  */
-export function patternCharges(accountId: string, counterparty: string, lastSeen: string): Occurrence[] {
-  const to = lastSeen.slice(0, 10);
-  const entries = ledgerEntries({ accounts: [accountId], to, includeTransfers: true });
-  return recurringCandidates(entries, daysBefore(to, WINDOW_DAYS)).filter((o) => o.counterparty === counterparty);
+export function patternChargesOf(accountId: string, asOf: string = today()): Map<string, Occurrence[]> {
+  const entries = ledgerEntries({ accounts: [accountId], to: asOf, includeTransfers: true });
+  const charges = new Map<string, Occurrence[]>();
+  for (const o of recurringCandidates(entries, windowStart(entries, asOf))) {
+    if (!charges.has(o.counterparty)) charges.set(o.counterparty, []);
+    charges.get(o.counterparty)!.push(o);
+  }
+  return charges;
 }
 
 const SCORE_COLUMNS = ['confidence', 'confidence_factors', 'amount_fixed', 'payment_method'] as const;
@@ -177,7 +190,7 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
   const now = new Date().toISOString();
   // Transfers are included only to find the counterparties to leave out.
   const entries = ledgerEntries({ accounts: [accountId], to: asOf, includeTransfers: true });
-  const rows = recurringCandidates(entries, daysBefore(asOf, WINDOW_DAYS));
+  const rows = recurringCandidates(entries, windowStart(entries, asOf));
   const groups = byCounterparty(rows);
   const detected = new Set<string>();
 

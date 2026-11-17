@@ -6,7 +6,7 @@
 import type { PatternDecision, PatternState } from '@finance-app/shared';
 import { db } from './db.js';
 import { DomainError } from './http/errors.js';
-import { CONFIDENT, patternCharges, type ConfidenceFactors } from './patterns.js';
+import { CONFIDENT, patternChargesOf, type ConfidenceFactors, type Occurrence } from './patterns.js';
 
 type PatternRow = {
   id: string;
@@ -66,13 +66,19 @@ const STATE_OF: Record<PatternDecision, PatternState> = {
 };
 
 function view(row: PatternRow): PatternView {
-  const { decision, confidence_factors, amount_fixed, user_confirmed, ...rest } = row;
-  const state: PatternState = decision ? STATE_OF[decision] : 'unconfirmed';
+  const { confidence_factors, amount_fixed, user_confirmed, ...rest } = row;
   const monthly = MONTHLY_TYPES.has(row.pattern_type);
+  // Decisions are about monthly/weekly patterns. Should the row turn annual, its own
+  // confirmation rules apply; the decision applies again if it turns monthly again.
+  const decision = monthly ? row.decision : null;
+  const state: PatternState = decision ? STATE_OF[decision] : 'unconfirmed';
   // A decision on a monthly/weekly pattern names its type; annual patterns keep theirs.
   const type = monthly && (decision === 'recurring' || decision === 'subscription') ? decision : row.pattern_type;
+  const { decision: _decision, ...fields } = rest;
   return {
-    ...rest,
+    ...fields,
+    decided_by: decision ? row.decided_by : null,
+    decided_at: decision ? row.decided_at : null,
     pattern_type: type,
     detected_type: row.pattern_type,
     confidence_factors: confidence_factors ? (JSON.parse(confidence_factors) as ConfidenceFactors) : null,
@@ -155,8 +161,21 @@ export type RecurringQuestion = {
   };
 };
 
-function question(p: PatternView, reasons: QuestionReason[]): RecurringQuestion {
-  const charges = patternCharges(p.account_id, p.counterparty_name!, p.last_seen);
+type OpenQuestion = { pattern: PatternView; reasons: QuestionReason[] };
+
+function openQuestions(): OpenQuestion[] {
+  return monthlyPatterns().flatMap((pattern) => {
+    const reasons = questionReasons(pattern);
+    return reasons.length && pattern.counterparty_name !== null ? [{ pattern, reasons }] : [];
+  });
+}
+
+/** Ids of the patterns with an open question, without gathering evidence. */
+export function openQuestionIds(): Set<string> {
+  return new Set(openQuestions().map((q) => q.pattern.id));
+}
+
+function question({ pattern: p, reasons }: OpenQuestion, charges: Occurrence[]): RecurringQuestion {
   const amounts = charges.map((c) => c.amount);
   return {
     patternId: p.id,
@@ -186,9 +205,11 @@ function question(p: PatternView, reasons: QuestionReason[]): RecurringQuestion 
 
 /** Open "is this recurring?" questions with their evidence, largest typical amount first. */
 export function recurringQuestions(): RecurringQuestion[] {
-  return monthlyPatterns().flatMap((p) => {
-    const reasons = questionReasons(p);
-    return reasons.length && p.counterparty_name !== null ? [question(p, reasons)] : [];
+  const byAccount = new Map<string, Map<string, Occurrence[]>>();
+  return openQuestions().map((q) => {
+    const account = q.pattern.account_id;
+    if (!byAccount.has(account)) byAccount.set(account, patternChargesOf(account));
+    return question(q, byAccount.get(account)!.get(q.pattern.counterparty_name!) ?? []);
   });
 }
 
@@ -196,10 +217,14 @@ export function recurringQuestions(): RecurringQuestion[] {
 
 export type DecisionResult = { pattern: PatternView; recorded: boolean };
 
+/** The actor the web UI is recorded as (docs/adr/0001-actor-without-authentication.md). */
+const USER_ACTOR = 'user';
+
 /**
  * Records `actor`'s decision on a monthly or weekly pattern. A decision is appended to
  * the history and never changed; re-stating the latest one appends nothing. It writes
  * nothing else: transactions, categories and the detected pattern stay as they are.
+ * The user's own decision is changed only by the user: an agent gets 409 user_decision.
  */
 export function decidePattern(patternId: string, decision: PatternDecision, actor: string): DecisionResult {
   const row = db.prepare(`${PATTERN_SELECT} WHERE p.id = ?`).get(patternId) as PatternRow | undefined;
@@ -209,6 +234,9 @@ export function decidePattern(patternId: string, decision: PatternDecision, acto
     throw new DomainError('not_monthly_pattern', 409);
   }
   if (row.decision === decision) return { pattern: view(row), recorded: false };
+  if (row.decision !== null && row.decided_by === USER_ACTOR && actor !== USER_ACTOR) {
+    throw new DomainError('user_decision', 409, { decision: row.decision, decidedAt: row.decided_at });
+  }
   db.prepare(
     `INSERT INTO pattern_decisions (created_at, account_id, counterparty_name, pattern_id, decision, actor)
      VALUES (?, ?, ?, ?, ?, ?)`

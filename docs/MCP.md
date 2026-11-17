@@ -34,8 +34,9 @@ The agent answers "Onko tämä toistuva?" questions as the user does in the
 briefing (GLOSSARY.md, "Recurring question", "Pattern decision"), without asking
 the user to confirm, like category management. An answer is appended to
 `pattern_decisions` with the agent as actor, the latest decision counts, and a
-later one (from the user or the agent) replaces it; `list_pattern_decisions`
-shows who decided what. A decision changes only how the pattern counts: its type,
+later one replaces it; `list_pattern_decisions` shows who decided what. A
+decision the user made is changed only by the user: the agent gets
+`409 user_decision` (it can still change its own answers). A decision changes only how the pattern counts: its type,
 whether it is a fixed cost in the forecast and in the subscription total, and
 whether it is asked about again. Transactions, categories, balances and the
 detected pattern itself are never touched. To keep the agent read-only here, hide

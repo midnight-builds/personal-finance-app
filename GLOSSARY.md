@@ -137,7 +137,9 @@ never included. Transfers between own accounts leave it unchanged.
 cash withdrawal missing from the export.
 
 **Recurring pattern** — a counterparty an account pays again and again,
-detected from its countable expenses in the last 180 days (`patterns.ts`).
+detected from its countable expenses in the 180 days up to the account's
+latest booking (`patterns.ts`), so an account whose exports lag behind does
+not look as if its charges had stopped.
 Monthly or weekly patterns need at least three charges with a steady interval
 and amount; two charges are one interval and prove nothing. The forecast
 counts established ones as fixed costs and lists uncertain ones apart. Stored
@@ -176,19 +178,24 @@ The forecast lists it in `uncertainRecurring`, outside `knownFixed` and
 weekly pattern is: `recurring`, `subscription` or `not_recurring`. Its state is
 then `confirmed_recurring`, `confirmed_subscription` or `rejected`; without one
 it is `unconfirmed`. Decisions are history in `pattern_decisions`, keyed by
-account and counterparty: a new one is appended, the latest counts, and
-re-stating it appends nothing. Detection never writes them, so they survive
-every re-detection. A decision sets the pattern's type; a rejected pattern is
+account and counterparty (the same merchant on another account is another
+pattern): a new one is appended, the latest counts, and re-stating it appends
+nothing. The user's decision is changed only by the user; an agent's, by
+anyone. Detection never writes them, so they survive every re-detection. A decision sets the pattern's type; a rejected pattern is
 left out of the forecast, totals, briefing and `/recurring`, and never asked
 about again. A decided pattern is deactivated only when its charges stop, and
-its decision applies again if they resume.
+its decision applies again if they resume. Decisions apply to monthly and
+weekly patterns only; a row that turns annual follows the annual rules.
 _Avoid_: user_confirmed (the legacy flag of confirmed annual patterns)
 
 **Recurring question** — "Onko tämä toistuva?": an unconfirmed monthly or
 weekly pattern offered to the user, with its charges as evidence, because its
 confidence is below 0.75 or its amount is the same every time (paid to an IBAN
-it may be savings, rent or a person; by card, savings or a subscription). A
-steady bill of varying amount is not asked. Answered with a pattern decision
+every time it may be savings, rent or a person; otherwise savings or a
+subscription). A bill of varying amount is asked only while its confidence is
+below 0.75: a spread of a few percent reaches it in four or five months, a
+wider one may need the user's answer. The briefing shows the three largest and
+hides a question once answered. Answered with a pattern decision
 (`GET /patterns/questions`, `POST /patterns/:id/decision`).
 
 **Annual pattern** — a charge about once a year (330–400 days apart), or one

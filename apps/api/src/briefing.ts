@@ -3,7 +3,7 @@ import { db } from './db.js';
 import { getOpenAIApiKey } from './settings.js';
 import { enhanceBriefingDescriptions } from './ai/briefingEnhancer.js';
 import { listPendingConfirmations } from './patternConfirmations.js';
-import { activePatterns, establishedSubscriptions, recurringQuestions } from './patternDecisions.js';
+import { activePatterns, establishedSubscriptions, openQuestionIds, recurringQuestions } from './patternDecisions.js';
 import { computeMonthlyForecast } from './forecast.js';
 import { accountBalances, daysBefore, ledgerEntries, ledgerTotals, today } from './ledger.js';
 
@@ -59,8 +59,9 @@ function subscriptionCreep(): FindingInput[] {
 
 function newRecurring(): FindingInput[] {
   const cutoff = new Date(Date.now() - 60 * 86400_000).toISOString();
-  // A pattern the user rejected is not news; an open question is asked separately.
-  const patterns = activePatterns().filter((p) => p.created_at >= cutoff);
+  // A pattern the user rejected is not news, and one asked about has its own card.
+  const asked = new Set(shownQuestions().map((q) => q.patternId));
+  const patterns = activePatterns().filter((p) => p.created_at >= cutoff && !asked.has(p.id));
 
   return patterns.map((p) => ({
     finding_type: 'new_recurring',
@@ -249,6 +250,20 @@ function pendingConfirmations(): FindingInput[] {
   }));
 }
 
+/**
+ * Stored findings less the questions answered since the briefing was made (in another
+ * tab, or by an agent): an answered question is not asked again.
+ */
+export function withoutAnsweredQuestions<F extends { finding_type: string; metadata: string | null }>(findings: F[]): F[] {
+  const open = openQuestionIds();
+  return findings.filter(
+    (f) => f.finding_type !== 'recurring_question' || open.has(JSON.parse(f.metadata ?? '{}').patternId)
+  );
+}
+
+/** The open questions a briefing shows; the rest wait for a later briefing or MCP. */
+const shownQuestions = () => recurringQuestions().slice(0, 3);
+
 const QUESTION_REASON_TEXT: Record<string, string> = {
   low_confidence: 'näyttöä on vielä vähän',
   fixed_amount_account_payment: 'sama summa tilille joka kerta (esim. säästö, vuokra tai henkilö)',
@@ -257,7 +272,7 @@ const QUESTION_REASON_TEXT: Record<string, string> = {
 
 /** "Onko tämä toistuva?": the largest open questions, with their charges as evidence. */
 function recurringQuestionFindings(): FindingInput[] {
-  return recurringQuestions().slice(0, 3).map((q) => {
+  return shownQuestions().map((q) => {
     const { chargeCount, firstDate, lastDate } = q.evidence;
     const why = q.reasons.map((r) => QUESTION_REASON_TEXT[r]).join('; ');
     return {
@@ -371,10 +386,12 @@ export async function runBriefing(importSessionId: string, asOf: string = today(
   });
 
   const apiKey = getOpenAIApiKey();
-  if (apiKey && allFindings.length > 0) {
+  // Questions keep their exact evidence and are not sent to the model.
+  const enhanceable = allFindings.filter((f) => f.finding_type !== 'recurring_question');
+  if (apiKey && enhanceable.length > 0) {
     try {
-      const enhanced = await enhanceBriefingDescriptions(allFindings, apiKey);
-      enhanced.forEach((desc, i) => { allFindings[i].description = desc; });
+      const enhanced = await enhanceBriefingDescriptions(enhanceable, apiKey);
+      enhanced.forEach((desc, i) => { enhanceable[i].description = desc; });
     } catch (err) {
       console.error('[briefing] AI enhancement failed, using original descriptions:', err);
     }

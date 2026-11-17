@@ -173,7 +173,7 @@ test('streaming subscription: counted once confident; at three charges only afte
   assert.deepEqual(uncertain(), []);
 });
 
-test('monthly bill: an e-invoice of varying amount is an established fixed cost and not asked', () => {
+test('monthly bill: six months of an e-invoice of varying amount is an established fixed cost and not asked', () => {
   const a = mkAccount();
   monthly(a, 'Sähkölaitos Virta Oy', [-64.2, -61.8, -66.5, -63.1, -60.4, -65.0], 20, 6, IBAN);
   detectPatterns(a.account, AS_OF);
@@ -184,6 +184,21 @@ test('monthly bill: an e-invoice of varying amount is an established fixed cost 
   assert.deepEqual(fixed(), ['Sähkölaitos Virta Oy']);
   assert.equal(question('Sähkölaitos Virta Oy'), undefined);
   assert.deepEqual(subscriptions(), []);
+});
+
+test('monthly bill: four charges with a wider spread stay uncertain and are asked until confirmed', () => {
+  const a = mkAccount();
+  monthly(a, 'Vesiosuuskunta Lähde', [-60, -66, -72, -63], 20, 4, IBAN);
+  detectPatterns(a.account, AS_OF);
+
+  const bill = pattern('Vesiosuuskunta Lähde')!;
+  assert.equal(bill.pattern_type, 'recurring');
+  assert.ok(bill.confidence! < CONFIDENT, `confidence ${bill.confidence}`);
+  assert.deepEqual(uncertain(), ['Vesiosuuskunta Lähde']);
+  assert.deepEqual(question('Vesiosuuskunta Lähde')!.reasons, ['low_confidence']);
+
+  decide('Vesiosuuskunta Lähde', 'recurring');
+  assert.deepEqual(fixed(), ['Vesiosuuskunta Lähde']);
 });
 
 test('forecast keeps uncertain patterns out of projectedTotal and reports them apart', () => {
@@ -258,7 +273,8 @@ test('a decided pattern that stops is deactivated but keeps its decision when it
   detectPatterns(a.account, '2026-03-31');
   decide('Rahasto Kasvu', 'not_recurring');
 
-  // Nothing for months: the window no longer holds three charges.
+  // Months of other bookings but none to the fund: its charges have stopped.
+  charge(a, 'Lähikauppa Omena', -23.4, '2026-08-28');
   detectPatterns(a.account, '2026-08-31');
   const row = db.prepare("SELECT is_active FROM recurring_patterns WHERE counterparty_name = 'Rahasto Kasvu'").get() as { is_active: number };
   assert.equal(row.is_active, 0);
@@ -269,6 +285,58 @@ test('a decided pattern that stops is deactivated but keeps its decision when it
   assert.equal(resumed.is_active, 1);
   assert.equal(pattern('Rahasto Kasvu'), undefined, 'still rejected');
   assert.deepEqual(recurringQuestions(), [], 'not asked again');
+});
+
+test('patterns of an account whose exports lag behind stay active: their charges did not stop', () => {
+  const a = mkAccount();
+  monthly(a, 'Suoratoisto Kuvavirta', -12.99, 3, 6);
+  detectPatterns(a.account, AS_OF);
+  decide('Suoratoisto Kuvavirta', 'subscription');
+
+  // Five months later, nothing imported since: the window ends at the account's own data.
+  detectPatterns(a.account, '2026-11-30');
+  db.prepare("DELETE FROM app_settings WHERE key = 'patternRulesVersion'").run();
+  redetectPatternsIfRulesChanged('2026-11-30');
+  assert.deepEqual(subscriptions(), ['Suoratoisto Kuvavirta']);
+  assert.deepEqual(fixed(), ['Suoratoisto Kuvavirta']);
+});
+
+test("an agent cannot change the user's decision; the user can change an agent's", () => {
+  const a = mkAccount();
+  monthly(a, 'Suoratoisto Kuvavirta', -12.99, 3, 6);
+  monthly(a, 'Rahasto Kasvu', -100, 12, 6, IBAN);
+  detectPatterns(a.account, AS_OF);
+
+  decide('Suoratoisto Kuvavirta', 'subscription', 'user');
+  assert.throws(
+    () => decide('Suoratoisto Kuvavirta', 'not_recurring', 'hermes'),
+    (err: { code?: string; statusCode?: number }) => err.code === 'user_decision' && err.statusCode === 409
+  );
+  assert.equal(pattern('Suoratoisto Kuvavirta')!.state, 'confirmed_subscription');
+  assert.equal(decide('Suoratoisto Kuvavirta', 'subscription', 'hermes').recorded, false, 'agreeing is fine');
+
+  const fund = pattern('Rahasto Kasvu')!.id;
+  decidePattern(fund, 'not_recurring', 'hermes');
+  decidePattern(fund, 'recurring', 'hermes');
+  decidePattern(fund, 'not_recurring', 'user');
+  assert.equal(pattern('Rahasto Kasvu'), undefined);
+});
+
+test('a decision applies to monthly/weekly patterns only: a row turned annual follows its own rules', () => {
+  const a = mkAccount();
+  monthly(a, 'Rahasto Kasvu', -100, 12, 6, IBAN);
+  detectPatterns(a.account, AS_OF);
+  const { id } = pattern('Rahasto Kasvu')!;
+  decide('Rahasto Kasvu', 'not_recurring');
+
+  db.prepare("UPDATE recurring_patterns SET pattern_type = 'annual', typical_month = 6 WHERE id = ?").run(id);
+  const annual = activePatterns().find((p) => p.id === id)!;
+  assert.equal(annual.state, 'unconfirmed');
+  assert.equal(annual.pattern_type, 'annual');
+  assert.equal(annual.decided_by, null);
+
+  db.prepare("UPDATE recurring_patterns SET pattern_type = 'recurring' WHERE id = ?").run(id);
+  assert.equal(pattern('Rahasto Kasvu'), undefined, 'monthly again: rejected again');
 });
 
 test('the briefing asks the open questions with their charges and leaves rejected patterns out', async () => {
@@ -289,6 +357,17 @@ test('the briefing asks the open questions with their charges and leaves rejecte
   assert.deepEqual(JSON.parse(questions[0].transaction_ids).sort(), [...ids].sort());
   assert.equal(JSON.parse(questions[0].metadata).patternId, pattern('Rahasto Kasvu')!.id);
   assert.ok(!findings.some((f) => f.title.includes('Maija')), 'a rejected pattern is not reported');
+  assert.ok(!findings.some((f) => f.finding_type === 'new_recurring' && f.title.includes('Rahasto')), 'asked, not also announced');
+
+  // Answered since (e.g. by an agent): the stored card is no longer shown.
+  const { withoutAnsweredQuestions } = await import('../src/briefing.js');
+  const stored = db
+    .prepare('SELECT finding_type, metadata FROM insight_findings WHERE briefing_session_id = ?')
+    .all(briefingId) as Array<{ finding_type: string; metadata: string | null }>;
+  assert.equal(withoutAnsweredQuestions(stored).filter((f) => f.finding_type === 'recurring_question').length, 1);
+  decide('Rahasto Kasvu', 'recurring', 'hermes');
+  assert.equal(withoutAnsweredQuestions(stored).filter((f) => f.finding_type === 'recurring_question').length, 0);
+  assert.equal(withoutAnsweredQuestions(stored).length, stored.length - 1);
 });
 
 // ── REST ─────────────────────────────────────────────────────────────
