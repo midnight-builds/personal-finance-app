@@ -344,6 +344,17 @@ function linkTransfers(ids: string[]) {
       ).map((p) => payeeKey(p, { account_id: p.card_id, counterparty_name: p.credit_name }))
     );
   let payees = loadPayees();
+  // A payment naming a manual account's IBAN is a transfer to that account (the
+  // Ledger's rule): never one side of a pair with some other account's row.
+  const manualIbans = new Set(
+    (
+      db
+        .prepare("SELECT iban FROM accounts WHERE tracking = 'manual' AND archived_at IS NULL AND iban IS NOT NULL")
+        .all() as Array<{ iban: string }>
+    ).map((a) => normIban(a.iban))
+  );
+  const toManual = (s: Pick<LinkSide, 'counterparty_iban'>) =>
+    s.counterparty_iban !== null && manualIbans.has(normIban(s.counterparty_iban));
 
   /**
    * A payment from `from` to the card's issuer, named on the card as its earlier repayments
@@ -356,13 +367,13 @@ function linkTransfers(ids: string[]) {
     const day = credit.booking_date.slice(0, 10);
     return (
       candidatesOf.all(credit.booking_date, credit.account_id, -credit.amount, daysBefore(day, 2), daysBefore(day, -3), credit.booking_date) as LinkSide[]
-    ).filter((c) => c.account_iban);
+    ).filter((c) => c.account_iban && !toManual(c));
   };
 
   /** Links one row. With `settle` false, a card credit several payments could have repaid waits. */
   const linkOne = (id: string, settle: boolean) => {
     const row = sideOf.get(id) as (LinkSide & { booking_date: string; amount: number }) | undefined;
-    if (!row || row.amount === 0) return;
+    if (!row || row.amount === 0 || toManual(row)) return;
     // An export naming the account's own IBAN as the other party says nothing about it.
     const ownIbanAsNone = (s: LinkSide) =>
       normIban(s.counterparty_iban) === normIban(s.account_iban) ? { ...s, counterparty_iban: null } : s;
@@ -371,7 +382,9 @@ function linkTransfers(ids: string[]) {
     const day = row.booking_date.slice(0, 10);
     const candidates = (
       candidatesOf.all(row.booking_date, row.account_id, -row.amount, daysBefore(day, 2), daysBefore(day, -3), row.booking_date) as LinkSide[]
-    ).map(ownIbanAsNone);
+    )
+      .filter((c) => !toManual(c))
+      .map(ownIbanAsNone);
 
     const pointsAt = (from: LinkSide, to: LinkSide) =>
       from.counterparty_iban !== null && normIban(from.counterparty_iban) === normIban(to.account_iban);
@@ -549,6 +562,10 @@ export function accountIdByIban(iban: string): string | null {
   return row?.id ?? null;
 }
 
+function isManualAccount(id: string): boolean {
+  return db.prepare("SELECT 1 FROM accounts WHERE id = ? AND tracking = 'manual'").get(id) !== undefined;
+}
+
 export function accountNameTaken(name: string): boolean {
   return db.prepare('SELECT 1 FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))').get(name) !== undefined;
 }
@@ -562,10 +579,11 @@ export function accountNameTaken(name: string): boolean {
 function planAccount(options: ImportOptions): AccountPlan {
   const { target } = options;
   if (target && 'accountId' in target) {
-    const row = db.prepare('SELECT id, iban FROM accounts WHERE id = ?').get(target.accountId) as
-      | { id: string; iban: string | null }
+    const row = db.prepare('SELECT id, iban, tracking FROM accounts WHERE id = ?').get(target.accountId) as
+      | { id: string; iban: string | null; tracking: string }
       | undefined;
     if (!row) throw new DomainError('account_not_found', 404);
+    if (row.tracking === 'manual') throw DomainError.conflict('account_manual');
     const own = inferAccount(options.records, options.filename).accountIban;
     // The file's own IBAN is someone else's: the account's IBAN differs, or
     // another account holds it (also when this account has none).
@@ -588,7 +606,13 @@ function planAccount(options: ImportOptions): AccountPlan {
   }
   const accountIban = options.accountIban ?? inferred.accountIban;
   if (!accountIban && options.accountName === undefined) throw new DomainError('account_required', 400);
-  return { kind: 'ensure', name: options.accountName ?? inferred.accountName, iban: accountIban };
+  const name = options.accountName ?? inferred.accountName;
+  // Nothing is imported into a manual account: its IBAN only recognises transfers to it.
+  const found = accountIban
+    ? accountIdByIban(accountIban)
+    : ((db.prepare('SELECT id FROM accounts WHERE name = ?').get(name) as { id: string } | undefined)?.id ?? null);
+  if (found && isManualAccount(found)) throw DomainError.conflict('account_manual');
+  return { kind: 'ensure', name, iban: accountIban };
 }
 
 function resolveAccount(plan: AccountPlan, now: string): { accountId: string; iban: string | null } {

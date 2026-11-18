@@ -1,4 +1,5 @@
 import {
+  type AccountType,
   transactionSearchSchema,
   type TransactionSearchInput,
   type TransactionSearchParams,
@@ -50,8 +51,10 @@ export function searchTransactions(input: TransactionSearchInput): TransactionSe
     .filter((e) => filters.every((f) => f(e)))
     .sort(newestFirst);
 
-  const accountNames = new Map(
-    (db.prepare('SELECT id, name FROM accounts').all() as Array<{ id: string; name: string }>).map((a) => [a.id, a.name])
+  const accounts = new Map(
+    (db.prepare('SELECT id, name, account_subtype AS type FROM accounts').all() as Array<{ id: string; name: string; type: AccountType }>).map(
+      (a) => [a.id, a]
+    )
   );
   const items: TransactionSearchRow[] = matches.slice(params.offset, params.offset + params.limit).map((e) => ({
     id: e.id,
@@ -63,8 +66,16 @@ export function searchTransactions(input: TransactionSearchInput): TransactionSe
     categoryId: e.categoryId,
     categoryName: e.categoryName,
     accountId: e.accountId,
-    accountName: accountNames.get(e.accountId) ?? '',
+    accountName: accounts.get(e.accountId)?.name ?? '',
     isTransfer: e.isTransfer,
+    ownTransfer: e.ownTransfer
+      ? {
+          accountId: e.ownTransfer.accountId,
+          accountName: accounts.get(e.ownTransfer.accountId)?.name ?? '',
+          accountType: accounts.get(e.ownTransfer.accountId)?.type ?? 'other_asset',
+          kind: e.ownTransfer.kind,
+        }
+      : null,
   }));
 
   return { total: matches.length, limit: params.limit, offset: params.offset, items };

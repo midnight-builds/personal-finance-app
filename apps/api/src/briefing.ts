@@ -82,7 +82,7 @@ function recurringCounterparties(): Set<string> {
 function oneOffImpact(asOf: string): FindingInput[] {
   const recurring = recurringCounterparties();
   const oneOffExpenses = (from: string, to: string) =>
-    ledgerEntries({ from, to }).filter(
+    ledgerEntries({ from, to, consumptionOnly: true }).filter(
       (e) => e.amount < 0 && (e.counterparty === null || !recurring.has(e.counterparty))
     );
 
@@ -115,7 +115,7 @@ function oneOffImpact(asOf: string): FindingInput[] {
 /** Accounts of a subtype and their balance on any day; balances are looked up once per day. */
 function balancesOf(subtype: string) {
   const accounts = db
-    .prepare('SELECT id, name FROM accounts WHERE account_subtype = ? ORDER BY created_at ASC, id ASC')
+    .prepare("SELECT id, name FROM accounts WHERE account_subtype = ? AND tracking = 'imported' ORDER BY created_at ASC, id ASC")
     .all(subtype) as Array<{ id: string; name: string }>;
   const byDay = new Map<string, Map<string, { balance: number | null; date: string | null }>>();
   const on = (accountId: string, day: string) => {
@@ -185,7 +185,7 @@ function creditHealth(asOf: string): FindingInput[] {
 /** Spend (positive, cents) per category name of categorized purchases from `from` to `to`. */
 function spendByCategory(from: string, to: string): Map<string, number> {
   const spend = new Map<string, number>();
-  for (const e of ledgerEntries({ from, to })) {
+  for (const e of ledgerEntries({ from, to, consumptionOnly: true })) {
     if (e.amount >= 0 || e.categoryName === null) continue;
     spend.set(e.categoryName, (spend.get(e.categoryName) ?? 0) + Math.abs(e.amount) * 100);
   }

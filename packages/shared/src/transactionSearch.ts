@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isoDate } from './schemas.js';
+import type { AccountType, OwnTransferKind } from './accounts.js';
 
 // Contract for GET /transactions/search. The field shape is shared by the API
 // (validated after query-string coercion) and the MCP tool input schema.
@@ -35,6 +36,11 @@ export type TransactionSearchRow = {
   accountId: string;
   accountName: string;
   isTransfer: boolean;
+  /**
+   * Set when the transaction is a transfer to (or from) a manual account: that
+   * account's name and type and how the transfer is reported. Never its IBAN.
+   */
+  ownTransfer: { accountId: string; accountName: string; accountType: AccountType; kind: OwnTransferKind } | null;
 };
 
 export type TransactionSearchResult = {

@@ -1,5 +1,6 @@
 import {
   BALANCE_HISTORY_MAX_POINTS,
+  isLiabilityType,
   type BalanceHistory,
   type BalanceHistoryAccount,
   type BalanceHistoryParams,
@@ -56,6 +57,7 @@ function accountsWithCoverage(): BalanceHistoryAccount[] {
               (SELECT MAX(substr(t.booking_date, 1, 10)) FROM normalized_transactions t
                WHERE t.account_id = a.id AND t.booking_date IS NOT NULL) AS last_booking
        FROM accounts a
+       WHERE a.tracking = 'imported'
        ORDER BY a.created_at ASC, a.id ASC`
     )
     .all() as Array<{
@@ -112,7 +114,7 @@ export function balanceHistory(params: Partial<BalanceHistoryParams> & Pick<Bala
       }
       const balance = b.balance!;
       includedAccountIds.push(a.id);
-      if (a.subtype === 'credit_card' && balance < 0) liabilities += -balance;
+      if (isLiabilityType(a.subtype) && balance < 0) liabilities += -balance;
       else assets += balance;
       return { accountId: a.id, balance, balanceDate: b.date };
     });

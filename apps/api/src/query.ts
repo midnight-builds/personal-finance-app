@@ -1,6 +1,7 @@
 import { db } from "./db.js";
 import { getSettings } from "./settings.js";
-import { latestCategoryDecisionJoin, notVoid, transferLinkJoin } from "./sql/transactions.js";
+import { latestCategoryDecisionJoin, manualAccountByIban, notVoid, transferLinkJoin } from "./sql/transactions.js";
+import { ownTransferKind } from "@finance-app/shared";
 import { ledgerEntries } from "./ledger.js";
 
 type RecurringFlags = { daily: boolean; weekly: boolean; monthly: boolean };
@@ -57,9 +58,13 @@ export function listTransactions() {
               c.name AS categoryName,
               a.id AS accountId,
               a.name AS accountName,
-              a.iban AS accountIban
+              a.iban AS accountIban,
+              ot.id AS ownAccountId,
+              ot.name AS ownAccountName,
+              ot.account_subtype AS ownAccountType
        FROM normalized_transactions nt
        JOIN accounts a ON a.id = nt.account_id
+       LEFT JOIN accounts ot ON ot.id = ${manualAccountByIban('nt')}
        ${latestCategoryDecisionJoin()}
        LEFT JOIN categories c ON c.id = cd.category_id
        ${transferLinkJoin()}
@@ -92,6 +97,16 @@ export function listTransactions() {
       recurringWeekly: rec.weekly,
       recurringMonthly: rec.monthly,
       isTransfer: Boolean(row.tlFrom || row.tlTo),
+      // A transfer to (or from) a manual account (the Ledger's rule; a linked transfer stays one).
+      ownTransfer:
+        !(row.tlFrom || row.tlTo) && row.ownAccountId
+          ? {
+              accountId: row.ownAccountId,
+              accountName: row.ownAccountName,
+              accountType: row.ownAccountType,
+              kind: ownTransferKind(row.ownAccountType),
+            }
+          : null,
       payday,
       paydayFlex: paydayFlexDays,
       account: {
