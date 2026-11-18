@@ -43,13 +43,17 @@ function charge(a: Acct, counterparty: string, amount: number, date: string, iba
   return id;
 }
 
-/** One charge on `day` of each month from January (month 1) to `months`. */
-function monthly(a: Acct, counterparty: string, amounts: number | number[], day: number, months = 6, iban: string | null = null) {
+/** One charge on `day` of each of `months` months from month `from` (default January). */
+function monthly(a: Acct, counterparty: string, amounts: number | number[], day: number, months = 6, iban: string | null = null, from = 1) {
   return Array.from({ length: months }, (_, k) => {
     const amount = Array.isArray(amounts) ? amounts[k] : amounts;
-    return charge(a, counterparty, amount, `2026-${String(k + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`, iban);
+    return charge(a, counterparty, amount, `2026-${String(from + k).padStart(2, '0')}-${String(day).padStart(2, '0')}`, iban);
   });
 }
+
+/** Three charges up to June, the latest month of the data: a new pattern, not a stopped (lapsed) one. */
+const recent = (a: Acct, counterparty: string, amount: number, day: number, iban: string | null = null) =>
+  monthly(a, counterparty, amount, day, 3, iban, 4);
 
 const pattern = (counterparty: string) => activePatterns().find((p) => p.counterparty_name === counterparty);
 const question = (counterparty: string) => recurringQuestions().find((q) => q.counterparty === counterparty);
@@ -143,7 +147,7 @@ test('person: a fixed monthly payment to an IBAN is never a subscription without
 test('streaming subscription: counted once confident; at three charges only after the user confirms it', () => {
   const a = mkAccount();
   monthly(a, 'Suoratoisto Kuvavirta', -12.99, 3, 6);
-  monthly(a, 'Äänikirjapalvelu Tarina', -9.99, 15, 3);
+  recent(a, 'Äänikirjapalvelu Tarina', -9.99, 15);
   // The first three months; the fourth month comes later.
   detectPatterns(a.account, AS_OF);
 
@@ -187,9 +191,9 @@ test('monthly bill: six months of an e-invoice of varying amount is an establish
 test('only uncertain, undecided patterns are asked; decided and rejected ones never', () => {
   const a = mkAccount();
   monthly(a, 'Suoratoisto Kuvavirta', -12.99, 3, 6); // established
-  monthly(a, 'Rahasto Kasvu', -100, 12, 3, IBAN); // uncertain
-  monthly(a, 'Maija Meikäläinen', -50, 10, 3, IBAN); // uncertain
-  monthly(a, 'Äänikirjapalvelu Tarina', -9.99, 15, 3); // uncertain
+  recent(a, 'Rahasto Kasvu', -100, 12, IBAN); // uncertain
+  recent(a, 'Maija Meikäläinen', -50, 10, IBAN); // uncertain
+  recent(a, 'Äänikirjapalvelu Tarina', -9.99, 15); // uncertain
   detectPatterns(a.account, AS_OF);
   assert.deepEqual(recurringQuestions().map((q) => q.counterparty).sort(), ['Maija Meikäläinen', 'Rahasto Kasvu', 'Äänikirjapalvelu Tarina']);
   for (const q of recurringQuestions()) assert.ok(q.reasons.includes('low_confidence'));
@@ -218,7 +222,7 @@ test('monthly bill: four charges with a wider spread stay uncertain and are aske
 test('forecast keeps uncertain patterns out of projectedTotal and reports them apart', () => {
   const a = mkAccount();
   monthly(a, 'Suoratoisto Kuvavirta', -12.99, 3, 6);
-  monthly(a, 'Äänikirjapalvelu Tarina', -9.99, 15, 3);
+  recent(a, 'Äänikirjapalvelu Tarina', -9.99, 15);
   detectPatterns(a.account, AS_OF);
 
   const f = forecast();
@@ -380,8 +384,8 @@ test('a decision applies to monthly/weekly patterns only: a row turned annual fo
 test('the briefing asks the open questions with their charges and leaves rejected patterns out', async () => {
   const { runBriefing } = await import('../src/briefing.js');
   const a = mkAccount();
-  const ids = monthly(a, 'Rahasto Kasvu', -100, 12, 3, IBAN);
-  monthly(a, 'Maija Meikäläinen', -50, 10, 3, IBAN);
+  const ids = recent(a, 'Rahasto Kasvu', -100, 12, IBAN);
+  recent(a, 'Maija Meikäläinen', -50, 10, IBAN);
   monthly(a, 'Suoratoisto Kuvavirta', -12.99, 3, 6);
   detectPatterns(a.account, AS_OF);
   decide('Maija Meikäläinen', 'not_recurring');

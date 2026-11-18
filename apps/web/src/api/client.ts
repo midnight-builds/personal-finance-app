@@ -143,6 +143,10 @@ export type RecurringPattern = {
   state?: 'unconfirmed' | 'confirmed_recurring' | 'confirmed_subscription' | 'rejected';
   confidence?: number | null;
   established?: boolean | null;
+  /** No charge for two periods: kept, but counted nowhere. */
+  lapsed?: boolean;
+  lapsed_since?: string | null;
+  monthly_amount?: number | null;
 };
 
 export type InsightFinding = {
@@ -176,7 +180,16 @@ export type PatternConfirmationRecord = {
   status: string;
 };
 
-export type ForecastItem = { counterparty: string; amount: number; patternId?: string; confidence?: number | null };
+export type ForecastItem = {
+  counterparty: string;
+  /** The month's charges: weekly patterns count each charge in the month. */
+  amount: number;
+  chargesInMonth?: number;
+  patternId?: string;
+  confidence?: number | null;
+  lapsed?: boolean;
+  lapsedSince?: string | null;
+};
 export type AnnualForecastItem = { counterparty: string; amount: number; month: number };
 export type MonthlyForecast = {
   targetMonth: string;
@@ -190,6 +203,8 @@ export type MonthlyForecast = {
   uncertainRecurring: ForecastItem[];
   uncertainRecurringTotal: number;
   projectedTotalWithUncertain: number;
+  /** Patterns with no charge for two periods: counted in no total. */
+  lapsedRecurring?: ForecastItem[];
 };
 
 export type PatternDecision = 'recurring' | 'subscription' | 'not_recurring' | 'reset';

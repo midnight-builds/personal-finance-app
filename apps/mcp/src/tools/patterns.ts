@@ -74,8 +74,11 @@ export const patternTools: ToolDefinition[] = [
       'in the forecast and, as a subscription, in the subscription total. Its origin is created and created_by ' +
       'is this server\'s actor. Later charges of the counterparty near expectedAmount attach to it; detection ' +
       'never deactivates, retypes or re-prices it, and when detection finds the same pattern it stays one ' +
-      'pattern. It keeps counting after its charges stop: reject it then with answer_recurring_question, which ' +
-      'also changes its kind; reset withdraws it and hands it to detection. Calling this again for the same ' +
+      'pattern. Two periods (weekly or monthly) after the latest charge from the counterparty, counted on the ' +
+      'account\'s latest booking, it lapses (lapsed true, lapsed_since): kept with its decision, but counted ' +
+      'nowhere until a charge comes again; the response shows it, also when the cited charges are old. Reject it ' +
+      'with answer_recurring_question when it has really ended (that tool also changes its kind); reset withdraws it ' +
+      'and hands it to detection. Calling this again for the same ' +
       'counterparty re-states it, e.g. a new price with the new charge as evidence (updated: true); the same ' +
       'values again write nothing. Writes only the pattern and its decision: transactions, amounts, ' +
       'categories, accounts and balances are never touched, and nothing is deleted. Create one only from what ' +

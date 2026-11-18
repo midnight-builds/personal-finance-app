@@ -172,3 +172,61 @@ test('MCP: evidence that does not fit is a tool error naming the code, and write
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM recurring_patterns').get() as { n: number }).n, 0);
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM pattern_decisions').get() as { n: number }).n, 0);
 });
+
+test('MCP: a created pattern whose charges stopped is shown lapsed in list_recurring and get_forecast, counted nowhere', async () => {
+  const agent = await connectAgent();
+  const a = account();
+  const tx = a.charge('Kuntosali Liikku', -39.9, '2026-03-04');
+  a.charge('Ruokakauppa Kulma', -12.3, '2026-06-01'); // two monthly periods later, no charge
+
+  const res = await agent.call('create_recurring_pattern', {
+    accountId: a.id,
+    counterparty: 'Kuntosali Liikku',
+    kind: 'subscription',
+    interval: 'monthly',
+    expectedAmount: 39.9,
+    evidenceTransactionIds: [tx],
+  });
+  assert.equal(res.pattern.lapsed, true);
+  assert.equal(res.pattern.lapsed_since, '2026-05-10');
+
+  const listed = (await agent.call('list_recurring')) as Array<{ id: string; lapsed: boolean; lapsed_since: string | null }>;
+  assert.deepEqual(listed.map((p) => [p.id, p.lapsed, p.lapsed_since]), [[res.pattern.id, true, '2026-05-10']]);
+
+  const forecast = (await agent.call('get_forecast')) as Array<{
+    knownFixed: unknown[];
+    knownFixedTotal: number;
+    lapsedRecurring: Array<{ patternId: string; lapsed: boolean; lapsedSince: string }>;
+  }>;
+  for (const month of forecast) {
+    assert.deepEqual(month.knownFixed, []);
+    assert.equal(month.knownFixedTotal, 0);
+    assert.deepEqual(month.lapsedRecurring.map((i) => [i.patternId, i.lapsed, i.lapsedSince]), [[res.pattern.id, true, '2026-05-10']]);
+  }
+});
+
+test('MCP: get_forecast counts a weekly pattern once per expected charge in the month', async () => {
+  const agent = await connectAgent();
+  const a = account();
+  // Weekly on Mondays up to the latest booking, so it has not lapsed.
+  const ids = ['2026-06-01', '2026-06-08', '2026-06-15', '2026-06-22'].map((d) => a.charge('Siivouspalvelu Kiilto', -25, d));
+  await agent.call('create_recurring_pattern', {
+    accountId: a.id,
+    counterparty: 'Siivouspalvelu Kiilto',
+    kind: 'recurring',
+    interval: 'weekly',
+    expectedAmount: 25,
+    evidenceTransactionIds: ids,
+  });
+  const forecast = (await agent.call('get_forecast')) as Array<{
+    targetMonth: string;
+    knownFixed: Array<{ chargesInMonth: number; amount: number }>;
+  }>;
+  for (const month of forecast) {
+    const [y, m] = month.targetMonth.split('-').map(Number);
+    const days = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    let mondays = 0;
+    for (let d = 1; d <= days; d++) if (new Date(Date.UTC(y, m - 1, d)).getUTCDay() === 1) mondays++;
+    assert.deepEqual(month.knownFixed.map((i) => [i.chargesInMonth, i.amount]), [[mondays, mondays * 25]], month.targetMonth);
+  }
+});
