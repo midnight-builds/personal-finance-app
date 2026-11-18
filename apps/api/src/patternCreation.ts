@@ -9,13 +9,10 @@ import { redactSensitiveIds, type CreatedPatternInterval, type PatternCreateRequ
 import { db } from './db.js';
 import { DomainError } from './http/errors.js';
 import { ledgerEntries } from './ledger.js';
-import { CREATED_AMOUNT_TOLERANCE, fitsExpectedAmount, scorePattern } from './patterns.js';
+import { CREATED_AMOUNT_TOLERANCE, MIN_DAYS_APART, fitsExpectedAmount, scorePattern } from './patterns.js';
 import { patternById, type PatternView } from './patternDecisions.js';
 
 const INTERVAL_DAYS: Record<CreatedPatternInterval, number> = { weekly: 7, monthly: 30 };
-
-/** Two charges of a pattern closer than this are not two of its periods. */
-const MIN_DAYS_APART: Record<CreatedPatternInterval, number> = { weekly: 5, monthly: 20 };
 
 const invalid = (code: string, details: unknown) => new DomainError(code, 400, details);
 
@@ -97,7 +94,16 @@ function checkEvidence(input: PatternCreateRequest): Evidence[] {
   }));
 }
 
-export type CreateResult = { pattern: PatternView; created: boolean };
+
+export type CreateResult = {
+  pattern: PatternView;
+  /** A new pattern, or an account's inactive one taken over. */
+  created: boolean;
+  /** An active created pattern re-stated with other values (e.g. a new price). */
+  updated: boolean;
+};
+
+const CONFIRMED_AS = { recurring: 'confirmed_recurring', subscription: 'confirmed_subscription' } as const;
 
 /**
  * Creates `actor`'s monthly or weekly pattern from the charges it cites and confirms it
@@ -107,9 +113,12 @@ export type CreateResult = { pattern: PatternView; created: boolean };
  * - none yet: a new row with origin `created`;
  * - an inactive one (its charges stopped, or detected on too little evidence): that row
  *   is taken over, keeping its id;
- * - an active one: `409 pattern_exists` with its id, to be decided instead
- *   (`POST /patterns/:id/decision`); the same create request again returns the
- *   pattern with `created: false`, writing nothing.
+ * - an active created one: re-stated. With the same kind, interval and amount while it
+ *   is confirmed as that kind, nothing is written (`created` and `updated` false);
+ *   otherwise its values and evidence are replaced (a new price, say) and, unless it
+ *   is already confirmed as `kind`, the decision is appended;
+ * - an active detected one: `409 pattern_exists` with its id, to be decided instead
+ *   (`POST /patterns/:id/decision`).
  */
 export function createPattern(input: PatternCreateRequest, actor: string): CreateResult {
   if (!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(input.accountId)) {
@@ -124,15 +133,17 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
     .prepare('SELECT id FROM recurring_patterns WHERE account_id = ? AND counterparty_name = ?')
     .get(input.accountId, counterparty) as { id: string } | undefined;
   const current = existing && patternById(existing.id)!;
-  if (current?.is_active) {
-    const same =
-      current.origin === 'created' &&
-      current.pattern_type === input.kind &&
+  const restated = Boolean(current?.is_active);
+  if (current && restated) {
+    if (current.origin !== 'created') {
+      throw new DomainError('pattern_exists', 409, { patternId: current.id, origin: current.origin, state: current.state });
+    }
+    const unchanged =
+      current.state === CONFIRMED_AS[input.kind] &&
+      current.detected_type === input.kind &&
       current.interval_days === intervalDays &&
-      current.typical_amount === input.expectedAmount &&
-      current.decided_by !== null;
-    if (same) return { pattern: current, created: false };
-    throw new DomainError('pattern_exists', 409, { patternId: current.id, origin: current.origin, state: current.state });
+      current.typical_amount === input.expectedAmount;
+    if (unchanged) return { pattern: current, created: false, updated: false };
   }
 
   const now = new Date().toISOString();
@@ -159,6 +170,10 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
   };
   const columns = Object.keys(values);
   const id = existing?.id ?? crypto.randomUUID();
+  // A new or taken-over pattern always gets its decision, also when an earlier one on
+  // the counterparty said the same: the history then shows who created it. A
+  // re-stated one only when its decision changes (re-stating appends nothing).
+  const decide = !restated || current!.state !== CONFIRMED_AS[input.kind];
 
   db.exec('BEGIN');
   try {
@@ -173,16 +188,16 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
          VALUES (?, ?, ?, ?, ${columns.map(() => '?').join(', ')})`
       ).run(id, now, input.accountId, counterparty, ...Object.values(values));
     }
-    // Always appended, also when an earlier decision on the counterparty said the same:
-    // the history then shows who created the pattern.
-    db.prepare(
-      `INSERT INTO pattern_decisions (created_at, account_id, counterparty_name, pattern_id, decision, actor)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(now, input.accountId, counterparty, id, input.kind, actor);
+    if (decide) {
+      db.prepare(
+        `INSERT INTO pattern_decisions (created_at, account_id, counterparty_name, pattern_id, decision, actor)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(now, input.accountId, counterparty, id, input.kind, actor);
+    }
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
   }
-  return { pattern: patternById(id)!, created: true };
+  return { pattern: patternById(id)!, created: !restated, updated: restated };
 }

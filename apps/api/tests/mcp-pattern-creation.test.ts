@@ -114,7 +114,7 @@ test('MCP: the agent creates a pattern from one charge; it is confirmed under it
     expectedAmount: 4.99,
     evidenceTransactionIds: [tx],
   });
-  assert.equal(again.created, false);
+  assert.deepEqual([again.created, again.updated], [false, false]);
 
   // The agent can reject what it created, like any pattern.
   const rejected = await agent.call('answer_recurring_question', { patternId: res.pattern.id, decision: 'not_recurring' });

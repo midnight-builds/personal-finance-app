@@ -57,11 +57,18 @@ ole ehdottanut (`POST /patterns`, MCP `create_recurring_pattern`; GLOSSARY.md
 todisteeksi. Kuvio (`origin: created`) on heti vahvistettu tekijänsä
 päätöksellä, joten ennuste (`knownFixed`), kuukausittainen tilaussumma ja
 tilauspalveluhavainto laskevat sen kuten minkä tahansa vahvistetun kuvion;
-ennusteen kohteessa on `origin`. Summa on luojan antama odotettu summa.
+ennusteen kohteessa on `origin`. Summa on luojan antama odotettu summa; uusi
+luontipyyntö samalle vastapuolelle päivittää sen (esim. hinnanmuutos).
 
 Uudelleentunnistus ei koskaan poista, muuta tai kahdenna luotua kuviota:
-myöhemmät saman vastapuolen veloitukset (±20 % odotetusta summasta) liittyvät
-siihen, ja jos tunnistus löytää saman kuvion, kuvio pysyy yhtenä, joten se on
-ennusteessa täsmälleen kerran. Hylätty luotu kuvio jää pois kuten muutkin.
-`reset` vetää luodun kuvion pois: se ei ole ennusteessa (ei myöskään
-epävarmoissa) ennen kuin sen omat veloitukset nostavat varmuuden 0,75:een.
+myöhemmät saman vastapuolen veloitukset (±20 % odotetusta summasta, yksi per
+jakso) liittyvät siihen, ja jos tunnistus löytää saman kuvion, kuvio pysyy
+yhtenä, joten se on ennusteessa täsmälleen kerran. Siksi luotu kuvio pysyy
+ennusteessa myös veloitusten loputtua, kunnes joku hylkää sen. Hylätty luotu
+kuvio jää pois kuten muutkin. `reset` vetää luodun kuvion pois: se ei ole
+ennusteessa (ei myöskään epävarmoissa), ellei sen omien veloitusten varmuus ole
+vähintään 0,75, ja tunnistus käsittelee sitä kuten omaansa (löytäessään se
+muuttuu tunnistetuksi, veloitusten loputtua se poistuu käytöstä).
+
+Viikkokuvio lasketaan ennusteessa yhden veloituksen suuruisena kuukaudessa,
+kuten tunnistetutkin viikkokuviot (ennallaan, avoin kysymys).

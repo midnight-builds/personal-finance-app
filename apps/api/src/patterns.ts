@@ -228,16 +228,18 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
 
     // Upsert by account_id + counterparty_name
     const existing = db.prepare(
-      'SELECT id, origin FROM recurring_patterns WHERE account_id = ? AND counterparty_name = ?'
-    ).get(accountId, counterparty) as { id: string; origin: string } | undefined;
+      `SELECT p.id, ${VOUCHED_CREATED} AS vouched FROM recurring_patterns p WHERE p.account_id = ? AND p.counterparty_name = ?`
+    ).get(accountId, counterparty) as { id: string; vouched: number } | undefined;
 
-    // Found by detection too: still the one created pattern, whose charges `refreshCreated` updates.
-    if (existing?.origin === 'created') continue;
+    // Found by detection too: still the one created pattern, whose charges `refreshCreated`
+    // updates. A withdrawn one is detection's from now on: it becomes a detected pattern.
+    if (existing?.vouched) continue;
     if (existing) {
       db.prepare(`
         UPDATE recurring_patterns
         SET updated_at = ?, pattern_type = ?, interval_days = ?, typical_amount = ?,
-            last_seen = ?, occurrence_count = ?, is_active = 1, ${SCORE_COLUMNS.map((c) => `${c} = ?`).join(', ')}
+            last_seen = ?, occurrence_count = ?, is_active = 1, origin = 'detected',
+            ${SCORE_COLUMNS.map((c) => `${c} = ?`).join(', ')}
         WHERE id = ?
       `).run(now, patternType, Math.round(avgInterval), avgAmount, lastSeen, sorted.length, ...scoreValues(score), existing.id);
     } else {
@@ -272,7 +274,7 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
  * A pattern with a user decision (pattern_decisions) is only ever deactivated when it
  * has stopped; the decision itself is not touched and applies again if the charges
  * resume. User-confirmed annual patterns stay as is, and so do created patterns
- * (`refreshCreated`).
+ * still vouched for (`refreshCreated`); a withdrawn one is revised like a detected one.
  */
 function reviseUndetected(
   accountId: string,
@@ -286,7 +288,7 @@ function reviseUndetected(
                    WHERE d.account_id = p.account_id AND d.counterparty_name = p.counterparty_name) AS decided
     FROM recurring_patterns p
     WHERE p.account_id = ? AND p.is_active = 1 AND p.pattern_type IN ('subscription', 'recurring')
-      AND p.user_confirmed IS NOT 1 AND p.origin = 'detected'
+      AND p.user_confirmed IS NOT 1 AND NOT ${VOUCHED_CREATED}
   `).all(accountId) as Array<{
     id: string; counterparty_name: string | null; pattern_type: string; occurrence_count: number; decided: number;
   }>;
@@ -312,8 +314,24 @@ function reviseUndetected(
 
 // ── Created patterns ────────────────────────────────────────────────
 // A pattern an actor created (GLOSSARY.md, "Created pattern"; patternCreation.ts).
-// Detection never deactivates, retypes or re-prices one, and never adds a second row
-// for its counterparty: what the actor said stays until a pattern decision changes it.
+// While vouched for, detection never deactivates, retypes or re-prices one, and never
+// adds a second row for its counterparty: what the actor said stays until a pattern
+// decision or a new create request changes it. A `reset` withdraws it: detection then
+// treats it as its own, revising, deactivating or (finding it) making it detected.
+
+/**
+ * SQL, true for a pattern `p` an actor created and still vouches for: its latest
+ * decision (keyed by account and counterparty, as everywhere) is not `reset`.
+ */
+const VOUCHED_CREATED = `(p.origin = 'created' AND COALESCE((
+    SELECT d.decision FROM pattern_decisions d
+    WHERE d.account_id = p.account_id AND d.counterparty_name = p.counterparty_name
+    ORDER BY d.id DESC LIMIT 1), '') != 'reset')`;
+
+/** Two charges of a created pattern closer than this are not two of its periods. */
+export const MIN_DAYS_APART = { weekly: 5, monthly: 20 } as const;
+const minDaysApart = (intervalDays: number | null) =>
+  (intervalDays ?? 30) <= 7 ? MIN_DAYS_APART.weekly : MIN_DAYS_APART.monthly;
 
 /** How far a created pattern's charge may be from its expected amount: detection's ±20 %. */
 export const CREATED_AMOUNT_TOLERANCE = 0.2;
@@ -327,36 +345,48 @@ export function fitsExpectedAmount(amount: number, expected: number): boolean {
 /**
  * The charges of a created pattern: the account's countable expenses with its
  * counterparty, from its first cited charge on, each within the tolerance of its
- * expected amount. Its evidence is among them; so are later charges, which attach to
- * it this way. Oldest first.
+ * expected amount, and at most one per period (one `MIN_DAYS_APART` from the
+ * previous). Later charges attach to it this way. `entries` and the result are
+ * oldest first.
  */
-export function createdPatternCharges(
+function createdPatternCharges(
   entries: LedgerEntry[],
-  p: { counterparty_name: string | null; first_seen: string; typical_amount: number | null }
+  p: { counterparty_name: string | null; first_seen: string; typical_amount: number | null; interval_days: number | null }
 ): LedgerEntry[] {
   const from = p.first_seen.slice(0, 10);
-  return entries.filter(
-    (e) =>
+  const minDays = minDaysApart(p.interval_days);
+  const charges: LedgerEntry[] = [];
+  for (const e of entries) {
+    const fits =
       !e.isTransfer &&
       e.amount < 0 &&
       e.counterparty === p.counterparty_name &&
       e.date >= from &&
-      fitsExpectedAmount(e.amount, p.typical_amount ?? 0)
-  );
+      fitsExpectedAmount(e.amount, p.typical_amount ?? 0);
+    const previous = charges.at(-1);
+    if (fits && (!previous || (Date.parse(e.date) - Date.parse(previous.date)) / 86400_000 >= minDays)) charges.push(e);
+  }
+  return charges;
 }
 
 /**
- * Updates what the charges of the account's created patterns show: the latest one,
- * how many there are and their confidence (which counts only should the decision be
- * reset). Type, interval, expected amount and activity stay as created.
+ * Updates what the charges of the account's vouched-for created patterns show: the
+ * latest one, how many there are and their confidence. Type, interval, expected
+ * amount and activity stay as created.
  */
 function refreshCreated(accountId: string, entries: LedgerEntry[], now: string): void {
   const rows = db
     .prepare(
-      `SELECT id, counterparty_name, first_seen, typical_amount FROM recurring_patterns
-       WHERE account_id = ? AND origin = 'created'`
+      `SELECT p.id, p.counterparty_name, p.first_seen, p.typical_amount, p.interval_days FROM recurring_patterns p
+       WHERE p.account_id = ? AND ${VOUCHED_CREATED}`
     )
-    .all(accountId) as Array<{ id: string; counterparty_name: string | null; first_seen: string; typical_amount: number | null }>;
+    .all(accountId) as Array<{
+    id: string;
+    counterparty_name: string | null;
+    first_seen: string;
+    typical_amount: number | null;
+    interval_days: number | null;
+  }>;
   const update = db.prepare(
     `UPDATE recurring_patterns SET updated_at = ?, last_seen = ?, occurrence_count = ?,
        ${SCORE_COLUMNS.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`
@@ -441,14 +471,14 @@ function detectAnnualPatternsForAccount(accountId: string, history: Occurrence[]
     const typicalMonth = new Date(sorted[sorted.length - 1].date).getMonth() + 1;
 
     const existing = db.prepare(
-      'SELECT id, origin FROM recurring_patterns WHERE account_id = ? AND counterparty_name = ?'
-    ).get(accountId, counterparty) as { id: string; origin: string } | undefined;
+      `SELECT p.id, ${VOUCHED_CREATED} AS vouched FROM recurring_patterns p WHERE p.account_id = ? AND p.counterparty_name = ?`
+    ).get(accountId, counterparty) as { id: string; vouched: number } | undefined;
 
-    // A created pattern is never rewritten by detection, also when it was withdrawn.
-    if (existing?.origin === 'created') continue;
+    // A created pattern still vouched for is never rewritten by detection.
+    if (existing?.vouched) continue;
     if (existing) {
       db.prepare(`
-        UPDATE recurring_patterns SET updated_at = ?, pattern_type = 'annual',
+        UPDATE recurring_patterns SET updated_at = ?, pattern_type = 'annual', origin = 'detected',
           interval_days = ?, typical_amount = ?, last_seen = ?,
           occurrence_count = ?, is_active = 1, typical_month = ?
         WHERE id = ?

@@ -57,10 +57,13 @@ counterparty, within 20 % of the expected amount, not two in one period) and nam
 the failing ids in the error. The pattern gets `origin: created` and `created_by`,
 and a pattern decision of `kind` under the agent's actor, so it counts at once like a
 confirmed pattern. Detection never deactivates, retypes or re-prices it and keeps one
-pattern per account and counterparty; when the account already has an active
-pattern for the counterparty, the tool returns `409 pattern_exists` with its id, to
-be decided with `answer_recurring_question` instead. Creating writes only the
-pattern and its decision. `origin` is in `list_recurring`, decision responses and
+pattern per account and counterparty. When the account already has an active
+detected pattern for the counterparty, the tool returns `409 pattern_exists` with
+its id, to be decided with `answer_recurring_question` instead; creating an active
+created pattern again re-states it (`updated: true`, e.g. a new price), and the
+same values again write nothing. A created pattern keeps counting after its charges
+stop, until it is rejected; `reset` withdraws it and hands it to detection. Creating
+writes only the pattern and its decision. `origin` is in `list_recurring`, decision responses and
 the forecast's pattern items.
 
 `get_glossary` is a tool rather than an MCP resource: resources are read by the

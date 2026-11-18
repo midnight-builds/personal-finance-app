@@ -134,20 +134,46 @@ test('create: one charge is enough; confirmed at once by the actor, counted like
   assert.deepEqual(categorization(), before.categorization);
 });
 
-test('create: the same request again creates nothing; another one for the same counterparty is a conflict', async () => {
-  const { body } = newContract();
+const decisions = async () =>
+  (await app.inject({ method: 'GET', url: '/patterns/decisions' })).json().items.map(
+    (i: { actor: string; decision: string }) => [i.actor, i.decision]
+  );
+
+test('create: the same request again writes nothing; other values re-state the created pattern', async () => {
+  const { a, body } = newContract();
   const first = (await create(body)).json();
   const again = await create(body);
   assert.equal(again.statusCode, 200);
-  assert.equal(again.json().created, false);
+  assert.deepEqual([again.json().created, again.json().updated], [false, false]);
   assert.equal(again.json().pattern.id, first.pattern.id);
-  assert.equal((await app.inject({ method: 'GET', url: '/patterns/decisions' })).json().total, 1);
+  assert.equal((await decisions()).length, 1);
 
-  const other = await create({ ...body, kind: 'recurring' });
-  assert.equal(other.statusCode, 409);
-  assert.equal(other.json().error, 'pattern_exists');
-  assert.equal(other.json().details.patternId, first.pattern.id);
+  // The price went up: the new amount, cited from the new charge, replaces the old one.
+  const [dearer] = monthly(a, 'Kuntosali Liikku', -44.9, 4, 7, 7);
+  const repriced = await create({ ...body, expectedAmount: 44.9, evidenceTransactionIds: [dearer] }, 'user');
+  assert.equal(repriced.statusCode, 200, repriced.body);
+  assert.deepEqual([repriced.json().created, repriced.json().updated], [false, true]);
+  assert.equal(repriced.json().pattern.id, first.pattern.id);
+  assert.equal(repriced.json().pattern.typical_amount, 44.9);
+  assert.equal(repriced.json().pattern.created_by, 'user');
+  assert.equal((await decisions()).length, 1, 'still confirmed as a subscription: no new decision');
+  assert.equal(computeMonthlyForecast(1, '2026-07-31', []).knownFixedTotal, 44.9);
+
+  const retyped = await create({ ...body, kind: 'recurring', expectedAmount: 44.9, evidenceTransactionIds: [dearer] });
+  assert.equal(retyped.json().pattern.state, 'confirmed_recurring');
+  assert.deepEqual(await decisions(), [[ACTOR, 'recurring'], [ACTOR, 'subscription']]);
   assert.equal(rows('Kuntosali Liikku').length, 1);
+});
+
+test('create: re-stating a rejected created pattern confirms it again, as a decision would', async () => {
+  const { body } = newContract();
+  const { pattern } = (await create(body)).json();
+  decidePattern(pattern.id, 'not_recurring', 'user');
+  assert.deepEqual(fixed(), []);
+  const res = await create(body);
+  assert.deepEqual([res.json().created, res.json().updated, res.json().pattern.state], [false, true, 'confirmed_subscription']);
+  assert.deepEqual(await decisions(), [[ACTOR, 'subscription'], ['user', 'not_recurring'], [ACTOR, 'subscription']]);
+  assert.deepEqual(fixed(), ['Kuntosali Liikku']);
 });
 
 test('create: an active detected pattern for the counterparty is a conflict; decide it instead', async () => {
@@ -287,11 +313,14 @@ test('detection: later charges attach to a created pattern; when detection finds
   assert.equal(String(row.last_seen).slice(0, 10), '2026-09-04');
   assert.equal(computeMonthlyForecast(1, '2026-09-30', []).knownFixed.filter((i) => i.counterparty === 'Kuntosali Liikku').length, 1);
 
-  // A one-off purchase from the same counterparty, far from the expected amount, is not a charge of it.
+  // Purchases from the same counterparty are not charges of it: one far from the expected
+  // amount, nor one near it in a month that already has its charge.
   charge(a, 'Kuntosali Liikku', -120, '2026-09-20');
+  charge(a, 'Kuntosali Liikku', -38, '2026-09-12');
   detectPatterns(a.account, '2026-09-30');
   assert.equal(rows('Kuntosali Liikku')[0].occurrence_count, 4);
   assert.equal(rows('Kuntosali Liikku')[0].is_active, 1);
+  assert.equal(rows('Kuntosali Liikku')[0].typical_amount, 39.9);
 });
 
 test('detection: a created pattern is never deactivated, also when no new charge comes or detection runs again for new rules', async () => {
@@ -380,4 +409,42 @@ test('decisions: after a reset a created pattern whose own charges establish it 
   assert.ok(p.confidence! >= 0.75, String(p.confidence));
   assert.equal(p.established, true);
   assert.deepEqual(computeMonthlyForecast(1, '2026-11-30', []).knownFixed.map((i) => i.patternId), [pattern.id]);
+
+  // Withdrawn, it is detection's: found again, it becomes a detected pattern, still one row.
+  detectPatterns(a.account, '2026-11-30');
+  assert.equal(rows('Kuntosali Liikku').length, 1);
+  assert.equal(rows('Kuntosali Liikku')[0].origin, 'detected');
+  assert.equal(rows('Kuntosali Liikku')[0].created_by, ACTOR, 'who created it stays as history');
+  assert.deepEqual(computeMonthlyForecast(1, '2026-11-30', []).knownFixed.map((i) => i.patternId), [pattern.id]);
+});
+
+test('decisions: a withdrawn created pattern follows its charges: a new price is detected, stopped ones end it', async () => {
+  const { a, body } = newContract();
+  const { pattern } = (await create(body)).json();
+  decidePattern(pattern.id, 'reset', 'user');
+  // Six months at a new price, outside the 20 % of the old expected amount.
+  monthly(a, 'Kuntosali Liikku', -59.9, 4, 7, 12);
+  detectPatterns(a.account, '2026-12-31');
+  const [row] = rows('Kuntosali Liikku');
+  assert.equal(rows('Kuntosali Liikku').length, 1);
+  assert.equal(row.id, pattern.id);
+  assert.equal(row.origin, 'detected');
+  assert.equal(row.typical_amount, 59.9);
+  assert.deepEqual(computeMonthlyForecast(1, '2026-12-31', []).knownFixed.map((i) => i.amount), [59.9]);
+
+  // Another withdrawn one whose single charge is all there is: detection ends it.
+  const b = mkAccount('Toinen tili');
+  const [only] = monthly(b, 'Lehti Sanomat', -15, 10, 6, 6);
+  const other = (await create({ ...body, accountId: b.account, counterparty: 'Lehti Sanomat', expectedAmount: 15, evidenceTransactionIds: [only] })).json();
+  decidePattern(other.pattern.id, 'reset', 'user');
+  detectPatterns(b.account, AS_OF);
+  assert.equal(rows('Lehti Sanomat')[0].is_active, 0);
+});
+
+test('detection: a created pattern still vouched for keeps counting after its charges stop (documented)', async () => {
+  const { a, body } = newContract();
+  await create(body);
+  charge(a, 'Muu Kauppa', -5, '2027-06-01');
+  detectPatterns(a.account, '2027-06-30');
+  assert.deepEqual(computeMonthlyForecast(1, '2027-06-30', []).knownFixed.map((i) => i.counterparty), ['Kuntosali Liikku']);
 });
