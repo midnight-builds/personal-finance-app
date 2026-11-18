@@ -37,9 +37,10 @@ an established one needs no confirmation, but the agent can still decide any
 active monthly or weekly pattern by its id from `list_recurring`, e.g. reject a
 confident one that is really savings. An answer is appended to
 `pattern_decisions` with the agent as actor, the latest decision counts, and a
-later one replaces it; `list_pattern_decisions` shows who decided what. A
-decision the user made is changed only by the user: the agent gets
-`409 user_decision` (it can still change its own answers). A decision changes only how the pattern counts: its type,
+later one replaces it, whoever made either: the agent is as trusted as the user
+in the web UI (ADR 0001), so it may replace the user's decision or take any
+decision back with `reset`. `list_pattern_decisions` keeps every decision with
+its actor, so nothing is lost. A decision changes only how the pattern counts: its type,
 whether it is a fixed cost in the forecast and in the subscription total, and
 whether it is asked about again. Transactions, categories, balances and the
 detected pattern itself are never touched. To keep the agent read-only here, hide

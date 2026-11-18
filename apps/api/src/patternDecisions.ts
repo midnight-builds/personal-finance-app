@@ -59,7 +59,7 @@ const PATTERN_SELECT = `
     SELECT MAX(x.id) FROM pattern_decisions x
     WHERE x.account_id = p.account_id AND x.counterparty_name = p.counterparty_name)`;
 
-const STATE_OF: Record<PatternDecision, PatternState> = {
+const STATE_OF: Record<Exclude<PatternDecision, 'reset'>, PatternState> = {
   recurring: 'confirmed_recurring',
   subscription: 'confirmed_subscription',
   not_recurring: 'rejected',
@@ -70,7 +70,8 @@ function view(row: PatternRow): PatternView {
   const monthly = MONTHLY_TYPES.has(row.pattern_type);
   // Decisions are about monthly/weekly patterns. Should the row turn annual, its own
   // confirmation rules apply; the decision applies again if it turns monthly again.
-  const decision = monthly ? row.decision : null;
+  // `reset` takes the previous decision back.
+  const decision = monthly && row.decision !== 'reset' ? row.decision : null;
   const state: PatternState = decision ? STATE_OF[decision] : 'unconfirmed';
   // A decision on a monthly/weekly pattern names its type; annual patterns keep theirs.
   const type = monthly && (decision === 'recurring' || decision === 'subscription') ? decision : row.pattern_type;
@@ -213,14 +214,12 @@ export function recurringQuestions(): RecurringQuestion[] {
 
 export type DecisionResult = { pattern: PatternView; recorded: boolean };
 
-/** The actor the web UI is recorded as (docs/adr/0001-actor-without-authentication.md). */
-const USER_ACTOR = 'user';
-
 /**
  * Records `actor`'s decision on a monthly or weekly pattern. A decision is appended to
  * the history and never changed; re-stating the latest one appends nothing. It writes
  * nothing else: transactions, categories and the detected pattern stay as they are.
- * The user's own decision is changed only by the user: an agent gets 409 user_decision.
+ * Every actor is equally trusted (docs/adr/0001-actor-without-authentication.md): any
+ * of them may replace any decision, and the history keeps who decided what.
  */
 export function decidePattern(patternId: string, decision: PatternDecision, actor: string): DecisionResult {
   const row = db.prepare(`${PATTERN_SELECT} WHERE p.id = ?`).get(patternId) as PatternRow | undefined;
@@ -229,10 +228,7 @@ export function decidePattern(patternId: string, decision: PatternDecision, acto
     // Annual patterns are confirmed through pattern_confirmations.
     throw new DomainError('not_monthly_pattern', 409);
   }
-  if (row.decision === decision) return { pattern: view(row), recorded: false };
-  if (row.decision !== null && row.decided_by === USER_ACTOR && actor !== USER_ACTOR) {
-    throw new DomainError('user_decision', 409, { decision: row.decision, decidedAt: row.decided_at });
-  }
+  if ((row.decision ?? 'reset') === decision) return { pattern: view(row), recorded: false };
   db.prepare(
     `INSERT INTO pattern_decisions (created_at, account_id, counterparty_name, pattern_id, decision, actor)
      VALUES (?, ?, ?, ?, ?, ?)`

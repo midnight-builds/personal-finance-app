@@ -192,7 +192,7 @@ export type MonthlyForecast = {
   projectedTotalWithUncertain: number;
 };
 
-export type PatternDecision = 'recurring' | 'subscription' | 'not_recurring';
+export type PatternDecision = 'recurring' | 'subscription' | 'not_recurring' | 'reset';
 
 export type ImportResult = {
   importSessionId: string;

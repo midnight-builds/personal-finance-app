@@ -4,8 +4,11 @@ import { z } from 'zod';
 // POST /patterns/:id/decision and the decision log. Shared by the API and the
 // MCP tools, so both validate answers the same way.
 
-/** What the user (or an agent) says a monthly or weekly pattern is. */
-export const PATTERN_DECISIONS = ['recurring', 'subscription', 'not_recurring'] as const;
+/**
+ * What the user or an agent says a monthly or weekly pattern is; `reset` takes a
+ * decision back (the pattern is unconfirmed again). Any actor may make any of them.
+ */
+export const PATTERN_DECISIONS = ['recurring', 'subscription', 'not_recurring', 'reset'] as const;
 export type PatternDecision = (typeof PATTERN_DECISIONS)[number];
 
 /** A pattern's decision state: none yet, or the latest decision. */
@@ -19,7 +22,8 @@ export const patternDecisionFields = {
     .enum(PATTERN_DECISIONS)
     .describe(
       'recurring = a recurring cost that is not a subscription (a bill, savings, a payment to a person); ' +
-        'subscription = a subscription; not_recurring = not a recurring cost (it leaves the forecast and totals)'
+        'subscription = a subscription; not_recurring = not a recurring cost (it leaves the forecast and totals); ' +
+        'reset = take the decision back: unconfirmed again, counted by its confidence'
     ),
 };
 export const patternDecisionRequestSchema = z.object(patternDecisionFields);

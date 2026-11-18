@@ -114,7 +114,7 @@ test('MCP: an IBAN inside a counterparty name is redacted in questions and decis
   assert.ok(!JSON.stringify(log).includes('5600'));
 });
 
-test('MCP: Hermes cannot change a decision the user made', async () => {
+test('MCP: the agent can override a decision the user made; the history shows both', async () => {
   const agent = await connectAgent();
   const account = monthlyCharges('Suoratoisto Kuvavirta', -12.99, 3, null);
   detectPatterns(account, '2026-06-30');
@@ -122,11 +122,21 @@ test('MCP: Hermes cannot change a decision the user made', async () => {
   const res = await app.inject({ method: 'POST', url: `/patterns/${q.patternId}/decision`, payload: { decision: 'subscription' } });
   assert.equal(res.json().pattern.decided_by, 'user');
 
-  await assert.rejects(
-    agent.call('answer_recurring_question', { patternId: q.patternId, decision: 'not_recurring' }),
-    /409.*user_decision/
+  const answered = await agent.call('answer_recurring_question', { patternId: q.patternId, decision: 'not_recurring' });
+  assert.equal(answered.pattern.state, 'rejected');
+  assert.equal(answered.pattern.decided_by, 'hermes');
+
+  const log = await agent.call('list_pattern_decisions');
+  assert.deepEqual(
+    log.items.map((i: { actor: string; decision: string; superseded: boolean }) => [i.actor, i.decision, i.superseded]),
+    [
+      ['hermes', 'not_recurring', false],
+      ['user', 'subscription', true],
+    ]
   );
-  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM pattern_decisions').get() as { n: number }).n, 1);
+
+  const reset = await agent.call('answer_recurring_question', { patternId: q.patternId, decision: 'reset' });
+  assert.equal(reset.pattern.state, 'unconfirmed');
 });
 
 test('MCP: Hermes rejects a confident pattern it was never asked about, and can change its own answer', async () => {

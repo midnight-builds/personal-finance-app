@@ -11,8 +11,7 @@ import { APPEND_ONLY, READ_ONLY, defineTool, type ToolDefinition } from './types
 
 const ERROR_CODES =
   'Errors come back as "Finance API error <status>: {"error": <code>, "details": ...}": 400 invalid_request; ' +
-  '404 not_found (no such pattern); 409 not_monthly_pattern (annual patterns are not decided here), ' +
-  '409 user_decision (the user decided this pattern; only the user changes it - details give the decision).';
+  '404 not_found (no such pattern); 409 not_monthly_pattern (annual patterns are not decided here).';
 
 export const patternTools: ToolDefinition[] = [
   defineTool({
@@ -46,7 +45,9 @@ export const patternTools: ToolDefinition[] = [
       'never asked about (e.g. reject a confident pattern that is really savings or a one-off series). The ' +
       'decision is appended to the history under this server\'s actor (list_pattern_decisions) and survives ' +
       're-detection; a later answer replaces it, and repeating the current answer records nothing (recorded: ' +
-      'false). A decision the user made cannot be changed here (409 user_decision); one an agent made can. ' +
+      'false). Any decision may be replaced, also one the user made: the latest counts, and the history keeps every ' +
+      'one with its actor. reset takes the decision back: the pattern is unconfirmed again and counted by its ' +
+      'confidence. ' +
       'Only the pattern\'s decision changes: transactions, amounts, categories, accounts and balances are ' +
       'never touched, and nothing is deleted. Answer only from what the user said or clear evidence. Returns ' +
       '{ pattern (with state, pattern_type, established, decided_by, decided_at), recorded }. ' +
@@ -67,7 +68,7 @@ export const patternTools: ToolDefinition[] = [
       'another name = an agent). Each item: id, createdAt, patternId, accountId, counterparty, decision ' +
       '(recurring, subscription, not_recurring), actor, superseded (a newer decision on the same pattern replaced ' +
       'it). Returns { total, limit, offset, items }; page with limit/offset. A rejected pattern is left out of ' +
-      'list_recurring; find it here to change an answer an agent gave.',
+      'list_recurring; find it here to change or reset its decision.',
     inputSchema: patternDecisionListFields,
     annotations: READ_ONLY,
     run: (args, { api }) => api.get('/patterns/decisions', args),

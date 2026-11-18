@@ -175,13 +175,16 @@ The forecast lists it in `uncertainRecurring`, outside `knownFixed` and
 `projectedTotal`.
 
 **Pattern decision** — what the user or an agent (its actor) says a monthly or
-weekly pattern is: `recurring`, `subscription` or `not_recurring`. Its state is
-then `confirmed_recurring`, `confirmed_subscription` or `rejected`; without one
-it is `unconfirmed`. Decisions are history in `pattern_decisions`, keyed by
+weekly pattern is: `recurring`, `subscription` or `not_recurring`, or `reset` to
+take a decision back. Its state is then `confirmed_recurring`,
+`confirmed_subscription` or `rejected`; without one, or after a reset, it is
+`unconfirmed`. Decisions are history in `pattern_decisions`, keyed by
 account and counterparty (the same merchant on another account is another
 pattern): a new one is appended, the latest counts, and re-stating it appends
-nothing. The user's decision is changed only by the user; an agent's, by
-anyone. Detection never writes them, so they survive every re-detection. A decision sets the pattern's type; a rejected pattern is
+nothing. Every actor is equally trusted: an agent may replace the user's
+decision and the other way round, and the history keeps who decided what.
+Detection never writes decisions, so they survive every re-detection. A
+decision sets the pattern's type; a rejected pattern is
 left out of the forecast, totals, briefing and `/recurring`, and never asked
 about again. A decided pattern is deactivated only when its charges stop, and
 its decision applies again if they resume. Decisions apply to monthly and

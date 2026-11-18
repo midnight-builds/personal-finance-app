@@ -12,6 +12,7 @@ const ANSWERED: Record<PatternDecision, string> = {
   subscription: 'Merkitty tilaukseksi',
   recurring: 'Merkitty toistuvaksi maksuksi',
   not_recurring: 'Merkitty ei-toistuvaksi',
+  reset: 'Päätös peruttu',
 };
 
 /** "Onko tämä toistuva?": the user's answer becomes the pattern's decision. */

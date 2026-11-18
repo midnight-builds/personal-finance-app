@@ -324,7 +324,7 @@ export function initDb() {
       account_id TEXT NOT NULL REFERENCES accounts(id),
       counterparty_name TEXT NOT NULL,
       pattern_id TEXT NOT NULL,
-      decision TEXT NOT NULL CHECK (decision IN ('recurring', 'subscription', 'not_recurring')),
+      decision TEXT NOT NULL CHECK (decision IN ('recurring', 'subscription', 'not_recurring', 'reset')),
       actor TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_pattern_decisions_key ON pattern_decisions(account_id, counterparty_name, id);

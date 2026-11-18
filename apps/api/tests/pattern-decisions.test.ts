@@ -315,25 +315,49 @@ test('patterns of an account whose exports lag behind stay active: their charges
   assert.deepEqual(fixed(), ['Suoratoisto Kuvavirta']);
 });
 
-test("an agent cannot change the user's decision; the user can change an agent's", () => {
+test('any actor may change any decision, the latest wins, and the history keeps every one', () => {
   const a = mkAccount();
   monthly(a, 'Suoratoisto Kuvavirta', -12.99, 3, 6);
-  monthly(a, 'Rahasto Kasvu', -100, 12, 6, IBAN);
   detectPatterns(a.account, AS_OF);
+  const id = pattern('Suoratoisto Kuvavirta')!.id;
 
-  decide('Suoratoisto Kuvavirta', 'subscription', 'user');
-  assert.throws(
-    () => decide('Suoratoisto Kuvavirta', 'not_recurring', 'hermes'),
-    (err: { code?: string; statusCode?: number }) => err.code === 'user_decision' && err.statusCode === 409
-  );
-  assert.equal(pattern('Suoratoisto Kuvavirta')!.state, 'confirmed_subscription');
-  assert.equal(decide('Suoratoisto Kuvavirta', 'subscription', 'hermes').recorded, false, 'agreeing is fine');
+  decidePattern(id, 'subscription', 'user');
+  const overridden = decidePattern(id, 'not_recurring', 'agent-a');
+  assert.equal(overridden.recorded, true);
+  assert.equal(overridden.pattern.state, 'rejected');
+  assert.equal(overridden.pattern.decided_by, 'agent-a');
+  assert.deepEqual(fixed(), []);
 
-  const fund = pattern('Rahasto Kasvu')!.id;
-  decidePattern(fund, 'not_recurring', 'hermes');
-  decidePattern(fund, 'recurring', 'hermes');
-  decidePattern(fund, 'not_recurring', 'user');
+  decidePattern(id, 'recurring', 'user');
+  assert.equal(pattern('Suoratoisto Kuvavirta')!.state, 'confirmed_recurring');
+
+  const rows = db.prepare('SELECT decision, actor FROM pattern_decisions ORDER BY id').all().map((r) => ({ ...r }));
+  assert.deepEqual(rows, [
+    { decision: 'subscription', actor: 'user' },
+    { decision: 'not_recurring', actor: 'agent-a' },
+    { decision: 'recurring', actor: 'user' },
+  ]);
+});
+
+test('reset returns a pattern to unconfirmed: detection rules apply and an uncertain one is asked again', () => {
+  const a = mkAccount();
+  monthly(a, 'Rahasto Kasvu', -100, 12, 3, IBAN);
+  detectPatterns(a.account, AS_OF);
+  const id = pattern('Rahasto Kasvu')!.id;
+
+  assert.equal(decidePattern(id, 'reset', 'user').recorded, false, 'nothing to reset');
+  decidePattern(id, 'not_recurring', 'agent-a');
   assert.equal(pattern('Rahasto Kasvu'), undefined);
+
+  const reset = decidePattern(id, 'reset', 'user');
+  assert.equal(reset.recorded, true);
+  assert.equal(reset.pattern.state, 'unconfirmed');
+  assert.equal(reset.pattern.decided_by, null);
+  assert.deepEqual(uncertain(), ['Rahasto Kasvu']);
+  assert.deepEqual(recurringQuestions().map((q) => q.counterparty), ['Rahasto Kasvu']);
+  detectPatterns(a.account, AS_OF);
+  assert.equal(pattern('Rahasto Kasvu')!.state, 'unconfirmed');
+  assert.equal(decidePattern(id, 'reset', 'user').recorded, false, 'already reset');
 });
 
 test('a decision applies to monthly/weekly patterns only: a row turned annual follows its own rules', () => {
