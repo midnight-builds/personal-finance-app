@@ -9,7 +9,7 @@ import { redactSensitiveIds, type CreatedPatternInterval, type PatternCreateRequ
 import { db } from './db.js';
 import { DomainError } from './http/errors.js';
 import { ledgerEntries } from './ledger.js';
-import { CREATED_AMOUNT_TOLERANCE, MIN_DAYS_APART, fitsExpectedAmount, refreshLapse, scorePattern } from './patterns.js';
+import { CREATED_AMOUNT_TOLERANCE, MIN_DAYS_APART, fitsExpectedAmount, isSavingsCharge, refreshLapse, scorePattern } from './patterns.js';
 import { patternById, type PatternView } from './patternDecisions.js';
 
 const INTERVAL_DAYS: Record<CreatedPatternInterval, number> = { weekly: 7, monthly: 30 };
@@ -23,7 +23,9 @@ const invalid = (code: string, details: unknown) => new DomainError(code, 400, d
 const sameCounterparty = (stored: string | null, named: string) =>
   stored !== null && (stored.trim() === named || redactSensitiveIds(stored).trim() === named);
 
-type Evidence = { id: string; bookedAt: string; amount: number; currency: string; counterparty: string; viaIban: boolean };
+type Evidence = {
+  id: string; bookedAt: string; amount: number; currency: string; counterparty: string; viaIban: boolean; savings: boolean;
+};
 
 /** The cited charges, checked one by one; throws a 400 naming the offending ids. Oldest first. */
 function checkEvidence(input: PatternCreateRequest): Evidence[] {
@@ -91,6 +93,7 @@ function checkEvidence(input: PatternCreateRequest): Evidence[] {
     currency: e.currency,
     counterparty: e.counterparty!,
     viaIban: e.counterpartyIban !== null,
+    savings: isSavingsCharge(e.counterparty, e.description),
   }));
 }
 
@@ -147,7 +150,7 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
   }
 
   const now = new Date().toISOString();
-  const score = scorePattern(evidence.map((e) => ({ amount: e.amount, date: e.bookedAt, viaIban: e.viaIban })));
+  const score = scorePattern(evidence.map((e) => ({ amount: e.amount, date: e.bookedAt, viaIban: e.viaIban, savings: e.savings })));
   const values = {
     updated_at: now,
     pattern_type: input.kind,
@@ -164,6 +167,7 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
     confidence_factors: JSON.stringify(score.factors),
     amount_fixed: score.amountFixed ? 1 : 0,
     payment_method: score.paymentMethod,
+    savings: score.savings ? 1 : 0,
     origin: 'created',
     created_by: actor,
     evidence_transaction_ids: JSON.stringify(evidence.map((e) => e.id)),

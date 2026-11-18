@@ -72,7 +72,7 @@ test('MCP: Hermes lists questions with evidence, answers one under its actor, an
   const questions = await agent.call('list_recurring_questions');
   assert.deepEqual(questions.map((q: { counterparty: string }) => q.counterparty), ['Rahasto Kasvu', 'Suoratoisto Kuvavirta']);
   const fund = questions[0];
-  assert.deepEqual(fund.reasons, ['low_confidence', 'fixed_amount_account_payment']);
+  assert.deepEqual(fund.reasons, ['low_confidence', 'savings', 'fixed_amount_account_payment']);
   assert.equal(fund.evidence.transactions.length, 3);
   assert.equal(fund.evidence.paymentMethod, 'account_payment');
   assert.ok(!JSON.stringify(questions).includes('FI00'), 'no IBAN field reaches the agent');
@@ -142,14 +142,14 @@ test('MCP: the agent can override a decision the user made; the history shows bo
 test('MCP: Hermes rejects a confident pattern it was never asked about, and can change its own answer', async () => {
   const { computeMonthlyForecast } = await import('../src/forecast.js');
   const agent = await connectAgent();
-  const account = monthlyCharges('Säästökortti Kasvu', -200, 5, null, 6);
+  const account = monthlyCharges('Kuntokortti Kasvu', -200, 5, null, 6);
   detectPatterns(account, '2026-06-30');
   assert.deepEqual(await agent.call('list_recurring_questions'), [], 'confident: not asked');
   const fixedNames = () => computeMonthlyForecast(1, '2026-06-30', []).knownFixed.map((i) => i.counterparty);
-  assert.deepEqual(fixedNames(), ['Säästökortti Kasvu']);
+  assert.deepEqual(fixedNames(), ['Kuntokortti Kasvu']);
 
   // The id as list_recurring returns it.
-  const { id } = db.prepare("SELECT id FROM recurring_patterns WHERE counterparty_name = 'Säästökortti Kasvu'").get() as { id: string };
+  const { id } = db.prepare("SELECT id FROM recurring_patterns WHERE counterparty_name = 'Kuntokortti Kasvu'").get() as { id: string };
   const rejected = await agent.call('answer_recurring_question', { patternId: id, decision: 'not_recurring' });
   assert.equal(rejected.recorded, true);
   assert.equal(rejected.pattern.state, 'rejected');
@@ -158,7 +158,7 @@ test('MCP: Hermes rejects a confident pattern it was never asked about, and can 
   const changed = await agent.call('answer_recurring_question', { patternId: id, decision: 'recurring' });
   assert.equal(changed.pattern.state, 'confirmed_recurring');
   assert.equal(changed.pattern.decided_by, 'hermes');
-  assert.deepEqual(fixedNames(), ['Säästökortti Kasvu']);
+  assert.deepEqual(fixedNames(), ['Kuntokortti Kasvu']);
   const log = await agent.call('list_pattern_decisions');
   assert.deepEqual(log.items.map((i: { decision: string; superseded: boolean }) => [i.decision, i.superseded]), [
     ['recurring', false],

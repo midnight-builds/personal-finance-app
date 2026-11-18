@@ -33,11 +33,12 @@ function fitsMonthlyChain(days: string[], day: number): boolean {
  * A subscription charges the same amount on about the same day every month, with no
  * other charge from the counterparty in between; the due day is tried from the charges'
  * own days. Habitual purchases (groceries, lunch) vary in amount or day. A counterparty
- * paid only to an IBAN is a person or an e-invoice biller and stays recurring.
- * `occurrences` is in date order.
+ * paid only to an IBAN is a person or an e-invoice biller and stays recurring, and so
+ * does one that is saved or invested in (`isSavingsCharge`). `occurrences` is in date order.
  */
-function isSubscription(occurrences: Array<{ amount: number; date: string; viaIban: boolean }>): boolean {
+function isSubscription(occurrences: Array<{ amount: number; date: string; viaIban: boolean; savings?: boolean }>): boolean {
   if (occurrences.every((o) => o.viaIban)) return false;
+  if (isSavingsPattern(occurrences)) return false;
   const cents = Math.round(occurrences[0].amount * 100);
   if (occurrences.some((o) => Math.round(o.amount * 100) !== cents)) return false;
   const days = occurrences.map((o) => o.date.slice(0, 10));
@@ -51,7 +52,32 @@ function isSubscription(occurrences: Array<{ amount: number; date: string; viaIb
  */
 const MIN_OCCURRENCES = 3;
 
-export type Occurrence = { id: string; counterparty: string; amount: number; date: string; viaIban: boolean };
+// A fund purchase as Nordea describes it: "MERKINTÄ <fund> KPL KURSSI <price> PALKKIO <fee>".
+// `\b` is ASCII-only: it never falls after the Ä.
+const FUND_ORDER = /^\s*MERKINTÄ\s.*\bKURSSI\b/iu;
+// Matched on the counterparty only: free-text messages and words like "sijoitus" name too
+// much else (a newsletter, a rented flat). A savings bank is a bank, not saving.
+const SAVINGS_WORDS = /rahasto|säästö(?!pank)|\bfunds?\b|\betf\b/iu;
+
+/**
+ * Whether a charge is saved or invested rather than spent: a fund purchase by its
+ * description, or a counterparty naming a fund or saving.
+ * A fixed monthly fund purchase by card charges like a subscription but is not one
+ * (GLOSSARY.md, "Savings pattern").
+ */
+export function isSavingsCharge(counterparty: string | null, description: string | null): boolean {
+  return FUND_ORDER.test(description ?? '') || SAVINGS_WORDS.test(counterparty ?? '');
+}
+
+/** Most charges (over half) are saved or invested: one odd message does not make a pattern savings. */
+const isSavingsPattern = (charges: Array<{ savings?: boolean }>) =>
+  charges.filter((c) => c.savings).length * 2 > charges.length;
+
+export type Occurrence = {
+  id: string; counterparty: string; amount: number; date: string; viaIban: boolean;
+  /** Saved or invested, not spent (`isSavingsCharge`). */
+  savings?: boolean;
+};
 type Charge = Omit<Occurrence, 'counterparty' | 'id'>;
 
 /**
@@ -69,6 +95,8 @@ export type PatternScore = {
   amountFixed: boolean;
   /** `account_payment`: every charge went to an IBAN (a person or an e-invoice biller); `card`: none did. */
   paymentMethod: 'account_payment' | 'card' | 'mixed';
+  /** Most charges were saved or invested (`isSavingsCharge`): a savings pattern. */
+  savings: boolean;
 };
 
 const round2 = (x: number) => Math.round(x * 100) / 100;
@@ -110,6 +138,7 @@ export function scorePattern(charges: Charge[]): PatternScore {
     factors,
     amountFixed: amounts.every((a) => Math.round(a * 100) === cents),
     paymentMethod: viaIban === charges.length ? 'account_payment' : viaIban === 0 ? 'card' : 'mixed',
+    savings: isSavingsPattern(charges),
   };
 }
 
@@ -138,6 +167,7 @@ function recurringCandidates(entries: LedgerEntry[], from: string): Occurrence[]
       amount: e.amount,
       date: e.bookedAt,
       viaIban: e.counterpartyIban !== null,
+      savings: isSavingsCharge(e.counterparty, e.description),
     }))
     .sort((a, b) => binary(a.counterparty, b.counterparty) || binary(a.date, b.date));
 }
@@ -149,7 +179,7 @@ function byCounterparty(rows: Occurrence[]) {
   const groups = new Map<string, Charge[]>();
   for (const r of rows) {
     if (!groups.has(r.counterparty)) groups.set(r.counterparty, []);
-    groups.get(r.counterparty)!.push({ amount: r.amount, date: r.date, viaIban: r.viaIban });
+    groups.get(r.counterparty)!.push({ amount: r.amount, date: r.date, viaIban: r.viaIban, savings: r.savings });
   }
   return groups;
 }
@@ -181,9 +211,9 @@ export function patternChargesOf(accountId: string, asOf: string = today()): Map
   return charges;
 }
 
-const SCORE_COLUMNS = ['confidence', 'confidence_factors', 'amount_fixed', 'payment_method'] as const;
+const SCORE_COLUMNS = ['confidence', 'confidence_factors', 'amount_fixed', 'payment_method', 'savings'] as const;
 const scoreValues = (s: PatternScore) =>
-  [s.confidence, JSON.stringify(s.factors), s.amountFixed ? 1 : 0, s.paymentMethod] as const;
+  [s.confidence, JSON.stringify(s.factors), s.amountFixed ? 1 : 0, s.paymentMethod, s.savings ? 1 : 0] as const;
 
 /** Detects recurring, annual and confirmation-worthy payments of one account as of `asOf` (default: today). */
 export function detectPatterns(accountId: string, asOf: string = today()): void {
@@ -248,7 +278,7 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
           (id, created_at, updated_at, account_id, counterparty_name, pattern_type,
            interval_days, typical_amount, currency, first_seen, last_seen, occurrence_count, is_active,
            ${SCORE_COLUMNS.join(', ')})
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EUR', ?, ?, ?, 1, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EUR', ?, ?, ?, 1, ${SCORE_COLUMNS.map(() => '?').join(', ')})
       `).run(
         crypto.randomUUID(), now, now, accountId, counterparty, patternType,
         Math.round(avgInterval), avgAmount, firstSeen, lastSeen, sorted.length, ...scoreValues(score)
@@ -396,7 +426,10 @@ function refreshCreated(accountId: string, entries: LedgerEntry[], now: string):
     const charges = createdPatternCharges(entries, r);
     if (charges.length === 0) continue; // detection as of a day before its charges
     const score = scorePattern(
-      charges.map((c) => ({ amount: c.amount, date: c.bookedAt, viaIban: c.counterpartyIban !== null }))
+      charges.map((c) => ({
+        amount: c.amount, date: c.bookedAt, viaIban: c.counterpartyIban !== null,
+        savings: isSavingsCharge(c.counterparty, c.description),
+      }))
     );
     update.run(now, charges.at(-1)!.bookedAt, charges.length, ...scoreValues(score), r.id);
   }
@@ -500,8 +533,9 @@ export function chargesPerMonth(intervalDays: number | null): number {
  * 2: three charges minimum, subscriptions told by their charges (2026-11).
  * 3: confidence, amount_fixed and payment_method scored for every pattern (2026-11).
  * 4: lapsed_since set for every monthly/weekly pattern (2026-11).
+ * 5: savings patterns told apart, never subscriptions (2026-11).
  */
-export const PATTERN_RULES_VERSION = '4';
+export const PATTERN_RULES_VERSION = '5';
 const RULES_VERSION_KEY = 'patternRulesVersion';
 
 /** Re-runs detection for every account, in one transaction, once per rules version. Returns whether it ran. */

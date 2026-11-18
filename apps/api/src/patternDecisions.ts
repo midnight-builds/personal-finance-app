@@ -28,6 +28,7 @@ type PatternRow = {
   confidence_factors: string | null;
   amount_fixed: number | null;
   payment_method: string | null;
+  savings: number | null;
   decision: PatternDecision | null;
   decided_by: string | null;
   decided_at: string | null;
@@ -40,7 +41,7 @@ type PatternRow = {
 /** A stored pattern with its decision applied. Snake case, like the rows `/recurring` always returned. */
 export type PatternView = Omit<
   PatternRow,
-  'confidence_factors' | 'amount_fixed' | 'decision' | 'user_confirmed' | 'evidence_transaction_ids'
+  'confidence_factors' | 'amount_fixed' | 'decision' | 'user_confirmed' | 'evidence_transaction_ids' | 'savings'
 > & {
   /** Created patterns: the charges the actor cited when creating it; null for detected ones. */
   evidence_transaction_ids: string[] | null;
@@ -48,12 +49,14 @@ export type PatternView = Omit<
   detected_type: string;
   confidence_factors: ConfidenceFactors | null;
   amount_fixed: boolean | null;
+  /** Saved or invested rather than spent (GLOSSARY.md, "Savings pattern"): never a subscription by detection. */
+  savings: boolean;
   state: PatternState;
   /** 1 = confirmed by the user or an agent (or an annual confirmation), 0 = rejected, null = not decided. */
   user_confirmed: 1 | 0 | null;
   /**
    * Counts as a fixed cost (and, as a subscription, in the subscription total): confirmed,
-   * or unconfirmed with confidence ≥ CONFIDENT. Null for annual patterns, which follow
+   * or unconfirmed with confidence ≥ CONFIDENT and not savings. Null for annual patterns, which follow
    * their own confirmation (pattern_confirmations).
    */
   established: boolean | null;
@@ -86,7 +89,7 @@ const STATE_OF: Record<Exclude<PatternDecision, 'reset'>, PatternState> = {
 };
 
 function view(row: PatternRow): PatternView {
-  const { confidence_factors, amount_fixed, user_confirmed, evidence_transaction_ids, ...rest } = row;
+  const { confidence_factors, amount_fixed, user_confirmed, evidence_transaction_ids, savings, ...rest } = row;
   const monthly = MONTHLY_TYPES.has(row.pattern_type);
   // Decisions are about monthly/weekly patterns. Should the row turn annual, its own
   // confirmation rules apply; the decision applies again if it turns monthly again.
@@ -109,13 +112,14 @@ function view(row: PatternRow): PatternView {
     confidence_factors: confidence_factors ? (JSON.parse(confidence_factors) as ConfidenceFactors) : null,
     evidence_transaction_ids: evidence_transaction_ids ? (JSON.parse(evidence_transaction_ids) as string[]) : null,
     amount_fixed: amount_fixed === null ? null : amount_fixed === 1,
+    savings: savings === 1,
     state,
     user_confirmed: state === 'rejected' ? 0 : state !== 'unconfirmed' || user_confirmed === 1 ? 1 : null,
     established: !monthly
       ? null
       : state === 'rejected'
         ? false
-        : state !== 'unconfirmed' || (row.confidence ?? 0) >= CONFIDENT,
+        : state !== 'unconfirmed' || ((row.confidence ?? 0) >= CONFIDENT && savings !== 1),
   };
 }
 
@@ -160,17 +164,20 @@ export function establishedSubscriptions(): PatternView[] {
 // ── "Onko tämä toistuva?" questions ─────────────────────────────────
 
 /**
- * Why an undecided pattern is asked about. Only an uncertain one is (confidence below
- * CONFIDENT): an established pattern needs no confirmation, though the user or an agent
+ * Why an undecided pattern is asked about. Only an uncertain one is: confidence below
+ * CONFIDENT (`low_confidence`), or savings (`savings`), which only a decision
+ * establishes. An established pattern needs no confirmation, though the user or an agent
  * may still decide it. A fixed amount is added as a hint of what it may be: paid to an
  * IBAN every time, savings, rent or a person; otherwise savings or a subscription.
  */
-export type QuestionReason = 'low_confidence' | 'fixed_amount_account_payment' | 'fixed_amount_card';
+export type QuestionReason = 'low_confidence' | 'savings' | 'fixed_amount_account_payment' | 'fixed_amount_card';
 
 function questionReasons(p: PatternView): QuestionReason[] {
   // A lapsed pattern is not asked about: its charges stopped.
   if (p.state !== 'unconfirmed' || !MONTHLY_TYPES.has(p.pattern_type) || p.established || p.lapsed) return [];
-  const reasons: QuestionReason[] = ['low_confidence'];
+  const reasons: QuestionReason[] = [];
+  if ((p.confidence ?? 0) < CONFIDENT) reasons.push('low_confidence');
+  if (p.savings) reasons.push('savings');
   if (p.amount_fixed) {
     reasons.push(p.payment_method === 'account_payment' ? 'fixed_amount_account_payment' : 'fixed_amount_card');
   }
