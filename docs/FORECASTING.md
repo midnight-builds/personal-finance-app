@@ -87,6 +87,10 @@ pysäytä elävää kuviota. Pysähtynyt kuvio säilyy päätöshistorioineen ja
 `uncertainRecurring`-listassa, kuukausittaisessa tilaussummassa eikä
 tilauspalveluhavainnossa, eikä siitä kysytä. Seuraava veloitus palauttaa sen
 laskentaan automaattisesti (tunnistus ajetaan jokaisen tuonnin jälkeen).
+Jos lasku siirtyy toiselle tilille tai vastapuolen nimi muuttuu, vanha kuvio
+pysähtyy ja uusi lasketaan vasta kun se tunnistetaan (kolme veloitusta) tai
+luodaan. Toisaalta peruttu tilaus ei pysähdy, jos samalta vastapuolelta ostetaan
+muuta; se hylätään päätöksellä.
 
 Ennen tätä luotu kuvio laski ennusteessa ikuisesti, ja tunnistettu kuvio vasta
 kun 180 päivän ikkunassa oli alle kolme veloitusta (kuukausikuviolla noin neljä
