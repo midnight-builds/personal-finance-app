@@ -328,3 +328,48 @@ test('decisions: a decision made while monthly does not follow the row when it t
   db.prepare("UPDATE recurring_patterns SET pattern_type = 'recurring' WHERE id = ?").run(row.id);
   assert.equal(activePatterns()[0].state, 'unconfirmed', 'the annual rejection is not a monthly one');
 });
+
+// ── Monthly subscription total ──────────────────────────────────────
+
+test('a yearly subscription counts in the monthly subscription total as 1/12, shown separately', async () => {
+  const a = mkAccount();
+  const id = charge(a, 'Sanomalehti Aamu', -120, '2026-03-15');
+  otherSpend(a, '2026-12-20');
+  const res = await create({
+    accountId: a.account,
+    counterparty: 'Sanomalehti Aamu',
+    kind: 'subscription',
+    interval: 'yearly',
+    expectedAmount: 120,
+    evidenceTransactionIds: [id],
+  });
+  assert.equal(res.statusCode, 200, res.body);
+
+  const summary = getHouseholdSummary('2026-12-31');
+  assert.equal(summary.monthlySubscriptions, 10);
+  assert.deepEqual(summary.monthlySubscriptionsBreakdown, { monthly: 0, annualShare: 10, annualCount: 1 });
+
+  // Rejected: out of the total again.
+  await decide(res.json().pattern.id, 'not_recurring');
+  const after = getHouseholdSummary('2026-12-31');
+  assert.equal(after.monthlySubscriptions, 0);
+  assert.deepEqual(after.monthlySubscriptionsBreakdown, { monthly: 0, annualShare: 0, annualCount: 0 });
+});
+
+test('a lapsed yearly subscription is not in the monthly subscription total', async () => {
+  const a = mkAccount();
+  const id = charge(a, 'Sanomalehti Aamu', -120, '2024-03-15');
+  // Before today: creating judges the lapse as of today.
+  otherSpend(a, '2026-10-20');
+  const res = await create({
+    accountId: a.account,
+    counterparty: 'Sanomalehti Aamu',
+    kind: 'subscription',
+    interval: 'yearly',
+    expectedAmount: 120,
+    evidenceTransactionIds: [id],
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(res.json().pattern.lapsed, true);
+  assert.equal(getHouseholdSummary('2026-12-31').monthlySubscriptionsBreakdown.annualCount, 0);
+});

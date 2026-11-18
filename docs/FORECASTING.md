@@ -42,7 +42,11 @@ kaikki aktiiviset kuviot; nyt epävarmat ovat erikseen, joten `projectedTotal`
 voi laskea, kun historiaa samalta kuukaudelta ei ole ja kiinteät menot
 olivat ennusteen pohja. Kuukausittainen tilaussumma (`/household/summary`,
 `monthlySubscriptions`) ja tilauspalveluhavainto laskevat vain vakiintuneet
-tilaukset; `/subscriptions` listaa samat.
+tilaukset; `/subscriptions` listaa samat. Kuukausisummaan lasketaan lisäksi
+vuositilaukset (vuosikuvio, jonka päätös on tilaus, ei rauennut) 1/12-osana
+summastaan. Osuus näkyy erikseen kentässä `monthlySubscriptionsBreakdown`
+(`monthly`, `annualShare`, `annualCount`), ja käyttöliittymä mainitsee sen
+summan vieressä. Ennusteessa vuositilaus on edelleen vain omassa kuussaan.
 
 Epävarmat kuviot (ei päätöstä, varmuus < 0,75) kysytään käyttäjältä ("Onko
 tämä toistuva?", GLOSSARY.md "Recurring question"): `GET /patterns/questions`

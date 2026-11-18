@@ -7,6 +7,7 @@ type CfoStatePanelProps = {
 };
 
 export default function CfoStatePanel({ summary }: CfoStatePanelProps) {
+  const annualSubs = summary.monthlySubscriptionsBreakdown;
   return (
     <div className="cfo-state-panel">
       <header className="cfo-header">
@@ -31,6 +32,12 @@ export default function CfoStatePanel({ summary }: CfoStatePanelProps) {
         <div className="cfo-metric">
           <span className="cfo-metric-label">Tilaukset</span>
           <strong className="cfo-metric-value">{formatAmount(summary.monthlySubscriptions)}/kk</strong>
+          {annualSubs && annualSubs.annualCount > 0 && (
+            <span className="cfo-metric-note">
+              sis. {annualSubs.annualCount === 1 ? 'vuositilauksen' : `${annualSubs.annualCount} vuositilausta`} 1/12-osana:{' '}
+              {formatAmount(annualSubs.annualShare)}/kk
+            </span>
+          )}
         </div>
       </div>
 
