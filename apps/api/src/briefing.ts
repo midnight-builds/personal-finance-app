@@ -24,10 +24,10 @@ function fmt(n: number) {
 // ── Generators ────────────────────────────────────────────────────
 
 function subscriptionCreep(): FindingInput[] {
-  // Confirmed or confident enough only (patternDecisions.ts).
+  // Confirmed or confident enough and not lapsed, a month's worth each (patternDecisions.ts).
   const subs = establishedSubscriptions().map((p) => ({
     counterparty_name: p.counterparty_name!,
-    typical_amount: p.typical_amount ?? 0,
+    typical_amount: p.monthly_amount ?? 0,
     created_at: p.created_at,
   }));
 
@@ -61,7 +61,8 @@ function newRecurring(): FindingInput[] {
   const cutoff = new Date(Date.now() - 60 * 86400_000).toISOString();
   // A pattern the user rejected is not news, and one asked about has its own card.
   const asked = new Set(shownQuestions().map((q) => q.patternId));
-  const patterns = activePatterns().filter((p) => p.created_at >= cutoff && !asked.has(p.id));
+  // Nor is one whose charges stopped (lapsed).
+  const patterns = activePatterns().filter((p) => p.created_at >= cutoff && !asked.has(p.id) && !p.lapsed);
 
   return patterns.map((p) => ({
     finding_type: 'new_recurring',

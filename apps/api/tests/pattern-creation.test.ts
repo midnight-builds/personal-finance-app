@@ -340,7 +340,10 @@ test('detection: a created pattern is never deactivated, also when no new charge
   for (const k of ['id', 'origin', 'pattern_type', 'typical_amount', 'interval_days', 'first_seen', 'created_by', 'evidence_transaction_ids']) {
     assert.equal(after[0][k], before[0][k], k);
   }
-  assert.deepEqual(computeMonthlyForecast(1, '2027-06-30', []).knownFixed.map((i) => i.patternId), [pattern.id]);
+  // Kept, but lapsed: a year without a charge (pattern-lapse.test.ts).
+  assert.equal(after[0].lapsed_since, '2026-08-10');
+  assert.deepEqual(computeMonthlyForecast(1, '2027-06-30', []).knownFixed, []);
+  assert.deepEqual(computeMonthlyForecast(1, '2027-06-30', []).lapsedRecurring.map((i) => i.patternId), [pattern.id]);
 });
 
 test('detection: annual detection and an annual confirmation never take over a created pattern', async () => {
@@ -441,10 +444,12 @@ test('decisions: a withdrawn created pattern follows its charges: a new price is
   assert.equal(rows('Lehti Sanomat')[0].is_active, 0);
 });
 
-test('detection: a created pattern still vouched for keeps counting after its charges stop (documented)', async () => {
+test('detection: a created pattern still vouched for stays active after its charges stop, but lapses and counts nowhere', async () => {
   const { a, body } = newContract();
   await create(body);
   charge(a, 'Muu Kauppa', -5, '2027-06-01');
   detectPatterns(a.account, '2027-06-30');
-  assert.deepEqual(computeMonthlyForecast(1, '2027-06-30', []).knownFixed.map((i) => i.counterparty), ['Kuntosali Liikku']);
+  assert.deepEqual(listed(), ['Kuntosali Liikku']);
+  assert.deepEqual(computeMonthlyForecast(1, '2027-06-30', []).knownFixed, []);
+  assert.deepEqual(subscriptions(), []);
 });

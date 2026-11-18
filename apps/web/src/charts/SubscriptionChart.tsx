@@ -8,7 +8,8 @@ type SubscriptionChartProps = {
 export default function SubscriptionChart({ data }: SubscriptionChartProps) {
   if (data.length === 0) return <p>Ei tilauksia tunnistettu.</p>;
 
-  const transformed = data.map(p => ({ name: p.counterparty_name, amount: p.typical_amount }));
+  // €/kk: a weekly subscription is 52/12 charges a month.
+  const transformed = data.map(p => ({ name: p.counterparty_name, amount: p.monthly_amount ?? p.typical_amount }));
 
   return (
     <ResponsiveContainer width="100%" height={250}>

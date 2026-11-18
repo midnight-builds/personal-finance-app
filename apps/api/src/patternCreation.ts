@@ -9,7 +9,7 @@ import { redactSensitiveIds, type CreatedPatternInterval, type PatternCreateRequ
 import { db } from './db.js';
 import { DomainError } from './http/errors.js';
 import { ledgerEntries } from './ledger.js';
-import { CREATED_AMOUNT_TOLERANCE, MIN_DAYS_APART, fitsExpectedAmount, scorePattern } from './patterns.js';
+import { CREATED_AMOUNT_TOLERANCE, MIN_DAYS_APART, fitsExpectedAmount, refreshLapse, scorePattern } from './patterns.js';
 import { patternById, type PatternView } from './patternDecisions.js';
 
 const INTERVAL_DAYS: Record<CreatedPatternInterval, number> = { weekly: 7, monthly: 30 };
@@ -194,6 +194,8 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
          VALUES (?, ?, ?, ?, ?, ?)`
       ).run(now, input.accountId, counterparty, id, input.kind, actor);
     }
+    // Cited charges may be old: the pattern may have lapsed already (GLOSSARY.md, "Lapsed pattern").
+    refreshLapse(input.accountId);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

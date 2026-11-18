@@ -324,6 +324,10 @@ export function initDb() {
   );
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN created_by TEXT`);
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN evidence_transaction_ids TEXT`);
+  // Day a monthly/weekly pattern lapsed: two periods passed without a charge, counted on
+  // the account's latest booking (GLOSSARY.md, "Lapsed pattern"); null while it is live.
+  // Set by detection and on creation (patterns.ts, `markLapsed`).
+  safeExec(`ALTER TABLE recurring_patterns ADD COLUMN lapsed_since TEXT`);
   // What the user or an agent said a pattern is. History: rows are appended, never
   // changed; the latest per account and counterparty is the decision. Detection
   // never writes here, so a decision survives every re-detection.

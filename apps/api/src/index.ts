@@ -18,9 +18,7 @@ import { listAccounts, updateAccount } from './accounts.js';
 import { listBalanceAdjustments, createBalanceAdjustment, deleteBalanceAdjustment } from './balanceAdjustments.js';
 import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
 import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
-import { getForecast } from './forecast.js';
 import { redetectPatternsIfRulesChanged } from './patterns.js';
-import { activePatterns, establishedSubscriptions } from './patternDecisions.js';
 import { withoutAnsweredQuestions } from './briefing.js';
 import { routes } from './routes/index.js';
 
@@ -276,20 +274,9 @@ server.post<{ Params: { findingId: string } }>('/briefing/:findingId/dismiss', a
   return { ok: true };
 });
 
-// Subscriptions and recurring patterns
-// Decisions applied (patternDecisions.ts): subscriptions counted in the monthly total,
-// and every active pattern the user has not rejected.
-server.get('/subscriptions', async () => establishedSubscriptions());
-
-server.get('/recurring', async () =>
-  activePatterns().sort((a, b) => b.last_seen.localeCompare(a.last_seen))
-);
-
 server.get<{ Params: { accountId: string } }>('/balance-snapshots/:accountId', async (request) => {
   return getBalanceSnapshotsForAccount(request.params.accountId);
 });
-
-server.get('/forecast', async () => getForecast());
 
 server.get('/pattern-confirmations', async () => listPendingConfirmations());
 

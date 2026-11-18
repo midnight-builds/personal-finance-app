@@ -142,7 +142,10 @@ latest booking (`patterns.ts`), so an account whose exports lag behind does
 not look as if its charges had stopped.
 Monthly or weekly patterns need at least three charges with a steady interval
 and amount; two charges are one interval and prove nothing. The forecast
-counts established ones as fixed costs and lists uncertain ones apart. Stored
+counts established ones as fixed costs and lists uncertain and lapsed ones
+apart; a weekly one counts each of its charges that falls in the forecast
+month (4 or 5: every day a whole number of weeks from its latest charge), a
+monthly one one charge. Stored
 as `recurring_patterns`; `pattern_type` is `recurring`, `subscription` or
 `annual`, with a pattern decision applied (`patternDecisions.ts`). `origin` says
 whether detection found it (`detected`) or an actor created it (`created`).
@@ -154,7 +157,8 @@ counterparty in between. A counterparty paid only to an IBAN (a person, an
 e-invoice biller) is never one unless the user says so. Fixed monthly savings
 paid by card look the same; the user or an agent can reject or reclassify one
 with a pattern decision. The monthly subscription total and the subscription-creep finding
-count established subscriptions only.
+count established subscriptions that have not lapsed, a weekly one at 52/12
+charges a month (`monthly_amount`).
 
 **Recurring (pattern type)** — a monthly or weekly pattern that is not a
 subscription: varying amount or day, or paid to an IBAN.
@@ -170,6 +174,23 @@ returned with it.
 **Established pattern** — a monthly or weekly pattern that counts as a fixed
 cost (and, if a subscription, in the subscription total): confirmed by a
 pattern decision, or unconfirmed with confidence at least 0.75 (`CONFIDENT`).
+A lapsed pattern stays established but counts nowhere while it is lapsed.
+
+**Lapsed pattern** — a monthly or weekly pattern, detected or created, whose
+counterparty has not charged the account for two periods: the account's latest
+booking (not today, so a lagging export lapses nothing) is at least two
+periods plus a grace for late booking after the latest charge — 2 × 31 + 5 =
+67 days monthly, 2 × 7 + 3 = 17 weekly (a detected interval longer than the
+nominal period counts instead). A charge is any countable expense from the
+counterparty that is not a transfer, whatever its amount, so a new price never
+lapses a live pattern. A lapsed pattern is kept, active and with its decision
+history, and listed with `lapsed: true` and `lapsed_since` (the day it lapsed)
+in `/recurring` and in the forecast's `lapsedRecurring`, but counted in no
+forecast total, not in the subscription total or the subscription-creep
+finding, not asked about and not announced as new. Detection sets it on every
+run (`markLapsed` in `patterns.ts`), creation too: a charge again clears it, so
+the pattern counts again. It can still be decided or rejected. Annual patterns
+do not lapse.
 
 **Uncertain pattern** — an unconfirmed monthly or weekly pattern below 0.75.
 The forecast lists it in `uncertainRecurring`, outside `knownFixed` and
@@ -208,7 +229,8 @@ inactive one is taken over (same id), an active detected one is decided instead
 is not `reset`, detection never deactivates, retypes or re-prices it and never
 adds a second row; when detection finds the same pattern it stays the created
 one, and only its charge count, latest charge and confidence are updated. So it
-keeps counting after its charges stop, until someone rejects it. Rejecting it
+stays active after its charges stop, until someone rejects it, but two periods
+without a charge make it a lapsed pattern, counted nowhere. Rejecting it
 works as for any pattern. `reset` withdraws it: nobody vouches for it, so it is
 left out of the forecast, totals, questions and `/recurring` unless its own
 charges make it established (confidence at least 0.75), and detection treats it

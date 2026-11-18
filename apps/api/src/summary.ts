@@ -168,8 +168,9 @@ export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
       return sum + Math.abs(rawBalance < 0 ? rawBalance : 0);
     }, 0));
 
-  // Monthly subscriptions: confirmed or confident enough (patternDecisions.ts)
-  const monthlySubscriptions = cents(establishedSubscriptions().reduce((sum, p) => sum + (p.typical_amount ?? 0), 0));
+  // Monthly subscriptions: confirmed or confident enough and not lapsed, weekly ones at
+  // 52/12 charges a month (patternDecisions.ts)
+  const monthlySubscriptions = cents(establishedSubscriptions().reduce((sum, p) => sum + (p.monthly_amount ?? 0), 0));
 
   // Monthly net spend (last 30 days, excluding transfers)
   const monthlyNet = net({ from: daysBefore(asOf, 30), to: asOf });

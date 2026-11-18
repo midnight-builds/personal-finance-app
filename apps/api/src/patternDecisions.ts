@@ -6,7 +6,7 @@
 import type { PatternDecision, PatternOrigin, PatternState } from '@finance-app/shared';
 import { db } from './db.js';
 import { DomainError } from './http/errors.js';
-import { CONFIDENT, patternChargesOf, type ConfidenceFactors, type Occurrence } from './patterns.js';
+import { CONFIDENT, chargesPerMonth, patternChargesOf, type ConfidenceFactors, type Occurrence } from './patterns.js';
 
 type PatternRow = {
   id: string;
@@ -34,6 +34,7 @@ type PatternRow = {
   origin: PatternOrigin;
   created_by: string | null;
   evidence_transaction_ids: string | null;
+  lapsed_since: string | null;
 };
 
 /** A stored pattern with its decision applied. Snake case, like the rows `/recurring` always returned. */
@@ -56,6 +57,17 @@ export type PatternView = Omit<
    * their own confirmation (pattern_confirmations).
    */
   established: boolean | null;
+  /**
+   * Two periods passed without a charge, counted on the account's latest booking
+   * (GLOSSARY.md, "Lapsed pattern"): it counts nowhere until a charge comes again.
+   * `lapsed_since` is the day it lapsed. Always false for annual patterns.
+   */
+  lapsed: boolean;
+  /**
+   * One month of a monthly/weekly pattern at its typical amount: a weekly one 52/12
+   * charges. What the subscription total adds up; null for annual patterns.
+   */
+  monthly_amount: number | null;
 };
 
 const MONTHLY_TYPES = new Set(['subscription', 'recurring']);
@@ -84,8 +96,12 @@ function view(row: PatternRow): PatternView {
   // A decision on a monthly/weekly pattern names its type; annual patterns keep theirs.
   const type = monthly && (decision === 'recurring' || decision === 'subscription') ? decision : row.pattern_type;
   const { decision: _decision, ...fields } = rest;
+  const lapsedSince = monthly ? row.lapsed_since : null;
   return {
     ...fields,
+    lapsed: lapsedSince !== null,
+    lapsed_since: lapsedSince,
+    monthly_amount: monthly ? Math.round((row.typical_amount ?? 0) * chargesPerMonth(row.interval_days) * 100) / 100 : null,
     decided_by: decision ? row.decided_by : null,
     decided_at: decision ? row.decided_at : null,
     pattern_type: type,
@@ -136,9 +152,9 @@ export function monthlyPatterns(): PatternView[] {
   return activePatterns().filter((p) => MONTHLY_TYPES.has(p.pattern_type));
 }
 
-/** Subscriptions counted in the monthly subscription total: confirmed, or confident enough. */
+/** Subscriptions counted in the monthly subscription total: confirmed, or confident enough, and not lapsed. */
 export function establishedSubscriptions(): PatternView[] {
-  return monthlyPatterns().filter((p) => p.pattern_type === 'subscription' && p.established);
+  return monthlyPatterns().filter((p) => p.pattern_type === 'subscription' && p.established && !p.lapsed);
 }
 
 // ── "Onko tämä toistuva?" questions ─────────────────────────────────
@@ -152,7 +168,8 @@ export function establishedSubscriptions(): PatternView[] {
 export type QuestionReason = 'low_confidence' | 'fixed_amount_account_payment' | 'fixed_amount_card';
 
 function questionReasons(p: PatternView): QuestionReason[] {
-  if (p.state !== 'unconfirmed' || !MONTHLY_TYPES.has(p.pattern_type) || p.established) return [];
+  // A lapsed pattern is not asked about: its charges stopped.
+  if (p.state !== 'unconfirmed' || !MONTHLY_TYPES.has(p.pattern_type) || p.established || p.lapsed) return [];
   const reasons: QuestionReason[] = ['low_confidence'];
   if (p.amount_fixed) {
     reasons.push(p.payment_method === 'account_payment' ? 'fixed_amount_account_payment' : 'fixed_amount_card');

@@ -262,6 +262,8 @@ export function detectPatterns(accountId: string, asOf: string = today()): void 
   const longHistory = recurringCandidates(entries, daysBefore(asOf, 1460));
   detectAnnualPatternsForAccount(accountId, longHistory);
   detectConfirmationCandidates(accountId, longHistory);
+  // Last: annual detection may have retyped a row.
+  markLapsed(accountId, entries);
 }
 
 /**
@@ -330,8 +332,7 @@ const VOUCHED_CREATED = `(p.origin = 'created' AND COALESCE((
 
 /** Two charges of a created pattern closer than this are not two of its periods. */
 export const MIN_DAYS_APART = { weekly: 5, monthly: 20 } as const;
-const minDaysApart = (intervalDays: number | null) =>
-  (intervalDays ?? 30) <= 7 ? MIN_DAYS_APART.weekly : MIN_DAYS_APART.monthly;
+const minDaysApart = (intervalDays: number | null) => MIN_DAYS_APART[periodOf(intervalDays)];
 
 /** How far a created pattern's charge may be from its expected amount: detection's ±20 %. */
 export const CREATED_AMOUNT_TOLERANCE = 0.2;
@@ -401,13 +402,106 @@ function refreshCreated(accountId: string, entries: LedgerEntry[], now: string):
   }
 }
 
+// ── Periods and lapse ───────────────────────────────────────────────
+
+export type Period = 'weekly' | 'monthly';
+const MONTHLY_TYPES = new Set(['subscription', 'recurring']);
+
+/**
+ * Whether a monthly/weekly pattern is charged weekly or monthly. Detection stores the
+ * average interval (6–8 days weekly, 25–35 monthly), creation 7 or 30.
+ */
+export function periodOf(intervalDays: number | null): Period {
+  return (intervalDays ?? 30) <= 14 ? 'weekly' : 'monthly';
+}
+
+/** Nominal length of a period in days: the shortest that counts for a lapse. */
+const PERIOD_DAYS: Record<Period, number> = { weekly: 7, monthly: 31 };
+/** How late a period's charge may book (weekends, holidays, card processing). */
+const LAPSE_GRACE_DAYS: Record<Period, number> = { weekly: 3, monthly: DUE_DAY_LATE };
+
+/**
+ * Days after its latest charge from which a pattern is lapsed: two periods (the
+ * stored interval, at least the nominal one) plus the grace for a late booking.
+ * Monthly 2 × 31 + 5 = 67, weekly 2 × 7 + 3 = 17.
+ */
+export function lapseDays(intervalDays: number | null): number {
+  const period = periodOf(intervalDays);
+  return 2 * Math.max(intervalDays ?? 0, PERIOD_DAYS[period]) + LAPSE_GRACE_DAYS[period];
+}
+
+/**
+ * Stores whether each monthly/weekly pattern of the account has lapsed (GLOSSARY.md,
+ * "Lapsed pattern"): `lapsed_since` is the day `lapseDays` after the latest charge
+ * from its counterparty, once the account's latest booking (`entries`, oldest first;
+ * not today, so a lagging export lapses nothing) has reached it; otherwise null.
+ * A charge is any countable expense from the counterparty that is not a transfer,
+ * whatever its amount, so a price change never lapses a live pattern. A new charge
+ * clears the lapse on the next detection. Annual patterns never lapse here.
+ */
+function markLapsed(accountId: string, entries: LedgerEntry[]): void {
+  const latestBooking = entries.at(-1)?.date;
+  const lastCharge = new Map<string, string>();
+  for (const e of entries) {
+    if (!e.isTransfer && e.amount < 0 && e.counterparty !== null) lastCharge.set(e.counterparty, e.date);
+  }
+  const rows = db
+    .prepare(
+      `SELECT id, counterparty_name, pattern_type, interval_days, last_seen, lapsed_since
+       FROM recurring_patterns WHERE account_id = ?`
+    )
+    .all(accountId) as Array<{
+    id: string;
+    counterparty_name: string | null;
+    pattern_type: string;
+    interval_days: number | null;
+    last_seen: string;
+    lapsed_since: string | null;
+  }>;
+  const update = db.prepare('UPDATE recurring_patterns SET lapsed_since = ? WHERE id = ?');
+  for (const r of rows) {
+    let lapsedSince: string | null = null;
+    if (MONTHLY_TYPES.has(r.pattern_type) && latestBooking) {
+      const last = (r.counterparty_name !== null && lastCharge.get(r.counterparty_name)) || r.last_seen.slice(0, 10);
+      const since = daysBefore(last, -lapseDays(r.interval_days));
+      if (latestBooking >= since) lapsedSince = since;
+    }
+    if (lapsedSince !== r.lapsed_since) update.run(lapsedSince, r.id);
+  }
+}
+
+/** `markLapsed` for an account as of `asOf` (default: today), outside detection (creating a pattern). */
+export function refreshLapse(accountId: string, asOf: string = today()): void {
+  markLapsed(accountId, ledgerEntries({ accounts: [accountId], to: asOf, includeTransfers: true }));
+}
+
+/**
+ * How many charges of a monthly/weekly pattern fall in calendar month `month` (1–12)
+ * of `year`: a monthly one has one; a weekly one has one on every day of the month
+ * that is a whole number of weeks from its latest charge `lastSeen`, 4 or 5.
+ */
+export function chargesInMonth(intervalDays: number | null, lastSeen: string, year: number, month: number): number {
+  if (periodOf(intervalDays) === 'monthly') return 1;
+  const day = (ms: number) => Math.round(ms / 86400_000);
+  const anchor = day(Date.parse(lastSeen.slice(0, 10)));
+  const first = day(Date.UTC(year, month - 1, 1));
+  const last = day(Date.UTC(year, month, 0));
+  return Math.floor((last - anchor) / 7) - Math.ceil((first - anchor) / 7) + 1;
+}
+
+/** Charges a month on average: 52/12 for a weekly pattern, 1 for a monthly one (the /kk totals). */
+export function chargesPerMonth(intervalDays: number | null): number {
+  return periodOf(intervalDays) === 'weekly' ? 52 / 12 : 1;
+}
+
 /**
  * Version of the detection rules. Bump it when they change, so the stored patterns of
  * every account are re-detected on the next API start instead of the next import.
  * 2: three charges minimum, subscriptions told by their charges (2026-11).
  * 3: confidence, amount_fixed and payment_method scored for every pattern (2026-11).
+ * 4: lapsed_since set for every monthly/weekly pattern (2026-11).
  */
-export const PATTERN_RULES_VERSION = '3';
+export const PATTERN_RULES_VERSION = '4';
 const RULES_VERSION_KEY = 'patternRulesVersion';
 
 /** Re-runs detection for every account, in one transaction, once per rules version. Returns whether it ran. */
