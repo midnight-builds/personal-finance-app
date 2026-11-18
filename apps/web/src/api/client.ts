@@ -105,6 +105,8 @@ export type BalanceAdjustment = {
   date: string;
   amount: number;
   reason: string | null;
+  /** The Ledger uses it: the account has a balance snapshot dated on or after it. */
+  applied: boolean;
 };
 
 // Task 5 new types
@@ -232,6 +234,8 @@ export type BalanceSnapshot = {
   date: string;
   balance: number;
   currency: string;
+  /** `import`: the bank's Saldo; `manual`: set by the user. */
+  source: 'import' | 'manual';
 };
 
 export type RuleSuggestion = {

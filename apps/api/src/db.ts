@@ -308,6 +308,8 @@ export function initDb() {
   safeExec(`ALTER TABLE accounts ADD COLUMN owner_label TEXT`);
   safeExec(`ALTER TABLE accounts ADD COLUMN credit_limit REAL`);
   safeExec(`ALTER TABLE accounts ADD COLUMN savings_goal REAL`);
+  // `import` (the bank's Saldo) or `manual` (the user's first balance for an account without one).
+  safeExec(`ALTER TABLE balance_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'import'`);
 
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN typical_month INTEGER`);
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN user_confirmed INTEGER`);

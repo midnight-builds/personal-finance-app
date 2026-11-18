@@ -136,7 +136,13 @@ Complete only when every account is known; investments are not tracked and
 never included. Transfers between own accounts leave it unchanged.
 
 **Balance adjustment** — a manual correction to an account's balance, e.g. a
-cash withdrawal missing from the export.
+cash withdrawal missing from the export. It corrects a snapshot, so an account
+without any snapshot refuses one (`balance_snapshot_missing`), and one dated
+after the latest snapshot waits for a later snapshot (listed as not `applied`).
+
+**Manual balance** — a balance snapshot the user sets (`source: manual`) for an
+account whose export has no balance, e.g. a credit card (debt is negative). Every
+balance view uses it like an imported one; an import of the same day replaces it.
 
 **Recurring pattern** — a counterparty an account pays again and again,
 detected from its countable expenses in the 180 days up to the account's

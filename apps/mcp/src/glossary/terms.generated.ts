@@ -144,7 +144,13 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   {
     "term": "Balance adjustment",
     "summary": "a manual correction to an account's balance, e.g. a cash withdrawal missing from the export.",
-    "definition": "a manual correction to an account's balance, e.g. a cash withdrawal missing from the export.",
+    "definition": "a manual correction to an account's balance, e.g. a cash withdrawal missing from the export. It corrects a snapshot, so an account without any snapshot refuses one (`balance_snapshot_missing`), and one dated after the latest snapshot waits for a later snapshot (listed as not `applied`).",
+    "avoid": null
+  },
+  {
+    "term": "Manual balance",
+    "summary": "a balance snapshot the user sets (`source: manual`) for an account whose export has no balance, e.g. a credit card (debt is negative).",
+    "definition": "a balance snapshot the user sets (`source: manual`) for an account whose export has no balance, e.g. a credit card (debt is negative). Every balance view uses it like an imported one; an import of the same day replaces it.",
     "avoid": null
   },
   {
