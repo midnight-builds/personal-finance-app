@@ -41,7 +41,9 @@ export default function ExplorerView({ setToast: _setToast }: ExplorerViewProps)
       .catch(() => {});
 
     // Load per-account balance history and build unified date-keyed chart data
-    getAccounts().then(async (accts) => {
+    getAccounts().then(async (all) => {
+      // Manual accounts have no balance snapshots.
+      const accts = all.filter((a) => a.tracking !== 'manual');
       const names = accts.map((a) => a.name);
 
       // Load snapshots for all accounts in parallel; ignore per-account errors

@@ -123,7 +123,7 @@ export function summarizeFile(records: Record<string, unknown>[], filename: stri
   };
 }
 
-/** Every account with the booked range of its rows. */
+/** Every imported account (nothing is imported into a manual one) with the booked range of its rows. */
 export function previewAccounts(): ImportPreviewAccount[] {
   const rows = db
     .prepare(
@@ -134,6 +134,7 @@ export function previewAccounts(): ImportPreviewAccount[] {
        FROM accounts a
        LEFT JOIN normalized_transactions t
          ON t.account_id = a.id AND t.booking_date IS NOT NULL
+       WHERE a.tracking = 'imported'
        GROUP BY a.id
        ORDER BY a.created_at ASC, a.id ASC`
     )

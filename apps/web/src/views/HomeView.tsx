@@ -2,6 +2,8 @@ import { useCallback, useMemo, useState, useEffect } from 'react';
 import { API, formatDate, formatAmount, showToast } from '../utils';
 import { getHouseholdSummary } from '../api/client';
 import type { HouseholdSummary } from '../api/client';
+import type { OwnTransferKind } from '@finance-app/shared';
+import { OWN_TRANSFER_LABELS } from '../accountTypes';
 import CfoStatePanel from '../components/CfoStatePanel';
 import ImportPrompt from '../components/ImportPrompt';
 import ImportDialog from '../components/ImportDialog';
@@ -32,6 +34,7 @@ type Transaction = {
   categoryName?: string | null;
   transfer?: { direction: 'in' | 'out'; otherId: string | null } | null;
   isTransfer?: boolean;
+  ownTransfer?: { accountName: string; kind: OwnTransferKind } | null;
   recurringDaily?: boolean;
   recurringWeekly?: boolean;
   recurringMonthly?: boolean;
@@ -436,6 +439,11 @@ export default function HomeView({
                 {tx.isTransfer && tx.transfer && (
                   <span className={`chip ${tx.transfer.direction === 'out' ? 'chip-out' : 'chip-in'}`}>
                     {tx.transfer.direction === 'out' ? 'Siirto ulos' : 'Siirto sisään'}
+                  </span>
+                )}
+                {tx.ownTransfer && (
+                  <span className="chip chip-out" title={`Manuaalinen tili: ${tx.ownTransfer.accountName}`}>
+                    {OWN_TRANSFER_LABELS[tx.ownTransfer.kind]}: {tx.ownTransfer.accountName}
                   </span>
                 )}
                 {tx.recurringDaily ? (

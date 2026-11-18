@@ -8,6 +8,7 @@ import type {
   ImportPreviewGuess,
 } from '@finance-app/shared';
 import { ImportRequestError, importFile, previewImport } from '../api/client';
+import { ACCOUNT_TYPE_LABELS as SUBTYPE_LABELS, IMPORT_ACCOUNT_TYPES } from '../accountTypes';
 import type { ImportChoice, ImportResult } from '../api/client';
 
 // Import flow: the user picks one or more files; each is previewed in turn
@@ -15,11 +16,6 @@ import type { ImportChoice, ImportResult } from '../api/client';
 // account, and only then is it imported. The next file's preview is fetched
 // after the previous import, so its overlap numbers include that file.
 
-const SUBTYPE_LABELS: Record<AccountSubtype, string> = {
-  checking: 'Käyttötili',
-  savings: 'Säästötili',
-  credit_card: 'Luottokortti',
-};
 
 const eur = new Intl.NumberFormat('fi-FI', { style: 'currency', currency: 'EUR' });
 
@@ -295,7 +291,7 @@ function ImportFileStep({ file, onBusyChange, onDone }: StepProps) {
             <label>
               Tyyppi
               <select value={newSubtype} onChange={(e) => setNewSubtype(e.target.value as AccountSubtype)} disabled={importing}>
-                {(Object.keys(SUBTYPE_LABELS) as AccountSubtype[]).map((s) => (
+                {IMPORT_ACCOUNT_TYPES.map((s) => (
                   <option key={s} value={s}>
                     {SUBTYPE_LABELS[s]}
                   </option>
