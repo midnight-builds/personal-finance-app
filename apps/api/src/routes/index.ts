@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { httpErrorHandler } from '../http/errors.js';
 import { balanceHistoryRoutes } from './balanceHistory.js';
+import { balanceRoutes } from './balances.js';
 import { categoryRoutes } from './categories.js';
 import { categorizationRoutes } from './categorization.js';
 import { featureProposalRoutes } from './featureProposals.js';
@@ -20,6 +21,7 @@ export const routes: FastifyPluginAsync = async (app) => {
   await app.register(featureProposalRoutes);
   await app.register(importRoutes);
   await app.register(balanceHistoryRoutes);
+  await app.register(balanceRoutes);
   await app.register(categoryRoutes);
   await app.register(categorizationRoutes);
   await app.register(patternRoutes);

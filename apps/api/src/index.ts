@@ -15,8 +15,6 @@ import { listRaw } from './raw.js';
 import { getSettings, updateSettings } from './settings.js';
 import { listLog } from './logger.js';
 import { listAccounts, updateAccount } from './accounts.js';
-import { listBalanceAdjustments, createBalanceAdjustment, deleteBalanceAdjustment } from './balanceAdjustments.js';
-import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
 import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
 import { redetectPatternsIfRulesChanged } from './patterns.js';
 import { relinkTransfersIfRulesChanged } from './importer.js';
@@ -93,25 +91,6 @@ server.post('/settings', async (request, reply) => {
 
 server.get('/log', async () => listLog(200));
 
-// Balance adjustments (saldo-oikaisut)
-server.get("/balance-adjustments", async () => listBalanceAdjustments());
-server.post("/balance-adjustments", async (request, reply) => {
-  const body = request.body as any;
-  const { accountId, date, amount, reason } = body ?? {};
-  if (!accountId || typeof accountId !== "string") return reply.code(400).send({ error: "account_missing" });
-  if (!date || typeof date !== "string") return reply.code(400).send({ error: "date_missing" });
-  const amountNum = Number(amount);
-  if (!Number.isFinite(amountNum)) return reply.code(400).send({ error: "amount_invalid" });
-  const created = createBalanceAdjustment({ accountId, date, amount: amountNum, reason: reason ?? null });
-  return reply.send(created);
-});
-server.delete("/balance-adjustments/:id", async (request, reply) => {
-  const id = (request.params as any)?.id as string;
-  if (!id) return reply.code(400).send({ error: "id_missing" });
-  const ok = deleteBalanceAdjustment(id);
-  if (!ok) return reply.code(404).send({ error: "not_found" });
-  return reply.send({ ok: true });
-});
 server.post('/debug/clear', async () => {
   db.exec('PRAGMA foreign_keys=OFF;');
   db.exec(`
@@ -278,10 +257,6 @@ server.post<{ Params: { findingId: string } }>('/briefing/:findingId/dismiss', a
     .run(now, findingId) as { changes: number };
   if (result.changes === 0) return reply.code(404).send({ error: 'not_found' });
   return { ok: true };
-});
-
-server.get<{ Params: { accountId: string } }>('/balance-snapshots/:accountId', async (request) => {
-  return getBalanceSnapshotsForAccount(request.params.accountId);
 });
 
 server.get('/pattern-confirmations', async () => listPendingConfirmations());

@@ -27,7 +27,7 @@ type Account = {
   owner_label: string | null;
   credit_limit: number | null;
   savings_goal: number | null;
-  balance: number;
+  balance: number | null;
   currency: string;
   balance_date: string | null;
 };
@@ -108,25 +108,48 @@ export default function SettingsView({
     await loadLocalData();
   };
 
+  const adjAccount = accounts.find((a) => a.id === adjAccountId);
+  // An account without any balance gets its first one; an adjustment only corrects an existing balance.
+  const settingFirstBalance = adjAccount != null && adjAccount.balance == null;
+  // Adjustments saved before the account had a balance start counting once it has one.
+  const waitingAdjustments = balanceAdjustments.filter((ba) => ba.account_id === adjAccountId && !ba.applied);
+
+  const balanceErrorText: Record<string, string> = {
+    balance_snapshot_missing: 'Tilillä ei ole saldoa – aseta ensin sen saldo',
+    snapshot_exists: 'Tälle päivälle on jo saldo – korjaa se saldo-oikaisulla',
+    date_in_future: 'Päivä ei voi olla tulevaisuudessa',
+  };
+
   const createBalanceAdjustmentApi = async () => {
     const amountNum = Number(adjAmount);
     if (!adjAccountId) { showToast(setToast, 'Valitse tili'); return; }
     if (!adjDate) { showToast(setToast, 'Päivä puuttuu'); return; }
-    if (!Number.isFinite(amountNum)) { showToast(setToast, 'Summa ei ole numero'); return; }
-    const res = await fetch(`${API}/balance-adjustments`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        accountId: adjAccountId,
-        date: adjDate,
-        amount: amountNum,
-        reason: adjReason?.trim() ? adjReason.trim() : null,
-      }),
-    });
-    if (!res.ok) { showToast(setToast, 'Saldo-oikaisun lisäys epäonnistui', 4000); return; }
+    if (adjAmount.trim() === '' || !Number.isFinite(amountNum)) { showToast(setToast, 'Summa ei ole numero'); return; }
+    const res = settingFirstBalance
+      ? await fetch(`${API}/balance-snapshots`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountId: adjAccountId, date: adjDate, balance: amountNum }),
+        })
+      : await fetch(`${API}/balance-adjustments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            accountId: adjAccountId,
+            date: adjDate,
+            amount: amountNum,
+            reason: adjReason?.trim() ? adjReason.trim() : null,
+          }),
+        });
+    if (!res.ok) {
+      const code = ((await res.json().catch(() => null)) as { error?: string } | null)?.error;
+      const fallback = settingFirstBalance ? 'Saldon asetus epäonnistui' : 'Saldo-oikaisun lisäys epäonnistui';
+      showToast(setToast, (code && balanceErrorText[code]) || fallback, 4000);
+      return;
+    }
     setAdjAmount('');
     setAdjReason('');
-    showToast(setToast, 'Saldo-oikaisu lisätty');
+    showToast(setToast, settingFirstBalance ? 'Saldo asetettu' : 'Saldo-oikaisu lisätty');
     const [ba, ac] = await Promise.all([
       getBalanceAdjustments().catch(() => null),
       getAccounts().catch(() => null),
@@ -452,7 +475,18 @@ export default function SettingsView({
                 <h3>Saldo-oikaisut</h3>
               </div>
             </div>
+            <p className="muted">
+              {settingFirstBalance
+                ? 'Tilillä ei ole pankin ilmoittamaa saldoa, joten oikaistavaa ei ole. Aseta tilin saldo valittuna päivänä (luottokortin velka miinusmerkkisenä). Etusivu ja nettovarallisuus käyttävät sitä siitä päivästä alkaen. Saldohistoria pitää sitä tunnettuna vain siihen asti, kunnes tilille tuodaan sitä myöhempiä tapahtumia – aseta silloin uusi saldo.'
+                : 'Saldo-oikaisu korjaa pankin ilmoittamaa saldoa summalla, ja se otetaan huomioon oikaisupäivänä ja sen jälkeen päivätyissä saldoissa. Tilille, jolla ei vielä ole saldoa, asetetaan ensin saldo.'}
+            </p>
 
+            {settingFirstBalance && waitingAdjustments.length > 0 && (
+              <p className="neg">
+                Tilillä on {waitingAdjustments.length} käyttämätöntä saldo-oikaisua. Asetettu saldo saa ne käyttöön, jos ne on
+                päivätty saldon päivänä tai aiemmin, ja ne lisätään saldoon. Jos asettamasi saldo jo sisältää ne, poista ne alta.
+              </p>
+            )}
             <div className="settings-grid">
               <label>
                 Tili
@@ -470,16 +504,20 @@ export default function SettingsView({
                 <input type="date" value={adjDate} onChange={(e) => setAdjDate(e.target.value)} />
               </label>
               <label>
-                Summa ({accounts.find((a) => a.id === adjAccountId)?.currency ?? 'EUR'})
+                {settingFirstBalance ? 'Saldo' : 'Summa'} ({adjAccount?.currency ?? 'EUR'})
                 <input type="number" step="0.01" value={adjAmount} onChange={(e) => setAdjAmount(e.target.value)} />
               </label>
-              <label>
-                Syy (optional)
-                <input type="text" value={adjReason} onChange={(e) => setAdjReason(e.target.value)} />
-              </label>
+              {!settingFirstBalance && (
+                <label>
+                  Syy (optional)
+                  <input type="text" value={adjReason} onChange={(e) => setAdjReason(e.target.value)} />
+                </label>
+              )}
             </div>
             <div className="settings-actions">
-              <button type="button" onClick={createBalanceAdjustmentApi}>Lisää saldo-oikaisu</button>
+              <button type="button" onClick={createBalanceAdjustmentApi}>
+                {settingFirstBalance ? 'Aseta saldo' : 'Lisää saldo-oikaisu'}
+              </button>
             </div>
 
             <div className="table mini">
@@ -504,7 +542,14 @@ export default function SettingsView({
                     <span>{formatDate(ba.date)}</span>
                     <span>{acc?.name ?? ba.account_id}</span>
                     <span className={ba.amount < 0 ? 'neg' : 'pos'}>{formatAmount(ba.amount, cur)}</span>
-                    <span>{ba.reason ?? '–'}</span>
+                    <span>
+                      {ba.reason ?? '–'}
+                      {!ba.applied && (
+                        <span className="muted">
+                          {' '}· Ei käytössä: tilillä ei ole saldoa tältä päivältä tai myöhemmin
+                        </span>
+                      )}
+                    </span>
                     <span className="actions-row">
                       <button className="ghost mini" type="button" onClick={() => deleteBalanceAdjustmentApi(ba.id)}>
                         Poista

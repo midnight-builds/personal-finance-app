@@ -14,6 +14,7 @@ test("balance adjustments sum applies up to date", () => {
 
   const accountId = "acc-1";
   db.prepare("INSERT OR REPLACE INTO accounts (id, created_at, name, iban, type) VALUES (?, ?, ?, ?, ?)").run(accountId, new Date().toISOString(), "Test account", null, "checking");
+  db.prepare("INSERT OR REPLACE INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES (?, ?, ?, ?, ?, ?)").run("snap-1", new Date().toISOString(), accountId, "2025-12-01", 0, "EUR");
   createBalanceAdjustment({ accountId, date: "2026-01-01", amount: 10, reason: "fix" });
   createBalanceAdjustment({ accountId, date: "2026-02-01", amount: -3, reason: "fix2" });
 
