@@ -16,12 +16,42 @@ over the REST API and never opens the database.
 | `plan_categorization` | Works out a categorization change without writing (`POST /categorization/plan`) |
 | `apply_categorization` | Applies a planned change with its plan token (`POST /categorization/apply`) |
 | `list_category_changes`, `get_category_change` | Change log of categorization: who changed what, and undo state (`GET /categorization/change-sets[/:id]`) |
+| `list_recurring_questions` | Open "is this recurring?" questions with evidence (`GET /patterns/questions`) |
+| `answer_recurring_question` | Records a pattern decision: recurring, subscription or not_recurring (`POST /patterns/:id/decision`) |
+| `list_pattern_decisions` | Decision history of recurring patterns with actor (`GET /patterns/decisions`) |
+| `get_glossary` | The app's terms with short definitions, generated from `GLOSSARY.md` |
 | `list_feature_proposals` | Earlier proposals and bug reports with their status, notes, resolution and history; `changedSince` (largest `changedAt` seen) returns only what changed, so polling is cheap |
 | `propose_feature` | Adds a feature proposal or bug report (`kind`) to the local review queue |
 
-Two tools write: `propose_feature` adds to the review queue, and
-`apply_categorization` changes categorization. Every other tool is read-only, and
-no tool deletes anything.
+Three tools write: `propose_feature` adds to the review queue,
+`apply_categorization` changes categorization, and `answer_recurring_question`
+appends a pattern decision. Every other tool is read-only, and no tool deletes
+anything.
+
+### Recurring patterns
+
+The agent answers "Onko tämä toistuva?" questions as the user does in the
+briefing (GLOSSARY.md, "Recurring question", "Pattern decision"), without asking
+the user to confirm, like category management. Only uncertain patterns are asked;
+an established one needs no confirmation, but the agent can still decide any
+active monthly or weekly pattern by its id from `list_recurring`, e.g. reject a
+confident one that is really savings. An answer is appended to
+`pattern_decisions` with the agent as actor, the latest decision counts, and a
+later one replaces it, whoever made either: the agent is as trusted as the user
+in the web UI (ADR 0001), so it may replace the user's decision or take any
+decision back with `reset`. `list_pattern_decisions` keeps every decision with
+its actor, so nothing is lost. A decision changes only how the pattern counts: its type,
+whether it is a fixed cost in the forecast and in the subscription total, and
+whether it is asked about again. Transactions, categories, balances and the
+detected pattern itself are never touched. To keep the agent read-only here, hide
+`answer_recurring_question` with `MCP_DISABLED_TOOLS`.
+
+`get_glossary` is a tool rather than an MCP resource: resources are read by the
+client application, and an agent such as Hermes reliably reaches only tools. Its
+term list is generated into `apps/mcp/src/glossary/terms.generated.ts`
+(`npm run glossary --workspace apps/mcp`) because the server runs from its build
+and reads no repo files; `apps/mcp/tests/glossary.test.ts` fails when it and
+`GLOSSARY.md` drift apart.
 
 ### Category management
 
@@ -48,7 +78,8 @@ no separate undo tool, so an undo is also planned and reviewable first.
 ### Responses
 
 Tools backed by imported bank data (all except `list_categories`, the category
-management tools and the proposal tools) return a second content block `{ "meta": { generatedAt, lastImportAt, dataAsOf } }`
+management tools, `answer_recurring_question`, `list_pattern_decisions`,
+`get_glossary` and the proposal tools) return a second content block `{ "meta": { generatedAt, lastImportAt, dataAsOf } }`
 from `GET /data-status`; `get_forecast` adds `forecastStartMonth`. The first block
 is the API response unchanged. If the status lookup fails, the timestamps are `null`
 and the tool still succeeds. Category management tools return the API response
@@ -120,7 +151,7 @@ an invalid value stops the server with a message.
 | `FINANCE_API_URL` | `http://127.0.0.1:3001` | Finance API base URL |
 | `MCP_TRANSPORT` | `stdio` | `stdio` (agent spawns the process) or `http` |
 | `MCP_DISABLED_TOOLS` | — | Comma-separated tool names to hide, e.g. `propose_feature`. Unknown names are an error |
-| `MCP_PROPOSAL_SOURCE` | `hermes` | Stored as a proposal's `source` |
+| `MCP_PROPOSAL_SOURCE` | `mcp` | Stored as a proposal's `source` |
 | `MCP_ACTOR` | `MCP_PROPOSAL_SOURCE` | Sent as `X-Finance-Actor`; recorded as the actor of every change. `a-z`, `0-9`, `_`, `-`, 1–40 characters (startup fails otherwise, also when the default from `MCP_PROPOSAL_SOURCE` does not fit) |
 | `MCP_HOST` / `MCP_PORT` | `127.0.0.1` / `3030` | http: listen address |
 | `MCP_TOKEN_FILE` / `MCP_TOKEN` | — | http: bearer token, ≥ 32 chars. Prefer the file |

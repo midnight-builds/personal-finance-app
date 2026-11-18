@@ -42,8 +42,9 @@ const validProposal = {
 };
 
 // The tools that may write, each acknowledged here on purpose (docs/MCP.md):
-// a feature proposal, and a planned categorization change set.
-const WRITING_TOOLS = ['propose_feature', 'apply_categorization'];
+// a feature proposal, a planned categorization change set, and a decision on a
+// recurring pattern.
+const WRITING_TOOLS = ['propose_feature', 'apply_categorization', 'answer_recurring_question'];
 
 test('registry: unique names, and only the acknowledged tools may write', () => {
   assert.equal(new Set(TOOL_NAMES).size, TOOL_NAMES.length);

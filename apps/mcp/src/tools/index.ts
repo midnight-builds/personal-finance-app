@@ -4,13 +4,19 @@ import { redactDeep } from '@finance-app/shared';
 import { ApiError } from '../apiClient.js';
 import { categorizationTools } from './categorization.js';
 import { financeTools } from './finance.js';
+import { patternTools } from './patterns.js';
 import { proposalTools } from './proposals.js';
 import type { ToolContext, ToolDefinition } from './types.js';
 
 // Tool registry. To add a tool: define it in a module next to this one and
 // list that module here. Every response passes through `redactDeep`.
 
-export const ALL_TOOLS: readonly ToolDefinition[] = [...financeTools, ...categorizationTools, ...proposalTools];
+export const ALL_TOOLS: readonly ToolDefinition[] = [
+  ...financeTools,
+  ...categorizationTools,
+  ...patternTools,
+  ...proposalTools,
+];
 export const TOOL_NAMES: readonly string[] = ALL_TOOLS.map((t) => t.name);
 
 /** Returns the enabled tools; throws on unknown names so config typos fail loudly at startup. */

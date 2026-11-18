@@ -1,5 +1,6 @@
 import { db } from "./db.js";
 import { accountBalances, daysBefore, ledgerEntries, today, type LedgerScope } from "./ledger.js";
+import { establishedSubscriptions } from "./patternDecisions.js";
 
 export type AccountSignal = {
   id: string;
@@ -167,15 +168,8 @@ export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
       return sum + Math.abs(rawBalance < 0 ? rawBalance : 0);
     }, 0));
 
-  // Monthly subscriptions: sum typical_amount from active subscription patterns
-  const subRow = db
-    .prepare(
-      `SELECT COALESCE(SUM(typical_amount), 0) AS total
-       FROM recurring_patterns
-       WHERE pattern_type = 'subscription' AND is_active = 1`
-    )
-    .get() as { total: number };
-  const monthlySubscriptions = Number(subRow.total || 0);
+  // Monthly subscriptions: confirmed or confident enough (patternDecisions.ts)
+  const monthlySubscriptions = cents(establishedSubscriptions().reduce((sum, p) => sum + (p.typical_amount ?? 0), 0));
 
   // Monthly net spend (last 30 days, excluding transfers)
   const monthlyNet = net({ from: daysBefore(asOf, 30), to: asOf });

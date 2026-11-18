@@ -6,3 +6,4 @@ export * from './importPreview.js';
 export * from './balanceHistory.js';
 export * from './categorization.js';
 export * from './actor.js';
+export * from './patterns.js';

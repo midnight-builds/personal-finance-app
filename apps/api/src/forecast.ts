@@ -1,15 +1,33 @@
 import { db } from './db.js';
 import { ledgerTotals, today, type LedgerTotal } from './ledger.js';
+import { monthlyPatterns } from './patternDecisions.js';
+import type { PatternState } from '@finance-app/shared';
 
-export type ForecastItem = { counterparty: string; amount: number };
+export type ForecastItem = {
+  counterparty: string;
+  amount: number;
+  patternId?: string;
+  /** subscription or recurring, with the user's decision applied. */
+  type?: string;
+  state?: PatternState;
+  confidence?: number | null;
+};
 export type AnnualForecastItem = { counterparty: string; amount: number; month: number };
 
 export type MonthlyForecast = {
   targetMonth: string;
+  /** Established monthly/weekly patterns: confirmed, or confidence ≥ CONFIDENT. */
   knownFixed: ForecastItem[];
   historicalAvg: number;
   annualItems: AnnualForecastItem[];
+  /** max(historicalAvg, knownFixedTotal) + annual items: uncertain patterns do not raise it. */
   projectedTotal: number;
+  knownFixedTotal: number;
+  /** Unconfirmed patterns below CONFIDENT: maybe fixed costs, kept apart until confirmed or proven. */
+  uncertainRecurring: ForecastItem[];
+  uncertainRecurringTotal: number;
+  /** projectedTotal if every uncertain pattern were a fixed cost too. */
+  projectedTotalWithUncertain: number;
 };
 
 /** Spending per month (key YYYY-MM) for every month before `year`. */
@@ -29,16 +47,18 @@ export function computeMonthlyForecast(
   const targetYear = targetDate.getUTCFullYear();
   const targetMonthStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
 
-  const monthlyPatterns = db.prepare(`
-    SELECT counterparty_name, typical_amount FROM recurring_patterns
-    WHERE pattern_type IN ('subscription', 'recurring') AND is_active = 1
-    ORDER BY typical_amount DESC
-  `).all() as Array<{ counterparty_name: string; typical_amount: number }>;
-
-  const knownFixed: ForecastItem[] = monthlyPatterns.map((p) => ({
-    counterparty: p.counterparty_name,
-    amount: p.typical_amount,
-  }));
+  // Rejected patterns are left out; the user said they are not recurring.
+  const item = (p: ReturnType<typeof monthlyPatterns>[number]): ForecastItem => ({
+    counterparty: p.counterparty_name!,
+    amount: p.typical_amount ?? 0,
+    patternId: p.id,
+    type: p.pattern_type,
+    state: p.state,
+    confidence: p.confidence,
+  });
+  const patterns = monthlyPatterns();
+  const knownFixed = patterns.filter((p) => p.established).map(item);
+  const uncertainRecurring = patterns.filter((p) => !p.established).map(item);
 
   const annualPatterns = db.prepare(`
     SELECT counterparty_name, typical_amount, typical_month FROM recurring_patterns
@@ -66,12 +86,24 @@ export function computeMonthlyForecast(
       ? historicalRows.reduce((s, r) => s + r.total, 0) / historicalRows.length
       : 0;
 
-  const knownFixedTotal = knownFixed.reduce((s, i) => s + i.amount, 0);
+  const sum = (items: ForecastItem[]) => Math.round(items.reduce((s, i) => s + i.amount * 100, 0)) / 100;
+  const knownFixedTotal = sum(knownFixed);
+  const uncertainRecurringTotal = sum(uncertainRecurring);
   const annualTotal = annualItems.reduce((s, i) => s + i.amount, 0);
-  const variableBase = Math.max(historicalAvg, knownFixedTotal);
-  const projectedTotal = variableBase + annualTotal;
+  const projectedTotal = Math.max(historicalAvg, knownFixedTotal) + annualTotal;
+  const projectedTotalWithUncertain = Math.max(historicalAvg, knownFixedTotal + uncertainRecurringTotal) + annualTotal;
 
-  return { targetMonth: targetMonthStr, knownFixed, historicalAvg, annualItems, projectedTotal };
+  return {
+    targetMonth: targetMonthStr,
+    knownFixed,
+    historicalAvg,
+    annualItems,
+    projectedTotal,
+    knownFixedTotal,
+    uncertainRecurring,
+    uncertainRecurringTotal,
+    projectedTotalWithUncertain,
+  };
 }
 
 export function getForecast(asOf: string = today()): MonthlyForecast[] {

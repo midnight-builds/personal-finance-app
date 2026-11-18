@@ -5,6 +5,7 @@ import { categoryRoutes } from './categories.js';
 import { categorizationRoutes } from './categorization.js';
 import { featureProposalRoutes } from './featureProposals.js';
 import { importRoutes } from './imports.js';
+import { patternRoutes } from './patterns.js';
 import { transactionSearchRoutes } from './transactionSearch.js';
 
 /**
@@ -21,4 +22,5 @@ export const routes: FastifyPluginAsync = async (app) => {
   await app.register(balanceHistoryRoutes);
   await app.register(categoryRoutes);
   await app.register(categorizationRoutes);
+  await app.register(patternRoutes);
 };

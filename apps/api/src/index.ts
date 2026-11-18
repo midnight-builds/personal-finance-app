@@ -20,6 +20,8 @@ import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
 import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
 import { getForecast } from './forecast.js';
 import { redetectPatternsIfRulesChanged } from './patterns.js';
+import { activePatterns, establishedSubscriptions } from './patternDecisions.js';
+import { withoutAnsweredQuestions } from './briefing.js';
 import { routes } from './routes/index.js';
 
 initDb();
@@ -120,6 +122,7 @@ server.post('/debug/clear', async () => {
     DELETE FROM raw_transactions;
     DELETE FROM insight_findings;
     DELETE FROM briefing_sessions;
+    DELETE FROM pattern_decisions;
     DELETE FROM recurring_patterns;
     DELETE FROM pattern_confirmations;
     DELETE FROM import_sessions;
@@ -143,6 +146,7 @@ server.post('/debug/clear-imports', async () => {
     DELETE FROM raw_transactions;
     DELETE FROM insight_findings;
     DELETE FROM briefing_sessions;
+    DELETE FROM pattern_decisions;
     DELETE FROM recurring_patterns;
     DELETE FROM pattern_confirmations;
     DELETE FROM import_sessions;
@@ -194,7 +198,7 @@ server.get('/briefing/latest', async (_request, reply) => {
     .get() as any;
   if (!session) return reply.code(404).send({ error: 'not_found' });
 
-  const findings = db
+  const stored = db
     .prepare(
       `SELECT id, finding_type, title, description, severity, impact_eur, transaction_ids, metadata, created_at
        FROM insight_findings
@@ -204,6 +208,7 @@ server.get('/briefing/latest', async (_request, reply) => {
          impact_eur DESC`
     )
     .all(session.id) as any[];
+  const findings = withoutAnsweredQuestions(stored);
 
   return {
     id: session.id,
@@ -272,21 +277,13 @@ server.post<{ Params: { findingId: string } }>('/briefing/:findingId/dismiss', a
 });
 
 // Subscriptions and recurring patterns
-server.get('/subscriptions', async () => {
-  return db
-    .prepare(
-      `SELECT * FROM recurring_patterns WHERE pattern_type = 'subscription' AND is_active = 1 ORDER BY typical_amount DESC`
-    )
-    .all();
-});
+// Decisions applied (patternDecisions.ts): subscriptions counted in the monthly total,
+// and every active pattern the user has not rejected.
+server.get('/subscriptions', async () => establishedSubscriptions());
 
-server.get('/recurring', async () => {
-  return db
-    .prepare(
-      `SELECT * FROM recurring_patterns WHERE is_active = 1 ORDER BY last_seen DESC`
-    )
-    .all();
-});
+server.get('/recurring', async () =>
+  activePatterns().sort((a, b) => b.last_seen.localeCompare(a.last_seen))
+);
 
 server.get<{ Params: { accountId: string } }>('/balance-snapshots/:accountId', async (request) => {
   return getBalanceSnapshotsForAccount(request.params.accountId);

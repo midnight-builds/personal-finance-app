@@ -45,7 +45,10 @@ export const UNDOABLE_WRITE: ToolAnnotations = {
   openWorldHint: false,
 };
 
-/** Adds a record to a review queue; never changes or deletes existing data. */
+/**
+ * Adds a record to a review queue or a decision history (a newer record supersedes an
+ * older one, which is kept); never changes or deletes existing data.
+ */
 export const APPEND_ONLY: ToolAnnotations = {
   readOnlyHint: false,
   destructiveHint: false,

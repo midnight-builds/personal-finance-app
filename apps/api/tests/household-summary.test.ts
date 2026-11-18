@@ -35,15 +35,16 @@ function mkImportSession(daysAgo = 0) {
   return id;
 }
 
-function mkSubscriptionPattern(accountId: string, amount: number, isActive = 1) {
+// Confidence above CONFIDENT: counted in the total without confirmation.
+function mkSubscriptionPattern(accountId: string, amount: number, isActive = 1, confidence = 0.9) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const date = new Date().toISOString().slice(0, 10);
   db.prepare(
     `INSERT INTO recurring_patterns
-      (id, created_at, updated_at, account_id, counterparty_name, pattern_type, interval_days, typical_amount, currency, first_seen, last_seen, occurrence_count, is_active)
-      VALUES (?, ?, ?, ?, ?, 'subscription', 30, ?, 'EUR', ?, ?, 3, ?)`
-  ).run(id, now, now, accountId, 'Service', amount, date, date, isActive);
+      (id, created_at, updated_at, account_id, counterparty_name, pattern_type, interval_days, typical_amount, currency, first_seen, last_seen, occurrence_count, is_active, confidence)
+      VALUES (?, ?, ?, ?, ?, 'subscription', 30, ?, 'EUR', ?, ?, 3, ?, ?)`
+  ).run(id, now, now, accountId, 'Service', amount, date, date, isActive, confidence);
   return id;
 }
 

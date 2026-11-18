@@ -22,16 +22,17 @@ function mkSession() {
   return id;
 }
 
-function mkPattern(accountId: string, counterparty: string, type: string, amount: number, typicalMonth: number | null = null) {
+// Monthly patterns get a confidence above CONFIDENT: established fixed costs.
+function mkPattern(accountId: string, counterparty: string, type: string, amount: number, typicalMonth: number | null = null, confidence = 0.9) {
   const now = new Date().toISOString();
   const today = new Date().toISOString().slice(0, 10);
   db.prepare(`INSERT INTO recurring_patterns
     (id, created_at, updated_at, account_id, counterparty_name, pattern_type, interval_days,
-     typical_amount, currency, first_seen, last_seen, occurrence_count, is_active, typical_month)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EUR', ?, ?, 2, 1, ?)`)
+     typical_amount, currency, first_seen, last_seen, occurrence_count, is_active, typical_month, confidence)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EUR', ?, ?, 2, 1, ?, ?)`)
     .run(
       crypto.randomUUID(), now, now, accountId, counterparty, type,
-      type === 'annual' ? 365 : 30, amount, today, today, typicalMonth
+      type === 'annual' ? 365 : 30, amount, today, today, typicalMonth, type === 'annual' ? null : confidence
     );
 }
 
@@ -68,6 +69,20 @@ test('forecast includes active monthly subscriptions in knownFixed', () => {
   assert.ok(forecast.knownFixed.length >= 2, 'should have at least 2 fixed items');
   const total = forecast.knownFixed.reduce((s: number, i: any) => s + i.amount, 0);
   assert.ok(total >= 25, `knownFixed total ${total} should be >= 25`);
+});
+
+test('forecast lists an uncertain pattern apart and leaves it out of the fixed floor', () => {
+  const acct = mkAccount();
+  mkPattern(acct, 'Suoratoisto Kuvavirta', 'subscription', 15.99);
+  mkPattern(acct, 'Lounasbaari Haarukka', 'recurring', 40, null, 0.5);
+
+  const forecast = computeMonthlyForecast(1, '2026-06-15', []);
+  assert.deepEqual(forecast.knownFixed.map((i) => i.counterparty), ['Suoratoisto Kuvavirta']);
+  assert.deepEqual(forecast.uncertainRecurring.map((i) => i.counterparty), ['Lounasbaari Haarukka']);
+  assert.equal(forecast.knownFixedTotal, 15.99);
+  assert.equal(forecast.uncertainRecurringTotal, 40);
+  assert.equal(forecast.projectedTotal, 15.99);
+  assert.equal(forecast.projectedTotalWithUncertain, 55.99);
 });
 
 test('forecast includes annual items for matching target month only', () => {

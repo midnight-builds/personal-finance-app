@@ -83,8 +83,8 @@ export const categorizationTools: ToolDefinition[] = [
     name: 'list_category_changes',
     title: 'Category change log',
     description:
-      'Applied categorization change sets, newest first, from every actor: user = the web UI, hermes (or another ' +
-      'name) = an agent, system = before actors were recorded. Each item: id, createdAt, actor, kind, reason, ' +
+      'Applied categorization change sets, newest first, from every actor: user = the web UI, any other ' +
+      'name = an agent (its server\'s MCP_ACTOR), system = before actors were recorded. Each item: id, createdAt, actor, kind, reason, ' +
       'status (applied or undone), undoOfId (set when the item is itself an undo), undoneById, and summary counts. ' +
       'Returns { total, limit, offset, items }; page with limit/offset. Details with get_category_change; revert ' +
       'with an undo op through plan_categorization and apply_categorization.',
