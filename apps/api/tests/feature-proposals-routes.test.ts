@@ -40,3 +40,19 @@ test('GET /feature-proposals rejects a changedSince that is not a timestamp', as
   const res = await app.inject({ url: '/feature-proposals?changedSince=yesterday' });
   assert.equal(res.statusCode, 400);
 });
+
+test('POST /feature-proposals/:id/amend corrects a final proposal', async () => {
+  const p = createFeatureProposal(valid).proposal;
+  await app.inject({ method: 'POST', url: `/feature-proposals/${p.id}/done`, payload: { resolution: 'x' } });
+  const res = await app.inject({
+    method: 'POST',
+    url: `/feature-proposals/${p.id}/amend`,
+    payload: { resolution: 'https://example.test/pull/2' },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().resolution, 'https://example.test/pull/2');
+
+  const open = createFeatureProposal({ ...valid, title: 'Still open' }).proposal;
+  const conflict = await app.inject({ method: 'POST', url: `/feature-proposals/${open.id}/amend`, payload: { note: 'n' } });
+  assert.equal(conflict.statusCode, 409);
+});

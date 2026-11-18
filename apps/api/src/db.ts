@@ -303,6 +303,8 @@ export function initDb() {
   }
 
   safeExec(`ALTER TABLE accounts ADD COLUMN account_subtype TEXT NOT NULL DEFAULT 'checking'`);
+  safeExec(`ALTER TABLE feature_proposals ADD COLUMN amended_at TEXT`);
+  safeExec(`ALTER TABLE feature_proposal_events ADD COLUMN amended INTEGER NOT NULL DEFAULT 0`);
   safeExec(`ALTER TABLE accounts ADD COLUMN owner_label TEXT`);
   safeExec(`ALTER TABLE accounts ADD COLUMN credit_limit REAL`);
   safeExec(`ALTER TABLE accounts ADD COLUMN savings_goal REAL`);

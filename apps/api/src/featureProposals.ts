@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import {
   FEATURE_PROPOSAL_TRANSITIONS,
   OPEN_FEATURE_PROPOSAL_STATUSES,
+  featureProposalAmendSchema,
   featureProposalInputSchema,
   featureProposalUpdateSchema,
   type CreateFeatureProposalResponse,
@@ -33,6 +34,7 @@ type Row = {
   status: FeatureProposalStatus;
   updated_at: string | null;
   resolved_at: string | null;
+  amended_at: string | null;
   decision_note: string | null;
   resolution: string | null;
 };
@@ -53,7 +55,10 @@ function toProposal(row: Row, history: FeatureProposalEvent[]): FeatureProposal 
     resolvedAt: row.resolved_at,
     decisionNote: row.decision_note,
     resolution: row.resolution,
-    changedAt: [row.created_at, row.updated_at ?? '', row.resolved_at ?? ''].reduce((a, b) => (b > a ? b : a)),
+    amendedAt: row.amended_at,
+    changedAt: [row.created_at, row.updated_at ?? '', row.resolved_at ?? '', row.amended_at ?? ''].reduce((a, b) =>
+      b > a ? b : a
+    ),
     history,
   };
 }
@@ -63,11 +68,11 @@ function historyOf(ids: string[]): Map<string, FeatureProposalEvent[]> {
   if (ids.length === 0) return byId;
   const rows = db
     .prepare(
-      `SELECT proposal_id, at, status, note, resolution FROM feature_proposal_events
+      `SELECT proposal_id, at, status, note, resolution, amended FROM feature_proposal_events
        WHERE proposal_id IN (${ids.map(() => '?').join(',')}) ORDER BY id`
     )
-    .all(...ids) as Array<FeatureProposalEvent & { proposal_id: string }>;
-  for (const { proposal_id, ...event } of rows) byId.get(proposal_id)?.push(event);
+    .all(...ids) as Array<Omit<FeatureProposalEvent, 'amended'> & { proposal_id: string; amended: number }>;
+  for (const { proposal_id, amended, ...event } of rows) byId.get(proposal_id)?.push({ ...event, amended: amended === 1 });
   return byId;
 }
 
@@ -129,7 +134,8 @@ export function createFeatureProposal(input: unknown): CreateFeatureProposalResp
 }
 
 /** All timestamps are ISO strings from `toISOString()`, so text order is time order. */
-const CHANGED_AT_SQL = "MAX(created_at, COALESCE(updated_at, ''), COALESCE(resolved_at, ''))";
+const CHANGED_AT_SQL =
+  "MAX(created_at, COALESCE(updated_at, ''), COALESCE(resolved_at, ''), COALESCE(amended_at, ''))";
 
 export function listFeatureProposals(status?: FeatureProposalStatus, changedSince?: string): FeatureProposal[] {
   const where: string[] = [];
@@ -179,6 +185,43 @@ export function resolveFeatureProposal(
     db.prepare(
       'INSERT INTO feature_proposal_events (proposal_id, at, status, note, resolution) VALUES (?, ?, ?, ?, ?)'
     ).run(id, at, decision, note || null, resolution || null);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return getProposal(id)!;
+}
+
+const FINAL_STATUSES: readonly string[] = ['done', 'rejected'];
+
+/**
+ * Corrects the note and/or resolution of a final (`done`, `rejected`) proposal,
+ * e.g. a wrong PR link. The status and resolvedAt stay; the correction is
+ * appended to the history as an amended event. Throws `ZodError` when nothing
+ * is given, `not_final` (409) for an open proposal.
+ */
+export function amendFeatureProposal(id: string, input: unknown): FeatureProposal {
+  const data = featureProposalAmendSchema.parse(input);
+  const row = getRow(id);
+  if (!row) throw DomainError.notFound();
+  if (!FINAL_STATUSES.includes(row.status)) throw DomainError.conflict('not_final');
+
+  const note = data.note !== undefined ? data.note || null : row.decision_note;
+  const resolution = data.resolution !== undefined ? data.resolution : row.resolution;
+  const at = new Date().toISOString();
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE feature_proposals SET decision_note = ?, resolution = ?, amended_at = ? WHERE id = ?').run(
+      note,
+      resolution,
+      at,
+      id
+    );
+    db.prepare(
+      'INSERT INTO feature_proposal_events (proposal_id, at, status, note, resolution, amended) VALUES (?, ?, ?, ?, ?, 1)'
+    ).run(id, at, row.status, note, resolution);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

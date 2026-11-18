@@ -5,6 +5,7 @@ import { ZodError } from 'zod';
 
 import { initDb, db } from '../src/db.js';
 import {
+  amendFeatureProposal,
   createFeatureProposal,
   listFeatureProposals,
   resolveFeatureProposal,
@@ -208,4 +209,50 @@ test('changedAt is the latest of creation, edit and status change', () => {
   assert.equal(decided.changedAt, decided.resolvedAt);
   const cursor = decided.changedAt;
   assert.deepEqual(listFeatureProposals(undefined, cursor), []);
+});
+
+test('amendFeatureProposal corrects the note and resolution of a final proposal, keeping history', () => {
+  const p = createFeatureProposal(valid).proposal;
+  resolveFeatureProposal(p.id, 'done', null, 'x');
+  // Decided a while ago, so the correction is strictly later even within one millisecond.
+  db.prepare("UPDATE feature_proposals SET resolved_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(p.id);
+  const done = listFeatureProposals().find((x) => x.id === p.id)!;
+  const fixed = amendFeatureProposal(p.id, { resolution: 'https://example.test/pull/1', note: 'Real reason' });
+  assert.equal(fixed.status, 'done');
+  assert.equal(fixed.resolution, 'https://example.test/pull/1');
+  assert.equal(fixed.decisionNote, 'Real reason');
+  assert.equal(fixed.resolvedAt, done.resolvedAt);
+  assert.equal(fixed.history.length, 2);
+  assert.deepEqual(
+    fixed.history.map((e) => [e.status, e.resolution, e.amended]),
+    [
+      ['done', 'x', false],
+      ['done', 'https://example.test/pull/1', true],
+    ]
+  );
+  assert.ok(fixed.changedAt > done.changedAt);
+  assert.deepEqual(listFeatureProposals(undefined, done.changedAt).map((x) => x.id), [p.id]);
+});
+
+test('amendFeatureProposal keeps fields that are not given', () => {
+  const p = createFeatureProposal(valid).proposal;
+  resolveFeatureProposal(p.id, 'rejected', 'not now');
+  const fixed = amendFeatureProposal(p.id, { note: 'duplicate of another proposal' });
+  assert.equal(fixed.status, 'rejected');
+  assert.equal(fixed.decisionNote, 'duplicate of another proposal');
+  assert.equal(fixed.resolution, null);
+});
+
+test('amendFeatureProposal only applies to final proposals and needs a change', () => {
+  const p = createFeatureProposal(valid).proposal;
+  assert.throws(
+    () => amendFeatureProposal(p.id, { note: 'x' }),
+    (e: unknown) => e instanceof DomainError && e.code === 'not_final'
+  );
+  resolveFeatureProposal(p.id, 'done', null, 'https://example.test/pull/1');
+  assert.throws(() => amendFeatureProposal(p.id, {}), ZodError);
+  assert.throws(
+    () => amendFeatureProposal('missing', { note: 'x' }),
+    (e: unknown) => e instanceof DomainError && e.statusCode === 404
+  );
 });
