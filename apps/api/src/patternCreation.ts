@@ -203,7 +203,7 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
     }
     if (decide) insertDecision(input.accountId, counterparty, id, yearly, input.kind, actor, now);
     // The counterparty has its pattern now: a pending annual question about it is answered.
-    supersedeConfirmations(input.accountId, counterparty, now);
+    supersedeConfirmations(input.accountId, counterparty, yearly, now);
     // Cited charges may be old: the pattern may have lapsed already (GLOSSARY.md, "Lapsed pattern").
     refreshLapse(input.accountId);
     db.exec('COMMIT');

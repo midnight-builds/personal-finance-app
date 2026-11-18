@@ -14,12 +14,15 @@ export type PatternConfirmation = {
 };
 
 // Pending confirmations still worth asking: the account has no active pattern for the
-// counterparty (detected, confirmed or created since the question was made). One
-// pattern per account and counterparty, so such a question is never asked; it is
+// counterparty (detected, confirmed or created since the question was made), and no
+// account has an active annual one for it: questions are asked once per counterparty
+// and month across accounts (patterns.ts, `detectConfirmationCandidates`), so a yearly
+// payment the app already counts is not asked, nor counted, again. Such a question is
 // hidden, and creating a pattern resolves it (`supersedeConfirmations`).
 const OPEN = `c.status = 'pending' AND NOT EXISTS (
   SELECT 1 FROM recurring_patterns p
-  WHERE p.account_id = c.account_id AND p.counterparty_name = c.counterparty_name AND p.is_active = 1)`;
+  WHERE p.counterparty_name = c.counterparty_name AND p.is_active = 1
+    AND (p.account_id = c.account_id OR p.pattern_type = 'annual'))`;
 
 export function listPendingConfirmations(): PatternConfirmation[] {
   return db.prepare(
@@ -34,19 +37,27 @@ export function openConfirmationIds(): Set<string> {
 }
 
 /**
- * Resolves the pending confirmations of an account and counterparty as `superseded`:
- * a pattern was created for it (patternCreation.ts), so the question is answered.
+ * Resolves pending confirmations as `superseded`: a pattern was created for the
+ * counterparty (patternCreation.ts), so the question is answered. Those of the account,
+ * and for a yearly (annual) pattern those of every account, as `OPEN` hides them.
  */
-export function supersedeConfirmations(accountId: string, counterparty: string, now: string): void {
+export function supersedeConfirmations(accountId: string, counterparty: string, annual: boolean, now: string): void {
   db.prepare(
     `UPDATE pattern_confirmations SET status = 'superseded', resolved_at = ?
-     WHERE account_id = ? AND counterparty_name = ? AND status = 'pending'`
-  ).run(now, accountId, counterparty);
+     WHERE (account_id = ? OR ?) AND counterparty_name = ? AND status = 'pending'`
+  ).run(now, accountId, annual ? 1 : 0, counterparty);
 }
 
+/**
+ * Confirms an open confirmation as an annual pattern. One no longer pending (already
+ * answered or superseded) is `not_pending`; one hidden because the counterparty has a
+ * pattern (`OPEN`) is `pattern_exists`: confirming it would retype or double that one.
+ */
 export function confirmPatternConfirmation(id: string): void {
   const conf = db.prepare('SELECT * FROM pattern_confirmations WHERE id = ?').get(id) as PatternConfirmation | undefined;
   if (!conf) throw new Error('not_found');
+  if (conf.status !== 'pending') throw new Error('not_pending');
+  if (!openConfirmationIds().has(id)) throw new Error('pattern_exists');
 
   const now = new Date().toISOString();
   const approxDate = `${new Date().getFullYear()}-${String(conf.typical_month).padStart(2, '0')}-01`;

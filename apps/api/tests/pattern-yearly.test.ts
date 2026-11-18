@@ -87,14 +87,14 @@ test('yearly: one charge is enough; an annual pattern, confirmed by its actor, c
   assert.equal(getHouseholdSummary('2026-12-31').monthlySubscriptions, 0);
 });
 
-test('yearly: evidence charges must be at least 330 days apart and within 25 % of the expected amount', async () => {
+test('yearly: evidence charges must be at least 240 days apart and within 25 % of the expected amount', async () => {
   const a = mkAccount();
   const early = charge(a, INSURANCE, -300, '2025-09-01');
   const late = charge(a, INSURANCE, -300, '2026-03-15');
   let res = await yearly(a, [early, late]);
   assert.equal(res.statusCode, 400);
   assert.equal(res.json().error, 'evidence_interval_mismatch');
-  assert.equal(res.json().details.minDaysApart, 330);
+  assert.equal(res.json().details.minDaysApart, 240);
 
   const b = mkAccount();
   const last = charge(b, INSURANCE, -370, '2025-03-20'); // +23 %
@@ -154,25 +154,66 @@ test('yearly: an annual pattern confirmed through a confirmation is a conflict t
   assert.equal(rows().length, 1);
 });
 
-test('yearly: creating resolves the pending annual confirmation of that account and counterparty; it is never asked again', async () => {
+test('yearly: creating resolves the pending annual confirmations of the counterparty, on every account; never asked again', async () => {
   const a = mkAccount();
   const id = charge(a, INSURANCE, -300, '2026-03-15');
   const b = mkAccount();
-  charge(b, INSURANCE, -300, '2026-05-15'); // another account: another question
+  charge(b, INSURANCE, -300, '2025-05-15'); // the same payment from another account a year before
+  charge(b, 'Lehtitalo Sivu', -120, '2026-05-15'); // another counterparty: still asked
   detectPatterns(a.account, '2026-12-31');
   detectPatterns(b.account, '2026-12-31');
-  assert.equal(listPendingConfirmations().length, 2);
+  assert.equal(listPendingConfirmations().length, 3);
 
   assert.equal((await yearly(a, [id])).statusCode, 200);
-  assert.deepEqual(listPendingConfirmations().map((c) => c.account_id), [b.account]);
-  const status = db.prepare('SELECT status, resolved_at FROM pattern_confirmations WHERE account_id = ?').get(a.account) as { status: string; resolved_at: string | null };
-  assert.equal(status.status, 'superseded');
-  assert.ok(status.resolved_at);
+  assert.deepEqual(listPendingConfirmations().map((c) => c.counterparty_name), ['Lehtitalo Sivu']);
+  const statuses = db.prepare('SELECT status, resolved_at FROM pattern_confirmations WHERE counterparty_name = ?').all(INSURANCE) as Array<{ status: string; resolved_at: string | null }>;
+  assert.deepEqual(statuses.map((s) => s.status), ['superseded', 'superseded']);
+  assert.ok(statuses.every((s) => s.resolved_at));
 
   detectPatterns(a.account, '2026-12-31');
-  assert.deepEqual(listPendingConfirmations().map((c) => c.account_id), [b.account]);
-  assert.equal(rows().filter((r) => r.account_id === a.account).length, 1);
+  detectPatterns(b.account, '2026-12-31');
+  assert.deepEqual(listPendingConfirmations().map((c) => c.counterparty_name), ['Lehtitalo Sivu']);
+  assert.equal(rows().length, 1);
   assert.deepEqual(forecastFor(3).annualItems.map((i) => i.counterparty), [INSURANCE], 'counted once');
+});
+
+test('confirmations: one superseded or hidden by a pattern cannot be confirmed (409), so nothing doubles or retypes', async () => {
+  const a = mkAccount();
+  const id = charge(a, INSURANCE, -300, '2026-03-15');
+  const b = mkAccount();
+  charge(b, INSURANCE, -300, '2025-04-10'); // another month, so asked too
+  detectPatterns(a.account, '2026-12-31');
+  detectPatterns(b.account, '2026-12-31');
+  const [onA, onB] = ['a', 'b'].map((k) =>
+    (db.prepare('SELECT id FROM pattern_confirmations WHERE account_id = ?').get(k === 'a' ? a.account : b.account) as { id: string }).id
+  );
+  assert.equal((await yearly(a, [id])).statusCode, 200);
+  assert.throws(() => confirmPatternConfirmation(onA), /not_pending/);
+  assert.throws(() => confirmPatternConfirmation(onB), /not_pending/);
+
+  // Pending but hidden: an active pattern for the counterparty appeared on its account.
+  const c = mkAccount();
+  charge(c, 'Lehtitalo Sivu', -120, '2025-01-20');
+  detectPatterns(c.account, '2026-12-31');
+  const [pending] = listPendingConfirmations();
+  const ids = ['2026-09-20', '2026-10-20', '2026-11-20'].map((d) => charge(c, 'Lehtitalo Sivu', -120, d));
+  await create({ accountId: c.account, counterparty: 'Lehtitalo Sivu', kind: 'subscription', interval: 'monthly', expectedAmount: 120, evidenceTransactionIds: ids });
+  db.prepare("UPDATE pattern_confirmations SET status = 'pending' WHERE id = ?").run(pending.id); // as if never superseded
+  assert.throws(() => confirmPatternConfirmation(pending.id), /pattern_exists/);
+  assert.equal(rows('Lehtitalo Sivu')[0].pattern_type, 'subscription');
+  assert.equal(rows().length, 1);
+});
+
+test('yearly: a bill paid weeks earlier than a year still attaches and moves the typical month', async () => {
+  const a = mkAccount();
+  const ids = [charge(a, INSURANCE, -300, '2024-12-20'), charge(a, INSURANCE, -300, '2025-12-20')];
+  assert.equal((await yearly(a, ids)).statusCode, 200);
+  charge(a, INSURANCE, -300, '2026-11-05'); // 320 days later
+  detectPatterns(a.account, '2026-11-30');
+  const [row] = rows();
+  assert.equal(row.occurrence_count, 3);
+  assert.equal(row.typical_month, 11);
+  assert.deepEqual(computeMonthlyForecast(1, '2026-11-30', []).annualItems, [], 'December has nothing left to pay');
 });
 
 test('yearly: a pending confirmation is hidden while the counterparty has an active pattern on its account', async () => {
