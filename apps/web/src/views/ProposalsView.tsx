@@ -380,6 +380,7 @@ export default function ProposalsView({ setToast }: Props) {
                         {p.history.map((e, i) => (
                           <li key={i}>
                             {formatDate(e.at)} · {STATUS_LABEL[e.status]}
+                            {e.amended && ' (korjattu)'}
                             {e.note && ` — ${e.note}`}
                             {e.resolution && ` (${e.resolution})`}
                           </li>

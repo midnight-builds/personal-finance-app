@@ -124,6 +124,11 @@ Lifecycle (`POST /feature-proposals/:id/<action>`, body `{ note?, resolution? }`
 | `reject` | `rejected` — will not be done | `new`, `accepted` |
 
 `done` and `rejected` are final; any other transition returns `409 invalid_transition`.
+A final proposal's note or resolution can still be corrected (e.g. a wrong PR link)
+with `POST /feature-proposals/:id/amend` (`note`, `resolution`; omitted fields keep
+their value). The status stays, `amendedAt` is set, and the correction is appended
+to `history` with `amended: true`; `409 not_final` for an open proposal. This is a
+user action in the REST API only, not an MCP tool.
 Every change is appended to `feature_proposal_events` and returned as `history`
 (`at`, `status`, `note`, `resolution`). This is the agent's feedback channel:
 `list_feature_proposals` tells it what was fixed, where, and why something was declined.

@@ -5,6 +5,7 @@ import {
   featureProposalListQuerySchema,
 } from '@finance-app/shared';
 import {
+  amendFeatureProposal,
   createFeatureProposal,
   listFeatureProposals,
   resolveFeatureProposal,
@@ -27,6 +28,10 @@ export const featureProposalRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch<{ Params: { id: string } }>('/feature-proposals/:id', async (request) =>
     updateFeatureProposal(request.params.id, request.body)
+  );
+
+  app.post<{ Params: { id: string } }>('/feature-proposals/:id/amend', async (request) =>
+    amendFeatureProposal(request.params.id, request.body ?? {})
   );
 
   for (const [action, decision] of Object.entries(FEATURE_PROPOSAL_ACTIONS)) {

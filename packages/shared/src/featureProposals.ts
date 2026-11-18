@@ -81,6 +81,15 @@ export const featureProposalDecisionSchema = z.object({
   resolution: z.string().trim().min(1).max(RESOLUTION_MAX_LENGTH).optional(),
 });
 
+/**
+ * Correction of a final (`done` or `rejected`) proposal's note or resolution,
+ * e.g. a wrong PR link. Omitted fields keep their value; the status stays.
+ */
+export const featureProposalAmendSchema = featureProposalDecisionSchema.refine(
+  (v) => v.note !== undefined || v.resolution !== undefined,
+  { message: 'Nothing to amend' }
+);
+
 export const featureProposalListQuerySchema = z.object({
   status: z.enum(FEATURE_PROPOSAL_STATUSES).optional(),
   /**
@@ -96,6 +105,8 @@ export type FeatureProposalEvent = {
   status: FeatureProposalDecision;
   note: string | null;
   resolution: string | null;
+  /** True for a correction of note/resolution; the status did not change. */
+  amended: boolean;
 };
 
 export type FeatureProposal = z.output<typeof featureProposalInputSchema> & {
@@ -110,7 +121,9 @@ export type FeatureProposal = z.output<typeof featureProposalInputSchema> & {
   decisionNote: string | null;
   /** Set when `status` is `done`. */
   resolution: string | null;
-  /** Latest of createdAt, updatedAt and resolvedAt: the cursor for `changedSince`. */
+  /** Time the note or resolution of a final proposal was last corrected, null if never. */
+  amendedAt: string | null;
+  /** Latest of createdAt, updatedAt, resolvedAt and amendedAt: the cursor for `changedSince`. */
   changedAt: string;
   history: FeatureProposalEvent[];
 };
