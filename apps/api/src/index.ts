@@ -299,7 +299,8 @@ server.post<{ Params: { id: string } }>('/pattern-confirmations/:id/confirm', as
     confirmPatternConfirmation(id);
     return reply.send({ ok: true });
   } catch (err: any) {
-    return reply.code(err.message === 'not_found' ? 404 : 500).send({ error: err.message });
+    const status = err.message === 'not_found' ? 404 : err.message === 'pattern_exists' ? 409 : 500;
+    return reply.code(status).send({ error: err.message });
   }
 });
 

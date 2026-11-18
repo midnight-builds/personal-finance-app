@@ -3,7 +3,7 @@
 // decided about it (`pattern_decisions`). Detection never writes decisions, and
 // everything that counts patterns (forecast, subscription total, briefing) reads
 // them through here, so a decision cannot be lost or bypassed by re-detection.
-import type { PatternDecision, PatternState } from '@finance-app/shared';
+import type { PatternDecision, PatternOrigin, PatternState } from '@finance-app/shared';
 import { db } from './db.js';
 import { DomainError } from './http/errors.js';
 import { CONFIDENT, patternChargesOf, type ConfidenceFactors, type Occurrence } from './patterns.js';
@@ -31,10 +31,18 @@ type PatternRow = {
   decision: PatternDecision | null;
   decided_by: string | null;
   decided_at: string | null;
+  origin: PatternOrigin;
+  created_by: string | null;
+  evidence_transaction_ids: string | null;
 };
 
 /** A stored pattern with its decision applied. Snake case, like the rows `/recurring` always returned. */
-export type PatternView = Omit<PatternRow, 'confidence_factors' | 'amount_fixed' | 'decision' | 'user_confirmed'> & {
+export type PatternView = Omit<
+  PatternRow,
+  'confidence_factors' | 'amount_fixed' | 'decision' | 'user_confirmed' | 'evidence_transaction_ids'
+> & {
+  /** Created patterns: the charges the actor cited when creating it; null for detected ones. */
+  evidence_transaction_ids: string[] | null;
   /** What detection found; `pattern_type` is this unless a decision says otherwise. */
   detected_type: string;
   confidence_factors: ConfidenceFactors | null;
@@ -66,7 +74,7 @@ const STATE_OF: Record<Exclude<PatternDecision, 'reset'>, PatternState> = {
 };
 
 function view(row: PatternRow): PatternView {
-  const { confidence_factors, amount_fixed, user_confirmed, ...rest } = row;
+  const { confidence_factors, amount_fixed, user_confirmed, evidence_transaction_ids, ...rest } = row;
   const monthly = MONTHLY_TYPES.has(row.pattern_type);
   // Decisions are about monthly/weekly patterns. Should the row turn annual, its own
   // confirmation rules apply; the decision applies again if it turns monthly again.
@@ -83,6 +91,7 @@ function view(row: PatternRow): PatternView {
     pattern_type: type,
     detected_type: row.pattern_type,
     confidence_factors: confidence_factors ? (JSON.parse(confidence_factors) as ConfidenceFactors) : null,
+    evidence_transaction_ids: evidence_transaction_ids ? (JSON.parse(evidence_transaction_ids) as string[]) : null,
     amount_fixed: amount_fixed === null ? null : amount_fixed === 1,
     state,
     user_confirmed: state === 'rejected' ? 0 : state !== 'unconfirmed' || user_confirmed === 1 ? 1 : null,
@@ -94,15 +103,32 @@ function view(row: PatternRow): PatternView {
   };
 }
 
+/** The stored pattern `id` with its decision applied, if there is one. */
+export function patternById(id: string): PatternView | undefined {
+  const row = db.prepare(`${PATTERN_SELECT} WHERE p.id = ?`).get(id) as PatternRow | undefined;
+  return row && view(row);
+}
+
 /**
- * Active patterns with their decisions applied, rejected ones left out: the user said
- * they are not recurring. Ordered by typical amount, largest first.
+ * Whether a pattern counts at all. A rejected one does not: the user or an agent said
+ * it is not recurring. Nor does a created pattern whose decision was reset (withdrawn)
+ * while its own charges do not make it established: detection never proposed it and
+ * nobody vouches for it any more, so it is neither counted nor asked about.
+ */
+function counts(p: PatternView): boolean {
+  if (p.state === 'rejected') return false;
+  return !(p.origin === 'created' && p.state === 'unconfirmed' && !p.established);
+}
+
+/**
+ * Active patterns with their decisions applied, those that do not count (`counts`)
+ * left out. Ordered by typical amount, largest first.
  */
 export function activePatterns(): PatternView[] {
   const rows = db
     .prepare(`${PATTERN_SELECT} WHERE p.is_active = 1 ORDER BY p.typical_amount DESC, p.id`)
     .all() as PatternRow[];
-  return rows.map(view).filter((p) => p.state !== 'rejected');
+  return rows.map(view).filter(counts);
 }
 
 /** Monthly and weekly patterns (subscriptions and recurring), active and not rejected. */
@@ -233,8 +259,7 @@ export function decidePattern(patternId: string, decision: PatternDecision, acto
     `INSERT INTO pattern_decisions (created_at, account_id, counterparty_name, pattern_id, decision, actor)
      VALUES (?, ?, ?, ?, ?, ?)`
   ).run(new Date().toISOString(), row.account_id, row.counterparty_name, row.id, decision, actor);
-  const updated = db.prepare(`${PATTERN_SELECT} WHERE p.id = ?`).get(patternId) as PatternRow;
-  return { pattern: view(updated), recorded: true };
+  return { pattern: patternById(patternId)!, recorded: true };
 }
 
 export type PatternDecisionEntry = {

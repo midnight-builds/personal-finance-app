@@ -316,6 +316,14 @@ export function initDb() {
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN confidence_factors TEXT`);
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN amount_fixed INTEGER`);
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN payment_method TEXT`);
+  // Where a pattern comes from (GLOSSARY.md, "Created pattern"): `detected`, or `created`
+  // by an actor (`created_by`) from the charges it cited (`evidence_transaction_ids`, JSON).
+  // Detection never deactivates or rewrites a created pattern (patterns.ts).
+  safeExec(
+    `ALTER TABLE recurring_patterns ADD COLUMN origin TEXT NOT NULL DEFAULT 'detected' CHECK (origin IN ('detected', 'created'))`
+  );
+  safeExec(`ALTER TABLE recurring_patterns ADD COLUMN created_by TEXT`);
+  safeExec(`ALTER TABLE recurring_patterns ADD COLUMN evidence_transaction_ids TEXT`);
   // What the user or an agent said a pattern is. History: rows are appended, never
   // changed; the latest per account and counterparty is the decision. Detection
   // never writes here, so a decision survives every re-detection.

@@ -48,3 +48,27 @@ tämä toistuva?", GLOSSARY.md "Recurring question"): `GET /patterns/questions`
 palauttaa ne todisteineen (veloitukset, päivät, summat), ja briefing näyttää
 kolme suurinta kysymyskorttina. Vakiintunutta kuviota ei kysytä, mutta
 käyttäjä tai agentti voi silti hylätä tai luokitella sen.
+
+## Luodut kuviot
+
+Käyttäjä tai agentti voi luoda kuukausi- tai viikkokuvion, jota tunnistus ei
+ole ehdottanut (`POST /patterns`, MCP `create_recurring_pattern`; GLOSSARY.md
+"Created pattern"), esimerkiksi juuri alkaneen sopimuksen. Yksi veloitus riittää
+todisteeksi. Kuvio (`origin: created`) on heti vahvistettu tekijänsä
+päätöksellä, joten ennuste (`knownFixed`), kuukausittainen tilaussumma ja
+tilauspalveluhavainto laskevat sen kuten minkä tahansa vahvistetun kuvion;
+ennusteen kohteessa on `origin`. Summa on luojan antama odotettu summa; uusi
+luontipyyntö samalle vastapuolelle päivittää sen (esim. hinnanmuutos).
+
+Uudelleentunnistus ei koskaan poista, muuta tai kahdenna luotua kuviota:
+myöhemmät saman vastapuolen veloitukset (±20 % odotetusta summasta, yksi per
+jakso) liittyvät siihen, ja jos tunnistus löytää saman kuvion, kuvio pysyy
+yhtenä, joten se on ennusteessa täsmälleen kerran. Siksi luotu kuvio pysyy
+ennusteessa myös veloitusten loputtua, kunnes joku hylkää sen. Hylätty luotu
+kuvio jää pois kuten muutkin. `reset` vetää luodun kuvion pois: se ei ole
+ennusteessa (ei myöskään epävarmoissa), ellei sen omien veloitusten varmuus ole
+vähintään 0,75, ja tunnistus käsittelee sitä kuten omaansa (löytäessään se
+muuttuu tunnistetuksi, veloitusten loputtua se poistuu käytöstä).
+
+Viikkokuvio lasketaan ennusteessa yhden veloituksen suuruisena kuukaudessa,
+kuten tunnistetutkin viikkokuviot (ennallaan, avoin kysymys).

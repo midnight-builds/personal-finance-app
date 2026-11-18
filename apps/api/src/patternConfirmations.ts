@@ -26,8 +26,10 @@ export function confirmPatternConfirmation(id: string): void {
   const approxDate = `${new Date().getFullYear()}-${String(conf.typical_month).padStart(2, '0')}-01`;
 
   const existing = db.prepare(
-    'SELECT id FROM recurring_patterns WHERE account_id = ? AND counterparty_name = ?'
-  ).get(conf.account_id, conf.counterparty_name) as { id: string } | undefined;
+    'SELECT id, origin FROM recurring_patterns WHERE account_id = ? AND counterparty_name = ?'
+  ).get(conf.account_id, conf.counterparty_name) as { id: string; origin: string } | undefined;
+  // A created pattern is changed only by pattern decisions (GLOSSARY.md, "Created pattern").
+  if (existing?.origin === 'created') throw new Error('pattern_exists');
 
   if (existing) {
     db.prepare(`

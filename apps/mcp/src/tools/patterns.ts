@@ -1,12 +1,13 @@
 import { z } from 'zod';
-import { patternDecisionFields, patternDecisionListFields } from '@finance-app/shared';
+import { patternCreateFields, patternDecisionFields, patternDecisionListFields } from '@finance-app/shared';
 import { GLOSSARY_TERMS } from '../glossary/terms.generated.js';
 import { APPEND_ONLY, READ_ONLY, defineTool, type ToolDefinition } from './types.js';
 
 // Recurring patterns the app is unsure about, and the user's (or this agent's)
 // answers (GLOSSARY.md, "Recurring question", "Pattern decision"). An answer is
 // appended to the decision history under this server's actor; it changes how a
-// pattern counts in the forecast and totals, never a transaction. Plus the
+// pattern counts in the forecast and totals, never a transaction. The agent may
+// also create a pattern detection never proposed ("Created pattern"). Plus the
 // glossary, so the agent uses the app's own words.
 
 const ERROR_CODES =
@@ -47,7 +48,8 @@ export const patternTools: ToolDefinition[] = [
       're-detection; a later answer replaces it, and repeating the current answer records nothing (recorded: ' +
       'false). Any decision may be replaced, also one the user made: the latest counts, and the history keeps every ' +
       'one with its actor. reset takes the decision back: the pattern is unconfirmed again and counted by its ' +
-      'confidence. ' +
+      'confidence; a created pattern (origin created) is withdrawn: left out unless its own charges reach 0.75, ' +
+      'and handed to detection. ' +
       'Only the pattern\'s decision changes: transactions, amounts, categories, accounts and balances are ' +
       'never touched, and nothing is deleted. Answer only from what the user said or clear evidence. Returns ' +
       '{ pattern (with state, pattern_type, established, decided_by, decided_at), recorded }. ' +
@@ -59,6 +61,33 @@ export const patternTools: ToolDefinition[] = [
     annotations: APPEND_ONLY,
     run: ({ patternId, decision }, { api }) =>
       api.post(`/patterns/${encodeURIComponent(patternId)}/decision`, { decision }),
+  }),
+  defineTool({
+    name: 'create_recurring_pattern',
+    title: 'Create a recurring pattern',
+    description:
+      'Adds a monthly or weekly pattern that detection never proposed, e.g. a contract that started last month: ' +
+      'one charge is enough as evidence. Cite the charges by id (search_transactions); each must be a booked ' +
+      'expense of that account and counterparty, not a transfer, within 20 % of expectedAmount, and charges at ' +
+      'least 5 (weekly) or 20 (monthly) days apart. The pattern is confirmed at once as kind (a pattern decision ' +
+      'under this server\'s actor, in list_pattern_decisions) and counts like any confirmed pattern: a fixed cost ' +
+      'in the forecast and, as a subscription, in the subscription total. Its origin is created and created_by ' +
+      'is this server\'s actor. Later charges of the counterparty near expectedAmount attach to it; detection ' +
+      'never deactivates, retypes or re-prices it, and when detection finds the same pattern it stays one ' +
+      'pattern. It keeps counting after its charges stop: reject it then with answer_recurring_question, which ' +
+      'also changes its kind; reset withdraws it and hands it to detection. Calling this again for the same ' +
+      'counterparty re-states it, e.g. a new price with the new charge as evidence (updated: true); the same ' +
+      'values again write nothing. Writes only the pattern and its decision: transactions, amounts, ' +
+      'categories, accounts and balances are never touched, and nothing is deleted. Create one only from what ' +
+      'the user said or clear evidence. Returns { pattern, created, updated }. Errors come back as "Finance API error <status>: {"error": <code>, ' +
+      '"details": ...}": 400 invalid_request, evidence_not_found, evidence_duplicate, evidence_other_account, ' +
+      'evidence_not_booked, evidence_transfer, evidence_not_charge (income), evidence_other_counterparty, ' +
+      'evidence_currency_mismatch, evidence_amount_mismatch, evidence_interval_mismatch (details name the ' +
+      'transactionIds); 404 account_not_found; 409 pattern_exists (details.patternId: the account already has ' +
+      'an active detected pattern for the counterparty: decide it with answer_recurring_question instead).',
+    inputSchema: patternCreateFields,
+    annotations: APPEND_ONLY,
+    run: (args, { api }) => api.post('/patterns', args),
   }),
   defineTool({
     name: 'list_pattern_decisions',
