@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { db } from './db.js';
 import { refreshLapse } from './patterns.js';
+import { annualPatterns } from './patternDecisions.js';
 
 export type PatternConfirmation = {
   id: string;
@@ -13,39 +14,80 @@ export type PatternConfirmation = {
   status: string;
 };
 
-// Pending confirmations still worth asking: the account has no active pattern for the
-// counterparty (detected, confirmed or created since the question was made), and no
-// account has an active annual one for it: questions are asked once per counterparty
-// and month across accounts (patterns.ts, `detectConfirmationCandidates`), so a yearly
-// payment the app already counts is not asked, nor counted, again. Such a question is
-// hidden, and creating a pattern resolves it (`supersedeConfirmations`).
-const OPEN = `c.status = 'pending' AND NOT EXISTS (
-  SELECT 1 FROM recurring_patterns p
-  WHERE p.counterparty_name = c.counterparty_name AND p.is_active = 1
-    AND (p.account_id = c.account_id OR p.pattern_type = 'annual'))`;
+/** A yearly payment: its month (1–12) and amount (positive). */
+export type YearlyPayment = { month: number; amount: number };
+
+/**
+ * Whether a confirmation asks about this yearly payment: within a month of its month
+ * and 25 % of its amount (detection's annual tolerance). Questions are asked once per
+ * counterparty and month across accounts (patterns.ts, `detectConfirmationCandidates`),
+ * so the same payment moved to another account is asked under the other account.
+ */
+function asksAbout(c: PatternConfirmation, p: YearlyPayment): boolean {
+  const months = (((c.typical_month - p.month) % 12) + 12) % 12;
+  return (months <= 1 || months === 11) && Math.abs(c.typical_amount - p.amount) <= 0.25 * p.amount;
+}
+
+/**
+ * Pending confirmations still worth asking, largest first. Not one whose account has
+ * an active pattern for the counterparty (detected, confirmed or created since the
+ * question was made): there is one pattern per account and counterparty, and
+ * confirming would retype it. Nor one about a yearly payment that an annual pattern on
+ * another account already counts (`asksAbout`; counted: not rejected, withdrawn or
+ * lapsed), so the payment is not counted twice. Creating a pattern also resolves them
+ * (`supersedeConfirmations`).
+ */
+function openConfirmations(): PatternConfirmation[] {
+  const pending = db
+    .prepare("SELECT * FROM pattern_confirmations WHERE status = 'pending' ORDER BY typical_amount DESC")
+    .all() as PatternConfirmation[];
+  if (pending.length === 0) return [];
+  const patterned = new Set(
+    (db.prepare('SELECT account_id, counterparty_name FROM recurring_patterns WHERE is_active = 1').all() as Array<{
+      account_id: string;
+      counterparty_name: string | null;
+    }>).map((p) => `${p.account_id}\u0000${p.counterparty_name}`)
+  );
+  const counted = annualPatterns().filter((p) => !p.lapsed && p.typical_month !== null);
+  return pending.filter(
+    (c) =>
+      !patterned.has(`${c.account_id}\u0000${c.counterparty_name}`) &&
+      !counted.some(
+        (p) =>
+          p.counterparty_name === c.counterparty_name &&
+          asksAbout(c, { month: p.typical_month!, amount: p.typical_amount ?? 0 })
+      )
+  );
+}
 
 export function listPendingConfirmations(): PatternConfirmation[] {
-  return db.prepare(
-    `SELECT c.* FROM pattern_confirmations c WHERE ${OPEN} ORDER BY c.typical_amount DESC LIMIT 10`
-  ).all() as PatternConfirmation[];
+  return openConfirmations().slice(0, 10);
 }
 
 /** Ids of every open confirmation (`listPendingConfirmations` without its limit). */
 export function openConfirmationIds(): Set<string> {
-  const rows = db.prepare(`SELECT c.id FROM pattern_confirmations c WHERE ${OPEN}`).all() as Array<{ id: string }>;
-  return new Set(rows.map((r) => r.id));
+  return new Set(openConfirmations().map((c) => c.id));
 }
 
 /**
  * Resolves pending confirmations as `superseded`: a pattern was created for the
- * counterparty (patternCreation.ts), so the question is answered. Those of the account,
- * and for a yearly (annual) pattern those of every account, as `OPEN` hides them.
+ * counterparty (patternCreation.ts), so the question is answered. Those of its
+ * account, and for a yearly pattern (`yearly`) those of other accounts about the same
+ * yearly payment (`asksAbout`).
  */
-export function supersedeConfirmations(accountId: string, counterparty: string, annual: boolean, now: string): void {
-  db.prepare(
-    `UPDATE pattern_confirmations SET status = 'superseded', resolved_at = ?
-     WHERE (account_id = ? OR ?) AND counterparty_name = ? AND status = 'pending'`
-  ).run(now, accountId, annual ? 1 : 0, counterparty);
+export function supersedeConfirmations(
+  accountId: string,
+  counterparty: string,
+  yearly: YearlyPayment | null,
+  now: string
+): void {
+  const pending = db
+    .prepare("SELECT * FROM pattern_confirmations WHERE counterparty_name = ? AND status = 'pending'")
+    .all(counterparty) as PatternConfirmation[];
+  const resolve = db.prepare("UPDATE pattern_confirmations SET status = 'superseded', resolved_at = ? WHERE id = ?");
+  for (const c of pending) {
+    if (c.account_id === accountId || (yearly && asksAbout(c, yearly))) resolve.run(now, c.id);
+  }
 }
 
 /**

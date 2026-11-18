@@ -365,10 +365,10 @@ const VOUCHED_CREATED = `(p.origin = 'created' AND COALESCE((
 
 /**
  * Two charges of a created pattern closer than this are not two of its periods.
- * Yearly: two thirds of a year, like the others (a bill may move by weeks; detection
- * takes annual intervals by their average, 330–400 days).
+ * Yearly: 300 days, so a bill paid weeks early still attaches but a second charge in
+ * the same year (another policy, an extra fee) does not take the yearly one's place.
  */
-export const MIN_DAYS_APART: Record<Period, number> = { weekly: 5, monthly: 20, yearly: 240 };
+export const MIN_DAYS_APART: Record<Period, number> = { weekly: 5, monthly: 20, yearly: 300 };
 
 /**
  * How far a created pattern's charge may be from its expected amount: detection's

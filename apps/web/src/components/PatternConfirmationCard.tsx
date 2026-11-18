@@ -19,8 +19,12 @@ export default function PatternConfirmationCard({ finding, onResolved, setToast 
   const handleConfirm = async () => {
     if (!confirmationId) return;
     try {
-      await confirmPatternConfirmation(confirmationId);
-      setToast(`Merkitty vuosittaiseksi: ${meta.counterparty}`);
+      const result = await confirmPatternConfirmation(confirmationId);
+      setToast(
+        result === 'confirmed'
+          ? `Merkitty vuosittaiseksi: ${meta.counterparty}`
+          : `Kysymykseen on jo vastattu: ${meta.counterparty}`
+      );
       onResolved(finding.id);
     } catch {
       setToast('Virhe vahvistuksessa');

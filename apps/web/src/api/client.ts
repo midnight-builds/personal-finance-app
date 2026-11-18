@@ -488,9 +488,15 @@ export async function getForecast(): Promise<MonthlyForecast[]> {
   return res.json();
 }
 
-export async function confirmPatternConfirmation(id: string): Promise<void> {
+/**
+ * Confirms an annual question. `already_answered`: it was answered meanwhile, or the
+ * counterparty got a pattern (409), so there is nothing left to confirm.
+ */
+export async function confirmPatternConfirmation(id: string): Promise<'confirmed' | 'already_answered'> {
   const res = await safeFetch(`${API}/pattern-confirmations/${id}/confirm`, { method: 'POST' });
+  if (res.status === 409) return 'already_answered';
   if (!res.ok) throw new Error(`confirmPatternConfirmation failed: ${res.statusText}`);
+  return 'confirmed';
 }
 
 export async function rejectPatternConfirmation(id: string): Promise<void> {
