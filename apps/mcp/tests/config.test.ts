@@ -15,12 +15,13 @@ const http = (env: Record<string, string>) => {
   return transport as Extract<typeof transport, { kind: 'http' }>;
 };
 
-test('defaults: stdio, local API, hermes source, no disabled tools', () => {
+test('defaults: stdio, local API, generic mcp source, no disabled tools', () => {
   const cfg = load({});
   assert.deepEqual(cfg.transport, { kind: 'stdio' });
   assert.equal(cfg.apiUrl, 'http://127.0.0.1:3001');
-  assert.equal(cfg.proposalSource, 'hermes');
-  assert.equal(cfg.actor, 'hermes');
+  // No agent is named in code: deployments set MCP_PROPOSAL_SOURCE / MCP_ACTOR.
+  assert.equal(cfg.proposalSource, 'mcp');
+  assert.equal(cfg.actor, 'mcp');
   assert.equal(cfg.disabledTools.size, 0);
 });
 

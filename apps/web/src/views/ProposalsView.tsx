@@ -300,7 +300,7 @@ export default function ProposalsView({ setToast }: Props) {
         </div>
       </div>
       <p className="muted">
-        Ulkoiset agentit (esim. Hermes) voivat ehdottaa ominaisuuksia ja ilmoittaa virheistä MCP:n kautta. Ne
+        Ulkoiset agentit voivat ehdottaa ominaisuuksia ja ilmoittaa virheistä MCP:n kautta. Ne
         eivät toteuta mitään — sinä päätät. Agentti näkee tilan, perustelut ja toteutuksen viitteen. Voit myös
         lisätä oman ehdotuksen ja muokata avoimia. Hyväksytyn ehdotuksen voi kopioida GitHub-issueksi.
       </p>

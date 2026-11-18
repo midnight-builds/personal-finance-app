@@ -64,8 +64,8 @@ export const patternTools: ToolDefinition[] = [
     name: 'list_pattern_decisions',
     title: 'Pattern decision history',
     description:
-      'Every decision on a recurring pattern, newest first, from every actor (user = the web UI, hermes or ' +
-      'another name = an agent). Each item: id, createdAt, patternId, accountId, counterparty, decision ' +
+      'Every decision on a recurring pattern, newest first, from every actor (user = the web UI; any other name = an ' +
+      'agent, named by its server\'s MCP_ACTOR). Each item: id, createdAt, patternId, accountId, counterparty, decision ' +
       '(recurring, subscription, not_recurring), actor, superseded (a newer decision on the same pattern replaced ' +
       'it). Returns { total, limit, offset, items }; page with limit/offset. A rejected pattern is left out of ' +
       'list_recurring; find it here to change or reset its decision.',

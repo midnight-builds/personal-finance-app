@@ -58,7 +58,7 @@ function parseUrl(value: string, name: string) {
 }
 
 function parseProposalSource(value: string | undefined) {
-  const parsed = proposalSourceSchema.safeParse(value ?? 'hermes');
+  const parsed = proposalSourceSchema.safeParse(value ?? 'mcp');
   if (!parsed.success) throw new ConfigError(`Invalid MCP_PROPOSAL_SOURCE: "${value}" (1–40 characters)`);
   return parsed.data;
 }

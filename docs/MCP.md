@@ -151,7 +151,7 @@ an invalid value stops the server with a message.
 | `FINANCE_API_URL` | `http://127.0.0.1:3001` | Finance API base URL |
 | `MCP_TRANSPORT` | `stdio` | `stdio` (agent spawns the process) or `http` |
 | `MCP_DISABLED_TOOLS` | — | Comma-separated tool names to hide, e.g. `propose_feature`. Unknown names are an error |
-| `MCP_PROPOSAL_SOURCE` | `hermes` | Stored as a proposal's `source` |
+| `MCP_PROPOSAL_SOURCE` | `mcp` | Stored as a proposal's `source` |
 | `MCP_ACTOR` | `MCP_PROPOSAL_SOURCE` | Sent as `X-Finance-Actor`; recorded as the actor of every change. `a-z`, `0-9`, `_`, `-`, 1–40 characters (startup fails otherwise, also when the default from `MCP_PROPOSAL_SOURCE` does not fit) |
 | `MCP_HOST` / `MCP_PORT` | `127.0.0.1` / `3030` | http: listen address |
 | `MCP_TOKEN_FILE` / `MCP_TOKEN` | — | http: bearer token, ≥ 32 chars. Prefer the file |
