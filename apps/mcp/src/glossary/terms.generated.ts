@@ -12,8 +12,26 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   {
     "term": "Countable transaction",
     "summary": "a transaction the Ledger includes by default: booked (not pending) and not a transfer between own accounts.",
-    "definition": "a transaction the Ledger includes by default: booked (not pending) and not a transfer between own accounts.",
+    "definition": "a transaction the Ledger includes by default: booked (not pending) and not a transfer between own accounts. A transfer to a manual account is countable: it is cash flow.",
     "avoid": null
+  },
+  {
+    "term": "Account",
+    "summary": "a bank account, card, loan or asset the household tracks.",
+    "definition": "a bank account, card, loan or asset the household tracks. Its *type* (`account_subtype`) is one of checking, savings, credit_card, loan, investment, property, other_asset, other_liability; credit_card, loan and other_liability are liabilities, whose debt is stated as a positive amount and stored as a negative balance (`balanceFromDebt`). Its *tracking* says where its data comes from. It also has an *ownership share* (0–100 %, default 100: the household's part, for net worth only, never for cash flow), a *currency* (default EUR; stored, never converted) and an optional *update interval* (days between balance updates, for staleness). Created, changed, archived and undone through account change sets (`accountChanges.ts`), with an actor.",
+    "avoid": "asset item, alias (for the account; its name is what agents see)"
+  },
+  {
+    "term": "Tracking (of an account)",
+    "summary": "`imported`: its transactions and balance come from bank exports (every account an import creates); `manual`: nothing is imported into it (an import naming it is refused, `409 account_manual`), and it has no balance yet (dated balance observations come later).",
+    "definition": "`imported`: its transactions and balance come from bank exports (every account an import creates); `manual`: nothing is imported into it (an import naming it is refused, `409 account_manual`), and it has no balance yet (dated balance observations come later). Every balance view and aggregate covers imported accounts only. Set when the account is created, not changed afterwards. Only a manual account can be archived: hidden, it stops recognising transfers, and its history is kept.",
+    "avoid": null
+  },
+  {
+    "term": "Transfer to a manual account",
+    "summary": "a payment between an imported account and a manual account, recognised by the manual account's IBAN as the payment's counterparty IBAN (never by name: one person may be paid on several accounts).",
+    "definition": "a payment between an imported account and a manual account, recognised by the manual account's IBAN as the payment's counterparty IBAN (never by name: one person may be paid on several accounts). It has one side only: the manual account has no transactions. The Ledger derives it on every read (`ownTransfer`), so setting, changing or removing the IBAN re-evaluates stored transactions and new imports alike, and the account change set lists the transactions whose reporting it changes. It is not a transfer: it counts in cash flow (net, monthly overview, runway, forecast) because the money left the imported accounts. Its *kind* follows the manual account's type: savings and investment are *saving*, loan and other_liability *loan repayment* — neither is consumption, so insights and the briefing's spending findings leave them out (`consumptionOnly`) and the summary and monthly overview show them apart (`monthlySaving`, `monthlyLoanRepayment`; `saving`, `loanRepayment`). Other types (a manual checking account, card, property, other asset) are *other*: reported like any payment, since what the money bought there is not seen. A linked transfer between imported accounts stays a transfer, and import never pairs a payment to a manual account's IBAN with another account's row. See `docs/adr/0002-transfers-to-manual-accounts.md`.",
+    "avoid": "allocation, alias transfer"
   },
   {
     "term": "Duplicate",
@@ -83,8 +101,8 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   },
   {
     "term": "Change set",
-    "summary": "one applied change to categorization (recategorizing rows, creating, renaming, archiving or merging a category, creating or disabling a rule), recorded with its actor and reason, and undoable as a whole.",
-    "definition": "one applied change to categorization (recategorizing rows, creating, renaming, archiving or merging a category, creating or disabling a rule), recorded with its actor and reason, and undoable as a whole.",
+    "summary": "one applied change to categorization (recategorizing rows, creating, renaming, archiving or merging a category, creating or disabling a rule) or to an account (creating a manual account, changing an account, archiving a manual one), recorded with its actor and reason, and undoable as a whole.",
+    "definition": "one applied change to categorization (recategorizing rows, creating, renaming, archiving or merging a category, creating or disabling a rule) or to an account (creating a manual account, changing an account, archiving a manual one), recorded with its actor and reason, and undoable as a whole. Each domain lists, reads and undoes only its own sets (`changeSets.ts`).",
     "avoid": null
   },
   {
@@ -137,8 +155,8 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   },
   {
     "term": "Net worth (on a day)",
-    "summary": "known balances of bank accounts minus credit card debt, over the accounts whose balance is known that day (`balanceHistory.ts`).",
-    "definition": "known balances of bank accounts minus credit card debt, over the accounts whose balance is known that day (`balanceHistory.ts`). Complete only when every account is known; investments are not tracked and never included. Transfers between own accounts leave it unchanged.",
+    "summary": "known balances of imported accounts minus liability (credit card, loan) debt, over the accounts whose balance is known that day (`balanceHistory.ts`).",
+    "definition": "known balances of imported accounts minus liability (credit card, loan) debt, over the accounts whose balance is known that day (`balanceHistory.ts`). Complete only when every account is known; investments are not tracked and never included. Transfers between own accounts leave it unchanged.",
     "avoid": null
   },
   {
@@ -149,8 +167,8 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   },
   {
     "term": "Manual balance",
-    "summary": "a balance snapshot the user sets (`source: manual`) for an account whose export has no balance, e.g. a credit card (debt is negative).",
-    "definition": "a balance snapshot the user sets (`source: manual`) for an account whose export has no balance, e.g. a credit card (debt is negative). Every balance view uses it like an imported one; an import of the same day replaces it.",
+    "summary": "a balance snapshot the user sets (`source: manual`) for an imported account whose export has no balance (a manual account takes none), e.g. a credit card (debt is negative).",
+    "definition": "a balance snapshot the user sets (`source: manual`) for an imported account whose export has no balance (a manual account takes none), e.g. a credit card (debt is negative). Every balance view uses it like an imported one; an import of the same day replaces it.",
     "avoid": null
   },
   {

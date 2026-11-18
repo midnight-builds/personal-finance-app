@@ -8,7 +8,48 @@ forecasts and AI tools ask the Ledger instead of querying
 `normalized_transactions` themselves.
 
 **Countable transaction** — a transaction the Ledger includes by default:
-booked (not pending) and not a transfer between own accounts.
+booked (not pending) and not a transfer between own accounts. A transfer to a
+manual account is countable: it is cash flow.
+
+**Account** — a bank account, card, loan or asset the household tracks. Its
+*type* (`account_subtype`) is one of checking, savings, credit_card, loan,
+investment, property, other_asset, other_liability; credit_card, loan and
+other_liability are liabilities, whose debt is stated as a positive amount and
+stored as a negative balance (`balanceFromDebt`). Its *tracking* says where its
+data comes from. It also has an *ownership share* (0–100 %, default 100: the
+household's part, for net worth only, never for cash flow), a *currency*
+(default EUR; stored, never converted) and an optional *update interval* (days
+between balance updates, for staleness). Created, changed, archived and undone
+through account change sets (`accountChanges.ts`), with an actor.
+_Avoid_: asset item, alias (for the account; its name is what agents see)
+
+**Tracking (of an account)** — `imported`: its transactions and balance come
+from bank exports (every account an import creates); `manual`: nothing is
+imported into it (an import naming it is refused, `409 account_manual`), and it
+has no balance yet (dated balance observations come later). Every balance view
+and aggregate covers imported accounts only. Set when the account is created,
+not changed afterwards. Only a manual account can be archived: hidden, it stops
+recognising transfers, and its history is kept.
+
+**Transfer to a manual account** — a payment between an imported account and a
+manual account, recognised by the manual account's IBAN as the payment's
+counterparty IBAN (never by name: one person may be paid on several accounts).
+It has one side only: the manual account has no transactions. The Ledger derives
+it on every read (`ownTransfer`), so setting, changing or removing the IBAN
+re-evaluates stored transactions and new imports alike, and the account change
+set lists the transactions whose reporting it changes. It is not a transfer: it
+counts in cash flow (net, monthly overview, runway, forecast) because the money
+left the imported accounts. Its *kind* follows the manual account's type:
+savings and investment are *saving*, loan and other_liability *loan repayment*
+— neither is consumption, so insights and the briefing's spending findings leave
+them out (`consumptionOnly`) and the summary and monthly overview show them
+apart (`monthlySaving`, `monthlyLoanRepayment`; `saving`, `loanRepayment`).
+Other types (a manual checking account, card, property, other asset) are
+*other*: reported like any payment, since what the money bought there is not
+seen. A linked transfer between imported accounts stays a transfer, and import
+never pairs a payment to a manual account's IBAN with another account's row.
+See `docs/adr/0002-transfers-to-manual-accounts.md`.
+_Avoid_: allocation, alias transfer
 
 **Duplicate** — a row of an import that the account already has: same
 booking date, amount and counterparty (a missing counterparty matches a
@@ -93,7 +134,9 @@ _Avoid_: deleted category
 
 **Change set** — one applied change to categorization (recategorizing rows,
 creating, renaming, archiving or merging a category, creating or disabling a
-rule), recorded with its actor and reason, and undoable as a whole.
+rule) or to an account (creating a manual account, changing an account,
+archiving a manual one), recorded with its actor and reason, and undoable as a
+whole. Each domain lists, reads and undoes only its own sets (`changeSets.ts`).
 
 **Plan** — a change set worked out without writing anything: what would move
 where, and what is left out as an exception. Applying needs the plan's token,
@@ -130,8 +173,8 @@ account's balance is unknown, and so is a day with bookings after the snapshot
 the balance rests on (rows with a blank Saldo): a balance series never carries
 a stale balance or one past or before the data.
 
-**Net worth (on a day)** — known balances of bank accounts minus credit card
-debt, over the accounts whose balance is known that day (`balanceHistory.ts`).
+**Net worth (on a day)** — known balances of imported accounts minus
+liability (credit card, loan) debt, over the accounts whose balance is known that day (`balanceHistory.ts`).
 Complete only when every account is known; investments are not tracked and
 never included. Transfers between own accounts leave it unchanged.
 
@@ -141,7 +184,7 @@ without any snapshot refuses one (`balance_snapshot_missing`), and one dated
 after the latest snapshot waits for a later snapshot (listed as not `applied`).
 
 **Manual balance** — a balance snapshot the user sets (`source: manual`) for an
-account whose export has no balance, e.g. a credit card (debt is negative). Every
+imported account whose export has no balance (a manual account takes none), e.g. a credit card (debt is negative). Every
 balance view uses it like an imported one; an import of the same day replaces it.
 
 **Recurring pattern** — a counterparty an account pays again and again,
