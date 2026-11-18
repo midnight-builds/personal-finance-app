@@ -52,7 +52,7 @@ käyttäjä tai agentti voi silti hylätä tai luokitella sen.
 
 ## Luodut kuviot
 
-Käyttäjä tai agentti voi luoda kuukausi- tai viikkokuvion, jota tunnistus ei
+Käyttäjä tai agentti voi luoda kuukausi-, viikko- tai vuosikuvion (vuosikuviot alla), jota tunnistus ei
 ole ehdottanut (`POST /patterns`, MCP `create_recurring_pattern`; GLOSSARY.md
 "Created pattern"), esimerkiksi juuri alkaneen sopimuksen. Yksi veloitus riittää
 todisteeksi. Kuvio (`origin: created`) on heti vahvistettu tekijänsä
@@ -73,13 +73,48 @@ ennusteessa (ei myöskään epävarmoissa), ellei sen omien veloitusten varmuus 
 vähintään 0,75, ja tunnistus käsittelee sitä kuten omaansa (löytäessään se
 muuttuu tunnistetuksi, veloitusten loputtua se poistuu käytöstä).
 
+## Vuosikuviot
+
+Vuosikuvio (`pattern_type: annual`) on tunnistettu (veloitukset 330–400 päivän
+välein), vahvistettu vuosikysymyksellä (`pattern_confirmations`) tai luotu
+vuosittaisena (`interval: yearly`). Ennuste laskee sen `annualItems`-listaan
+vain sen tyypillisessä kuukaudessa (`typical_month`, viimeisimmän veloituksen
+kuukausi), `projectedTotal`-summan päälle; kohteessa on nyt myös `patternId`,
+`state`, `origin` ja `lapsed`. Kuukausittaiseen tilaussummaan vuosikuvio ei
+kuulu.
+
+- **Luonti:** yksi veloitus riittää; usean veloituksen on oltava vähintään 300
+  päivän päässä toisistaan ja ±25 % odotetusta summasta (summatoleranssi tunnistuksen
+  vuosisäännöistä; 300 päivää, jotta viikkoja aiemmin maksettu lasku käy mutta
+  saman vuoden toinen veloitus ei vie sen paikkaa). Myöhemmät veloitukset
+  liittyvät kuvioon ja siirtävät sen tyypillistä kuukautta.
+- **Yksi kuvio per tili ja vastapuoli:** aktiivinen tunnistettu tai
+  vuosikysymyksellä vahvistettu vuosikuvio palauttaa `409 pattern_exists`
+  (päätä se sen sijaan). Luonti ratkaisee saman tilin ja vastapuolen avoimen
+  vuosikysymyksen (`superseded`; vuosikuvio myös muiden tilien kysymykset
+  samasta maksusta: sama vastapuoli, kuukauden ja 25 %:n sisällä). Avoin
+  kysymys piilotetaan, kun tilillä on vastapuolelle aktiivinen kuvio tai kun
+  toisen tilin laskettava (ei hylätty, peruttu eikä pysähtynyt) vuosikuvio
+  laskee saman maksun, eikä piilotettua tai ratkaistua kysymystä voi enää vahvistaa
+  (`409 pattern_exists` / `409 not_pending`), joten samaa maksua ei lasketa
+  kahdesti eikä kuukausikuvio muutu vuosikuvioksi.
+- **Päätökset:** vuosikuvion voi vahvistaa tai hylätä kuten minkä tahansa
+  kuvion (`POST /patterns/:id/decision`); hylätty jää ennusteesta pois. Päätös
+  koskee kuviota sen lajina (vuosi tai kuukausi/viikko): kuukausikuvion
+  hylkäys ei siirry riville, joka muuttuu vuosikuvioksi, eikä päinvastoin.
+- **Pysähtyminen:** vuosikuvio pysähtyy kahden vuoden ja 35 päivän (765 pv)
+  jälkeen viimeisimmästä veloituksesta, ks. alla; pysähtyneet näkyvät
+  `lapsedAnnualItems`-listassa. Aiemmin tunnistettu vuosikuvio laski
+  ennusteessa ikuisesti.
+
 ## Pysähtyneet kuviot
 
-Kuukausi- tai viikkokuvio, tunnistettu tai luotu, **pysähtyy** (`lapsed`,
-GLOSSARY.md "Lapsed pattern"), kun vastapuolelta ei ole tullut veloitusta kahteen
-jaksoon: tilin viimeisin kirjaus (ei tämä päivä, joten jäljessä oleva vienti ei
-pysäytä mitään) on vähintään 2 × 31 + 5 = 67 päivää (viikkokuvio 2 × 7 + 3 = 17)
-viimeisimmän veloituksen jälkeen. Veloitukseksi käy mikä tahansa vastapuolen
+Kuukausi-, viikko- tai vuosikuvio, tunnistettu, vahvistettu tai luotu,
+**pysähtyy** (`lapsed`, GLOSSARY.md "Lapsed pattern"), kun vastapuolelta ei ole
+tullut veloitusta kahteen jaksoon: tilin viimeisin kirjaus (ei tämä päivä, joten
+jäljessä oleva vienti ei pysäytä mitään) on vähintään 2 × 31 + 5 = 67 päivää
+(viikkokuvio 2 × 7 + 3 = 17, vuosikuvio 2 × 365 + 35 = 765) viimeisimmän
+veloituksen jälkeen. Veloitukseksi käy mikä tahansa vastapuolen
 laskettava meno, joka ei ole siirto, summasta riippumatta, joten hinnanmuutos ei
 pysäytä elävää kuviota. Pysähtynyt kuvio säilyy päätöshistorioineen ja näkyy
 `/recurring`-listassa (`lapsed: true`, `lapsed_since`) sekä ennusteen

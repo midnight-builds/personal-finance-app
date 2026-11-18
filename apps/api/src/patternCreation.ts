@@ -10,9 +10,10 @@ import { db } from './db.js';
 import { DomainError } from './http/errors.js';
 import { ledgerEntries } from './ledger.js';
 import { CREATED_AMOUNT_TOLERANCE, MIN_DAYS_APART, fitsExpectedAmount, isSavingsCharge, refreshLapse, scorePattern } from './patterns.js';
-import { patternById, type PatternView } from './patternDecisions.js';
+import { insertDecision, patternById, type PatternView } from './patternDecisions.js';
+import { supersedeConfirmations } from './patternConfirmations.js';
 
-const INTERVAL_DAYS: Record<CreatedPatternInterval, number> = { weekly: 7, monthly: 30 };
+const INTERVAL_DAYS: Record<CreatedPatternInterval, number> = { weekly: 7, monthly: 30, yearly: 365 };
 
 const invalid = (code: string, details: unknown) => new DomainError(code, 400, details);
 
@@ -66,12 +67,12 @@ function checkEvidence(input: PatternCreateRequest): Evidence[] {
   const currencies = new Set(entries.map((e) => e.currency));
   if (currencies.size > 1) throw invalid('evidence_currency_mismatch', { currencies: [...currencies] });
 
-  const mismatched = ids.filter((id) => !fitsExpectedAmount(byId.get(id)!.amount, input.expectedAmount));
+  const mismatched = ids.filter((id) => !fitsExpectedAmount(byId.get(id)!.amount, input.expectedAmount, input.interval));
   if (mismatched.length) {
     throw invalid('evidence_amount_mismatch', {
       transactionIds: mismatched,
       expectedAmount: input.expectedAmount,
-      tolerance: CREATED_AMOUNT_TOLERANCE,
+      tolerance: CREATED_AMOUNT_TOLERANCE[input.interval],
     });
   }
 
@@ -109,9 +110,10 @@ export type CreateResult = {
 const CONFIRMED_AS = { recurring: 'confirmed_recurring', subscription: 'confirmed_subscription' } as const;
 
 /**
- * Creates `actor`'s monthly or weekly pattern from the charges it cites and confirms it
- * with a pattern decision of `input.kind`, in one transaction. There is one pattern per
- * account and counterparty:
+ * Creates `actor`'s weekly, monthly or yearly (annual) pattern from the charges it cites
+ * and confirms it with a pattern decision of `input.kind`, in one transaction; pending
+ * annual confirmations of the account and counterparty are superseded. There is one
+ * pattern per account and counterparty:
  *
  * - none yet: a new row with origin `created`;
  * - an inactive one (its charges stopped, or detected on too little evidence): that row
@@ -120,7 +122,8 @@ const CONFIRMED_AS = { recurring: 'confirmed_recurring', subscription: 'confirme
  *   is confirmed as that kind, nothing is written (`created` and `updated` false);
  *   otherwise its values and evidence are replaced (a new price, say) and, unless it
  *   is already confirmed as `kind`, the decision is appended;
- * - an active detected one: `409 pattern_exists` with its id, to be decided instead
+ * - an active detected one, monthly, weekly or annual (also one confirmed through an
+ *   annual confirmation): `409 pattern_exists` with its id, to be decided instead
  *   (`POST /patterns/:id/decision`).
  */
 export function createPattern(input: PatternCreateRequest, actor: string): CreateResult {
@@ -131,6 +134,10 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
   // The name as stored, also when the actor named it redacted.
   const counterparty = evidence[0].counterparty;
   const intervalDays = INTERVAL_DAYS[input.interval];
+  // A yearly pattern is an annual one, forecast in the month of its latest charge
+  // (detection sets typical_month the same way); its kind lives in its decision.
+  const yearly = input.interval === 'yearly';
+  const patternType = yearly ? 'annual' : input.kind;
 
   const existing = db
     .prepare('SELECT id FROM recurring_patterns WHERE account_id = ? AND counterparty_name = ?')
@@ -143,7 +150,7 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
     }
     const unchanged =
       current.state === CONFIRMED_AS[input.kind] &&
-      current.detected_type === input.kind &&
+      current.detected_type === patternType &&
       current.interval_days === intervalDays &&
       current.typical_amount === input.expectedAmount;
     if (unchanged) return { pattern: current, created: false, updated: false };
@@ -153,7 +160,7 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
   const score = scorePattern(evidence.map((e) => ({ amount: e.amount, date: e.bookedAt, viaIban: e.viaIban, savings: e.savings })));
   const values = {
     updated_at: now,
-    pattern_type: input.kind,
+    pattern_type: patternType,
     interval_days: intervalDays,
     typical_amount: input.expectedAmount,
     currency: evidence[0].currency,
@@ -161,7 +168,7 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
     last_seen: evidence.at(-1)!.bookedAt,
     occurrence_count: evidence.length,
     is_active: 1,
-    typical_month: null,
+    typical_month: yearly ? Number(evidence.at(-1)!.bookedAt.slice(5, 7)) : null,
     user_confirmed: null,
     confidence: score.confidence,
     confidence_factors: JSON.stringify(score.factors),
@@ -176,8 +183,10 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
   const id = existing?.id ?? crypto.randomUUID();
   // A new or taken-over pattern always gets its decision, also when an earlier one on
   // the counterparty said the same: the history then shows who created it. A
-  // re-stated one only when its decision changes (re-stating appends nothing).
-  const decide = !restated || current!.state !== CONFIRMED_AS[input.kind];
+  // re-stated one only when its decision changes (re-stating appends nothing), or when
+  // it turns annual or back: decisions are of their kind (patternDecisions.ts).
+  const decide =
+    !restated || current!.state !== CONFIRMED_AS[input.kind] || (current!.detected_type === 'annual') !== yearly;
 
   db.exec('BEGIN');
   try {
@@ -192,12 +201,14 @@ export function createPattern(input: PatternCreateRequest, actor: string): Creat
          VALUES (?, ?, ?, ?, ${columns.map(() => '?').join(', ')})`
       ).run(id, now, input.accountId, counterparty, ...Object.values(values));
     }
-    if (decide) {
-      db.prepare(
-        `INSERT INTO pattern_decisions (created_at, account_id, counterparty_name, pattern_id, decision, actor)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).run(now, input.accountId, counterparty, id, input.kind, actor);
-    }
+    if (decide) insertDecision(input.accountId, counterparty, id, yearly, input.kind, actor, now);
+    // The counterparty has its pattern now: a pending annual question about it is answered.
+    supersedeConfirmations(
+      input.accountId,
+      counterparty,
+      yearly ? { month: values.typical_month!, amount: input.expectedAmount } : null,
+      now
+    );
     // Cited charges may be old: the pattern may have lapsed already (GLOSSARY.md, "Lapsed pattern").
     refreshLapse(input.accountId);
     db.exec('COMMIT');

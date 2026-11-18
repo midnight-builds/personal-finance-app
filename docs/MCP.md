@@ -50,15 +50,20 @@ detected pattern itself are never touched. To keep the agent read-only here, hid
 The agent can also add a pattern detection never proposed (GLOSSARY.md, "Created
 pattern"), e.g. a contract the user just started: `create_recurring_pattern` with
 the account, the counterparty as on the transactions (as the agent sees it, also
-redacted), `kind` (`recurring` or `subscription`), `interval` (`weekly` or
-`monthly`), `expectedAmount` and the ids of one or more existing charges. The API
-checks every cited charge (booked, an expense, not a transfer, that account and
-counterparty, within 20 % of the expected amount, not two in one period) and names
-the failing ids in the error. The pattern gets `origin: created` and `created_by`,
-and a pattern decision of `kind` under the agent's actor, so it counts at once like a
-confirmed pattern. Detection never deactivates, retypes or re-prices it and keeps one
-pattern per account and counterparty. When the account already has an active
-detected pattern for the counterparty, the tool returns `409 pattern_exists` with
+redacted), `kind` (`recurring` or `subscription`), `interval` (`weekly`,
+`monthly` or `yearly`), `expectedAmount` and the ids of one or more existing
+charges. The API checks every cited charge (booked, an expense, not a transfer,
+that account and counterparty, within 20 % of the expected amount, 25 % yearly,
+not two in one period: 5, 20 or 300 days) and names the failing ids in the error.
+The pattern gets `origin: created` and `created_by`, and a pattern decision of
+`kind` under the agent's actor, so it counts at once like a confirmed pattern. A
+yearly one is an annual pattern, forecast in the month of its latest charge
+(`annualItems`), and creating it resolves the pending annual confirmations of the
+counterparty about the same payment, also on other accounts. Detection never deactivates, retypes or re-prices it and
+keeps one pattern per account and counterparty. Annual patterns, detected or
+created, can be decided with `answer_recurring_question` too. When the account
+already has an active detected pattern for the counterparty (monthly, weekly or
+annual), the tool returns `409 pattern_exists` with
 its id, to be decided with `answer_recurring_question` instead; creating an active
 created pattern again re-states it (`updated: true`, e.g. a new price), and the
 same values again write nothing. Two periods after the counterparty's latest
@@ -69,7 +74,7 @@ withdraws a created pattern and hands it to detection. Creating writes only the
 pattern and its decision. `origin`, `lapsed` and `lapsed_since` are in
 `list_recurring` and decision responses; forecast pattern items carry `origin`,
 `lapsed`, `lapsedSince` and `chargesInMonth`, and lapsed ones are listed apart in
-`lapsedRecurring`.
+`lapsedRecurring` (annual ones, two years without a charge, in `lapsedAnnualItems`).
 
 `get_glossary` is a tool rather than an MCP resource: resources are read by the
 client application, and an agent such as Hermes reliably reaches only tools. Its

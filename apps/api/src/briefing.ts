@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { db } from './db.js';
 import { getOpenAIApiKey } from './settings.js';
 import { enhanceBriefingDescriptions } from './ai/briefingEnhancer.js';
-import { listPendingConfirmations } from './patternConfirmations.js';
+import { listPendingConfirmations, openConfirmationIds } from './patternConfirmations.js';
 import { activePatterns, establishedSubscriptions, openQuestionIds, recurringQuestions } from './patternDecisions.js';
 import { computeMonthlyForecast } from './forecast.js';
 import { accountBalances, daysBefore, ledgerEntries, ledgerTotals, today } from './ledger.js';
@@ -257,9 +257,13 @@ function pendingConfirmations(): FindingInput[] {
  */
 export function withoutAnsweredQuestions<F extends { finding_type: string; metadata: string | null }>(findings: F[]): F[] {
   const open = openQuestionIds();
-  return findings.filter(
-    (f) => f.finding_type !== 'recurring_question' || open.has(JSON.parse(f.metadata ?? '{}').patternId)
-  );
+  // An annual confirmation is answered once confirmed, rejected or superseded by a pattern.
+  const confirmations = openConfirmationIds();
+  return findings.filter((f) => {
+    if (f.finding_type === 'recurring_question') return open.has(JSON.parse(f.metadata ?? '{}').patternId);
+    if (f.finding_type === 'pattern_confirmation') return confirmations.has(JSON.parse(f.metadata ?? '{}').confirmationId);
+    return true;
+  });
 }
 
 /** The open questions a briefing shows; the rest wait for a later briefing or MCP. */

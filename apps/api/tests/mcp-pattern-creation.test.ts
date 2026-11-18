@@ -230,3 +230,44 @@ test('MCP: get_forecast counts a weekly pattern once per expected charge in the 
     assert.deepEqual(month.knownFixed.map((i) => [i.chargesInMonth, i.amount]), [[mondays, mondays * 25]], month.targetMonth);
   }
 });
+
+test('MCP: the agent creates a yearly pattern; it is forecast in its month, its annual question resolved, and it can be rejected', async () => {
+  const agent = await connectAgent();
+  const a = account();
+  // Charged a year before the first forecast month (next month).
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 10));
+  const day = `${next.getUTCFullYear() - 1}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-10`;
+  const tx = a.charge('Vakuutusyhtiö Turva', -300, day);
+  detectPatterns(a.id);
+  const pending = () => db.prepare("SELECT COUNT(*) AS n FROM pattern_confirmations WHERE status = 'pending'").get() as { n: number };
+  assert.equal(pending().n, 1, 'asked as an annual confirmation');
+
+  const res = await agent.call('create_recurring_pattern', {
+    accountId: a.id,
+    counterparty: 'Vakuutusyhtiö Turva',
+    kind: 'recurring',
+    interval: 'yearly',
+    expectedAmount: 300,
+    evidenceTransactionIds: [tx],
+  });
+  assert.equal(res.pattern.pattern_type, 'annual');
+  assert.equal(res.pattern.typical_month, next.getUTCMonth() + 1);
+  assert.equal(res.pattern.state, 'confirmed_recurring');
+  assert.equal(res.pattern.lapsed, false);
+  assert.equal(pending().n, 0, 'the annual question is resolved');
+
+  type Month = { annualItems: Array<{ patternId: string; origin: string; amount: number }> };
+  const forecast = (await agent.call('get_forecast')) as Month[];
+  assert.deepEqual(forecast[0].annualItems.map((i) => [i.patternId, i.origin, i.amount]), [[res.pattern.id, 'created', 300]]);
+  assert.deepEqual([...forecast[1].annualItems, ...forecast[2].annualItems], []);
+
+  const rejected = await agent.call('answer_recurring_question', { patternId: res.pattern.id, decision: 'not_recurring' });
+  assert.equal(rejected.pattern.state, 'rejected');
+  assert.deepEqual(((await agent.call('get_forecast')) as Month[])[0].annualItems, []);
+  const log = await agent.call('list_pattern_decisions');
+  assert.deepEqual(
+    log.items.map((i: { actor: string; decision: string; annual: boolean }) => [i.actor, i.decision, i.annual]),
+    [[ACTOR, 'not_recurring', true], [ACTOR, 'recurring', true]]
+  );
+});

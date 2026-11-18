@@ -90,7 +90,7 @@ const dataTools: ToolDefinition[] = [
         'monthly/weekly patterns: confirmed, or confidence >= 0.75) with knownFixedTotal; uncertainRecurring ' +
         '(unconfirmed patterns below 0.75, maybe fixed costs) with uncertainRecurringTotal; lapsedRecurring ' +
         '(patterns with no charge for two periods, counted on the account\'s latest booking: lapsed true, ' +
-        'lapsedSince; in no total until a charge comes again); annualItems; ' +
+        'lapsedSince; in no total until a charge comes again); annualItems (annual patterns of that month: detected, confirmed or created yearly, with patternId, state, origin; rejected ones left out) and lapsedAnnualItems (annual patterns with no charge for two years, in no total); ' +
         'each pattern item\'s amount is its charges in that calendar month (chargesInMonth: 1 monthly, 4 or 5 ' +
         'weekly) times its typical amount; ' +
         'historicalAvg (same month in earlier years); projectedTotal = max(historicalAvg, knownFixedTotal) + annual ' +
@@ -119,12 +119,13 @@ const dataTools: ToolDefinition[] = [
     'list_recurring',
     'Recurring payments',
     'Active recurring patterns (subscriptions, monthly and annual payments), the user\'s decisions applied: ' +
-      'pattern_type is the decided type when there is one (detected_type is what detection found), state is ' +
+      'pattern_type is the decided type when there is one (detected_type is what detection found; an annual ' +
+      'pattern stays annual, with typical_month, and established null), state is ' +
       'unconfirmed, confirmed_recurring or confirmed_subscription, user_confirmed 1 when confirmed, confidence ' +
       '(0-1) with confidence_factors, established (counts as a fixed cost and, as a subscription, in the ' +
       'subscription total, unless lapsed), decided_by and decided_at, origin (detected, or created by an actor ' +
       'with create_recurring_pattern: created_by, evidence_transaction_ids), lapsed with lapsed_since (no charge ' +
-      'for two periods, counted on the account\'s latest booking: kept and listed, but counted nowhere until a ' +
+      'for two periods (annual: two years), counted on the account\'s latest booking: kept and listed, but counted nowhere until a ' +
       'charge comes again), monthly_amount (a month at the typical amount: weekly ones 52/12 charges). Patterns ' +
       'the user rejected are not listed ' +
       '(list_pattern_decisions has them). The id is the patternId of answer_recurring_question.',

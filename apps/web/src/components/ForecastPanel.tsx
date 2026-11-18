@@ -47,8 +47,8 @@ export default function ForecastPanel() {
                 {f.knownFixed.length} kuukausimaksua
                 {(f.uncertainRecurring?.length ?? 0) > 0 &&
                   ` · lisäksi ${f.uncertainRecurring.length} epävarmaa (${fmt(f.uncertainRecurringTotal)})`}
-                {(f.lapsedRecurring?.length ?? 0) > 0 &&
-                  ` · ${f.lapsedRecurring!.length} pysähtynyttä ei laskettu`}
+                {(f.lapsedRecurring?.length ?? 0) + (f.lapsedAnnualItems?.length ?? 0) > 0 &&
+                  ` · ${(f.lapsedRecurring?.length ?? 0) + (f.lapsedAnnualItems?.length ?? 0)} pysähtynyttä ei laskettu`}
                 {f.historicalAvg > 0 && ` · historia: ${fmt(f.historicalAvg)}`}
               </div>
             </div>

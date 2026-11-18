@@ -63,7 +63,7 @@ export type PatternView = Omit<
   /**
    * Two periods passed without a charge, counted on the account's latest booking
    * (GLOSSARY.md, "Lapsed pattern"): it counts nowhere until a charge comes again.
-   * `lapsed_since` is the day it lapsed. Always false for annual patterns.
+   * `lapsed_since` is the day it lapsed. Annual patterns lapse with yearly periods.
    */
   lapsed: boolean;
   /**
@@ -80,7 +80,8 @@ const PATTERN_SELECT = `
   FROM recurring_patterns p
   LEFT JOIN pattern_decisions d ON d.id = (
     SELECT MAX(x.id) FROM pattern_decisions x
-    WHERE x.account_id = p.account_id AND x.counterparty_name = p.counterparty_name)`;
+    WHERE x.account_id = p.account_id AND x.counterparty_name = p.counterparty_name
+      AND x.annual = (p.pattern_type = 'annual'))`;
 
 const STATE_OF: Record<Exclude<PatternDecision, 'reset'>, PatternState> = {
   recurring: 'confirmed_recurring',
@@ -91,19 +92,19 @@ const STATE_OF: Record<Exclude<PatternDecision, 'reset'>, PatternState> = {
 function view(row: PatternRow): PatternView {
   const { confidence_factors, amount_fixed, user_confirmed, evidence_transaction_ids, savings, ...rest } = row;
   const monthly = MONTHLY_TYPES.has(row.pattern_type);
-  // Decisions are about monthly/weekly patterns. Should the row turn annual, its own
-  // confirmation rules apply; the decision applies again if it turns monthly again.
-  // `reset` takes the previous decision back.
-  const decision = monthly && row.decision !== 'reset' ? row.decision : null;
+  // A decision is about the pattern as it was when decided, annual or monthly/weekly:
+  // `PATTERN_SELECT` joins the latest of the row's kind. Should a row turn from one to
+  // the other, a decision of its new kind applies, if any; the old one applies again if
+  // it turns back. `reset` takes the previous decision back.
+  const decision = row.decision !== 'reset' ? row.decision : null;
   const state: PatternState = decision ? STATE_OF[decision] : 'unconfirmed';
   // A decision on a monthly/weekly pattern names its type; annual patterns keep theirs.
   const type = monthly && (decision === 'recurring' || decision === 'subscription') ? decision : row.pattern_type;
   const { decision: _decision, ...fields } = rest;
-  const lapsedSince = monthly ? row.lapsed_since : null;
   return {
     ...fields,
-    lapsed: lapsedSince !== null,
-    lapsed_since: lapsedSince,
+    lapsed: row.lapsed_since !== null,
+    lapsed_since: row.lapsed_since,
     monthly_amount: monthly ? Math.round((row.typical_amount ?? 0) * chargesPerMonth(row.interval_days) * 100) / 100 : null,
     decided_by: decision ? row.decided_by : null,
     decided_at: decision ? row.decided_at : null,
@@ -154,6 +155,11 @@ export function activePatterns(): PatternView[] {
 /** Monthly and weekly patterns (subscriptions and recurring), active and not rejected. */
 export function monthlyPatterns(): PatternView[] {
   return activePatterns().filter((p) => MONTHLY_TYPES.has(p.pattern_type));
+}
+
+/** Annual patterns (detected, confirmed or created yearly), active and not rejected or withdrawn. */
+export function annualPatterns(): PatternView[] {
+  return activePatterns().filter((p) => p.pattern_type === 'annual');
 }
 
 /** Subscriptions counted in the monthly subscription total: confirmed, or confident enough, and not lapsed. */
@@ -265,25 +271,38 @@ export function recurringQuestions(): RecurringQuestion[] {
 export type DecisionResult = { pattern: PatternView; recorded: boolean };
 
 /**
- * Records `actor`'s decision on a monthly or weekly pattern. A decision is appended to
- * the history and never changed; re-stating the latest one appends nothing. It writes
- * nothing else: transactions, categories and the detected pattern stay as they are.
- * Every actor is equally trusted (docs/adr/0001-actor-without-authentication.md): any
- * of them may replace any decision, and the history keeps who decided what.
+ * Records `actor`'s decision on a pattern, monthly, weekly or annual; it is marked
+ * with the pattern's kind and applies while the pattern is of that kind (`view`). A
+ * decision is appended to the history and never changed; re-stating the latest one
+ * appends nothing. It writes nothing else: transactions, categories and the detected
+ * pattern stay as they are. Every actor is equally trusted
+ * (docs/adr/0001-actor-without-authentication.md): any of them may replace any
+ * decision, and the history keeps who decided what.
  */
 export function decidePattern(patternId: string, decision: PatternDecision, actor: string): DecisionResult {
   const row = db.prepare(`${PATTERN_SELECT} WHERE p.id = ?`).get(patternId) as PatternRow | undefined;
   if (!row) throw DomainError.notFound();
-  if (!MONTHLY_TYPES.has(row.pattern_type) || row.counterparty_name === null) {
-    // Annual patterns are confirmed through pattern_confirmations.
-    throw new DomainError('not_monthly_pattern', 409);
-  }
+  // Decisions are keyed by counterparty; detection never stores a pattern without one.
+  if (row.counterparty_name === null) throw new DomainError('no_counterparty', 409);
   if ((row.decision ?? 'reset') === decision) return { pattern: view(row), recorded: false };
-  db.prepare(
-    `INSERT INTO pattern_decisions (created_at, account_id, counterparty_name, pattern_id, decision, actor)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(new Date().toISOString(), row.account_id, row.counterparty_name, row.id, decision, actor);
+  insertDecision(row.account_id, row.counterparty_name, row.id, row.pattern_type === 'annual', decision, actor);
   return { pattern: patternById(patternId)!, recorded: true };
+}
+
+/** Appends a decision on the pattern `patternId`, of its kind: annual or monthly/weekly. */
+export function insertDecision(
+  accountId: string,
+  counterparty: string,
+  patternId: string,
+  annual: boolean,
+  decision: PatternDecision,
+  actor: string,
+  at: string = new Date().toISOString()
+): void {
+  db.prepare(
+    `INSERT INTO pattern_decisions (created_at, account_id, counterparty_name, pattern_id, decision, actor, annual)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(at, accountId, counterparty, patternId, decision, actor, annual ? 1 : 0);
 }
 
 export type PatternDecisionEntry = {
@@ -294,7 +313,9 @@ export type PatternDecisionEntry = {
   counterparty: string;
   decision: PatternDecision;
   actor: string;
-  /** Whether a newer decision on the same pattern replaced this one. */
+  /** Made on an annual pattern; it applies only while the pattern is annual. */
+  annual: boolean;
+  /** Whether a newer decision on the same pattern (of the same kind) replaced this one. */
   superseded: boolean;
 };
 
@@ -303,10 +324,10 @@ export function listPatternDecisions(limit: number, offset: number) {
   const { total } = db.prepare('SELECT COUNT(*) AS total FROM pattern_decisions').get() as { total: number };
   const rows = db
     .prepare(
-      `SELECT d.id, d.created_at, d.pattern_id, d.account_id, d.counterparty_name, d.decision, d.actor,
+      `SELECT d.id, d.created_at, d.pattern_id, d.account_id, d.counterparty_name, d.decision, d.actor, d.annual,
               EXISTS (SELECT 1 FROM pattern_decisions n
                       WHERE n.account_id = d.account_id AND n.counterparty_name = d.counterparty_name
-                        AND n.id > d.id) AS superseded
+                        AND n.annual = d.annual AND n.id > d.id) AS superseded
        FROM pattern_decisions d ORDER BY d.id DESC LIMIT ? OFFSET ?`
     )
     .all(limit, offset) as Array<{
@@ -317,6 +338,7 @@ export function listPatternDecisions(limit: number, offset: number) {
     counterparty_name: string;
     decision: PatternDecision;
     actor: string;
+    annual: number;
     superseded: number;
   }>;
   const items: PatternDecisionEntry[] = rows.map((r) => ({
@@ -327,6 +349,7 @@ export function listPatternDecisions(limit: number, offset: number) {
     counterparty: r.counterparty_name,
     decision: r.decision,
     actor: r.actor,
+    annual: r.annual === 1,
     superseded: r.superseded === 1,
   }));
   return { total, limit, offset, items };

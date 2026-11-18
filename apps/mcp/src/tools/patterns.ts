@@ -12,7 +12,7 @@ import { APPEND_ONLY, READ_ONLY, defineTool, type ToolDefinition } from './types
 
 const ERROR_CODES =
   'Errors come back as "Finance API error <status>: {"error": <code>, "details": ...}": 400 invalid_request; ' +
-  '404 not_found (no such pattern); 409 not_monthly_pattern (annual patterns are not decided here).';
+  '404 not_found (no such pattern); 409 no_counterparty (a pattern without a counterparty cannot be decided).';
 
 export const patternTools: ToolDefinition[] = [
   defineTool({
@@ -40,11 +40,14 @@ export const patternTools: ToolDefinition[] = [
     name: 'answer_recurring_question',
     title: 'Answer an "is this recurring?" question',
     description:
-      'Records what a monthly or weekly pattern is: recurring (a recurring cost that is not a subscription: a ' +
+      'Records what a monthly, weekly or annual pattern is: recurring (a recurring cost that is not a subscription: a ' +
       'bill, savings, a payment to a person), subscription, or not_recurring (not a recurring cost: it leaves the ' +
       'forecast, the subscription total and the briefing, and is never asked about again). patternId comes from ' +
-      'list_recurring_questions or list_recurring: any active monthly/weekly pattern, also an established one ' +
-      'never asked about (e.g. reject a confident pattern that is really savings or a one-off series). The ' +
+      'list_recurring_questions or list_recurring: any active pattern, also an established one never asked ' +
+      'about (e.g. reject a confident pattern that is really savings or a one-off series) and an annual one ' +
+      '(it stays annual: recurring or subscription confirm it, not_recurring takes it out of the forecast). A ' +
+      'decision on an annual pattern applies while it is annual, one on a monthly/weekly pattern while it is ' +
+      'that (list_pattern_decisions: annual). The ' +
       'decision is appended to the history under this server\'s actor (list_pattern_decisions) and survives ' +
       're-detection; a later answer replaces it, and repeating the current answer records nothing (recorded: ' +
       'false). Any decision may be replaced, also one the user made: the latest counts, and the history keeps every ' +
@@ -67,15 +70,19 @@ export const patternTools: ToolDefinition[] = [
     name: 'create_recurring_pattern',
     title: 'Create a recurring pattern',
     description:
-      'Adds a monthly or weekly pattern that detection never proposed, e.g. a contract that started last month: ' +
-      'one charge is enough as evidence. Cite the charges by id (search_transactions); each must be a booked ' +
-      'expense of that account and counterparty, not a transfer, within 20 % of expectedAmount, and charges at ' +
-      'least 5 (weekly) or 20 (monthly) days apart. The pattern is confirmed at once as kind (a pattern decision ' +
-      'under this server\'s actor, in list_pattern_decisions) and counts like any confirmed pattern: a fixed cost ' +
-      'in the forecast and, as a subscription, in the subscription total. Its origin is created and created_by ' +
+      'Adds a weekly, monthly or yearly pattern that detection never proposed, e.g. a contract that started last ' +
+      'month or an annual insurance premium: one charge is enough as evidence. Cite the charges by id ' +
+      '(search_transactions); each must be a booked expense of that account and counterparty, not a transfer, ' +
+      'within 20 % of expectedAmount (25 % yearly), and charges at least 5 (weekly), 20 (monthly) or 300 ' +
+      '(yearly) days apart. The pattern is confirmed at once as kind (a pattern decision under this server\'s ' +
+      'actor, in list_pattern_decisions) and counts like any confirmed pattern: weekly and monthly ones as a ' +
+      'fixed cost in the forecast and, as a subscription, in the subscription total; a yearly one is an annual ' +
+      'pattern (pattern_type annual, typical_month = the month of its latest charge) in the forecast\'s ' +
+      'annualItems of that month only, not in the monthly subscription total. Creating one resolves the pending ' +
+      'annual confirmations of the counterparty about the same payment (within a month and 25 %), also on other accounts, so it is not counted twice. Its origin is created and created_by ' +
       'is this server\'s actor. Later charges of the counterparty near expectedAmount attach to it; detection ' +
       'never deactivates, retypes or re-prices it, and when detection finds the same pattern it stays one ' +
-      'pattern. Two periods (weekly or monthly) after the latest charge from the counterparty, counted on the ' +
+      'pattern. Two periods (weeks, months or years) after the latest charge from the counterparty, counted on the ' +
       'account\'s latest booking, it lapses (lapsed true, lapsed_since): kept with its decision, but counted ' +
       'nowhere until a charge comes again; the response shows it, also when the cited charges are old. Reject it ' +
       'with answer_recurring_question when it has really ended (that tool also changes its kind); reset withdraws it ' +
@@ -88,7 +95,8 @@ export const patternTools: ToolDefinition[] = [
       'evidence_not_booked, evidence_transfer, evidence_not_charge (income), evidence_other_counterparty, ' +
       'evidence_currency_mismatch, evidence_amount_mismatch, evidence_interval_mismatch (details name the ' +
       'transactionIds); 404 account_not_found; 409 pattern_exists (details.patternId: the account already has ' +
-      'an active detected pattern for the counterparty: decide it with answer_recurring_question instead).',
+      'an active detected pattern for the counterparty, monthly, weekly or annual (also one confirmed as annual): ' +
+      'decide it with answer_recurring_question instead).',
     inputSchema: patternCreateFields,
     annotations: APPEND_ONLY,
     run: (args, { api }) => api.post('/patterns', args),
@@ -99,8 +107,8 @@ export const patternTools: ToolDefinition[] = [
     description:
       'Every decision on a recurring pattern, newest first, from every actor (user = the web UI; any other name = an ' +
       'agent, named by its server\'s MCP_ACTOR). Each item: id, createdAt, patternId, accountId, counterparty, decision ' +
-      '(recurring, subscription, not_recurring), actor, superseded (a newer decision on the same pattern replaced ' +
-      'it). Returns { total, limit, offset, items }; page with limit/offset. A rejected pattern is left out of ' +
+      '(recurring, subscription, not_recurring), actor, annual (made on an annual pattern: applies while it is ' +
+      'annual), superseded (a newer decision of the same kind on the same pattern replaced it). Returns { total, limit, offset, items }; page with limit/offset. A rejected pattern is left out of ' +
       'list_recurring; find it here to change or reset its decision.',
     inputSchema: patternDecisionListFields,
     annotations: READ_ONLY,
