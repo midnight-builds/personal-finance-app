@@ -162,7 +162,7 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   {
     "term": "Subscription",
     "summary": "a recurring pattern told apart by its charges, not by who the merchant is: the same amount every time, booked on about the same day each month (3 days early to 5 days late), with no other charge to the counterparty in between.",
-    "definition": "a recurring pattern told apart by its charges, not by who the merchant is: the same amount every time, booked on about the same day each month (3 days early to 5 days late), with no other charge to the counterparty in between. A counterparty paid only to an IBAN (a person, an e-invoice biller) is never one unless the user says so, nor is a savings pattern. The monthly subscription total and the subscription-creep finding count established subscriptions that have not lapsed, a weekly one at 52/12 charges a month (`monthly_amount`).",
+    "definition": "a recurring pattern told apart by its charges, not by who the merchant is: the same amount every time, booked on about the same day each month (3 days early to 5 days late), with no other charge to the counterparty in between. A counterparty paid only to an IBAN (a person, an e-invoice biller) is never one unless the user says so, nor is a savings pattern. The monthly subscription total and the subscription-creep finding count established subscriptions that have not lapsed, a weekly one at 52/12 charges a month (`monthly_amount`). The monthly total (`monthlySubscriptions`) also includes yearly subscriptions (annual patterns decided as subscriptions, not lapsed) at 1/12 of their amount; `monthlySubscriptionsBreakdown` shows that share separately, and the web UI notes it next to the total.",
     "avoid": null
   },
   {

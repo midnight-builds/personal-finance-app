@@ -593,6 +593,13 @@ label {
   color: #e7edf7;
 }
 
+.cfo-metric-note {
+  display: block;
+  margin-top: 4px;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
 .cfo-accounts {
   display: flex;
   flex-direction: column;

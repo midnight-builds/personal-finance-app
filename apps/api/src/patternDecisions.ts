@@ -167,6 +167,14 @@ export function establishedSubscriptions(): PatternView[] {
   return monthlyPatterns().filter((p) => p.pattern_type === 'subscription' && p.established && !p.lapsed);
 }
 
+/**
+ * Yearly subscriptions in the monthly subscription total at 1/12 of their amount: an
+ * annual pattern only counts as a subscription once someone decided it is one.
+ */
+export function annualSubscriptions(): PatternView[] {
+  return annualPatterns().filter((p) => p.state === 'confirmed_subscription' && !p.lapsed);
+}
+
 // ── "Onko tämä toistuva?" questions ─────────────────────────────────
 
 /**

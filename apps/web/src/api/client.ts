@@ -124,7 +124,9 @@ export type HouseholdSummary = {
   liquidAssets: number;
   totalSavings: number;
   creditDebt: number;
+  /** Yearly subscriptions included at 1/12; see the breakdown. */
   monthlySubscriptions: number;
+  monthlySubscriptionsBreakdown?: { monthly: number; annualShare: number; annualCount: number };
   runwayMonths: number | null;
   accounts: AccountSignal[];
   dataAgeDays: number;

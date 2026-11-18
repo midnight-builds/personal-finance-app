@@ -1,6 +1,6 @@
 import { db } from "./db.js";
 import { accountBalances, daysBefore, ledgerEntries, today, type LedgerScope } from "./ledger.js";
-import { establishedSubscriptions } from "./patternDecisions.js";
+import { annualSubscriptions, establishedSubscriptions } from "./patternDecisions.js";
 
 export type AccountSignal = {
   id: string;
@@ -16,7 +16,10 @@ export type HouseholdSummary = {
   liquidAssets: number;
   totalSavings: number;
   creditDebt: number;
+  /** Monthly cost of subscriptions, yearly ones included at 1/12 (see the breakdown). */
   monthlySubscriptions: number;
+  /** What `monthlySubscriptions` is made of: monthly/weekly ones and the 1/12 share of yearly ones. */
+  monthlySubscriptionsBreakdown: { monthly: number; annualShare: number; annualCount: number };
   runwayMonths: number | null;
   accounts: AccountSignal[];
   dataAgeDays: number;
@@ -169,8 +172,13 @@ export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
     }, 0));
 
   // Monthly subscriptions: confirmed or confident enough and not lapsed, weekly ones at
-  // 52/12 charges a month (patternDecisions.ts)
-  const monthlySubscriptions = cents(establishedSubscriptions().reduce((sum, p) => sum + (p.monthly_amount ?? 0), 0));
+  // 52/12 charges a month, plus yearly subscriptions at 1/12 of their amount
+  // (patternDecisions.ts). The breakdown keeps the yearly share visible.
+  const monthlyOnes = cents(establishedSubscriptions().reduce((sum, p) => sum + (p.monthly_amount ?? 0), 0));
+  const annual = annualSubscriptions();
+  const annualShare = cents(annual.reduce((sum, p) => sum + Math.abs(p.typical_amount ?? 0) / 12, 0));
+  const monthlySubscriptions = cents(monthlyOnes + annualShare);
+  const monthlySubscriptionsBreakdown = { monthly: monthlyOnes, annualShare, annualCount: annual.length };
 
   // Monthly net spend (last 30 days, excluding transfers)
   const monthlyNet = net({ from: daysBefore(asOf, 30), to: asOf });
@@ -195,6 +203,7 @@ export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
     totalSavings,
     creditDebt,
     monthlySubscriptions,
+    monthlySubscriptionsBreakdown,
     runwayMonths,
     accounts,
     dataAgeDays,
