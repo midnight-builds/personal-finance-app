@@ -1,6 +1,5 @@
-import { db } from './db.js';
 import { ledgerTotals, today, type LedgerTotal } from './ledger.js';
-import { monthlyPatterns } from './patternDecisions.js';
+import { annualPatterns, monthlyPatterns } from './patternDecisions.js';
 import { chargesInMonth } from './patterns.js';
 import type { PatternOrigin, PatternState } from '@finance-app/shared';
 
@@ -23,7 +22,18 @@ export type ForecastItem = {
   /** Saved or invested rather than spent (GLOSSARY.md, "Savings pattern"). */
   savings?: boolean;
 };
-export type AnnualForecastItem = { counterparty: string; amount: number; month: number };
+export type AnnualForecastItem = {
+  counterparty: string;
+  amount: number;
+  month: number;
+  patternId?: string;
+  state?: PatternState;
+  /** detected (or confirmed through an annual confirmation), or created yearly by an actor. */
+  origin?: PatternOrigin;
+  /** Two years without a charge: listed in `lapsedAnnualItems` only. */
+  lapsed?: boolean;
+  lapsedSince?: string | null;
+};
 
 export type MonthlyForecast = {
   targetMonth: string;
@@ -41,6 +51,8 @@ export type MonthlyForecast = {
   projectedTotalWithUncertain: number;
   /** Lapsed patterns, established or not: their charges stopped, so they are counted in no total. */
   lapsedRecurring: ForecastItem[];
+  /** Lapsed annual patterns of the target month: counted in no total. */
+  lapsedAnnualItems: AnnualForecastItem[];
 };
 
 /** Spending per month (key YYYY-MM) for every month before `year`. */
@@ -84,18 +96,21 @@ export function computeMonthlyForecast(
   const uncertainRecurring = live.filter((p) => !p.established).map(item);
   const lapsedRecurring = patterns.filter((p) => p.lapsed).map(item);
 
-  const annualPatterns = db.prepare(`
-    SELECT counterparty_name, typical_amount, typical_month FROM recurring_patterns
-    WHERE pattern_type = 'annual' AND is_active = 1 AND typical_month = ?
-      AND (user_confirmed IS NULL OR user_confirmed = 1)
-    ORDER BY typical_amount DESC
-  `).all(targetMonth) as Array<{ counterparty_name: string; typical_amount: number; typical_month: number }>;
-
-  const annualItems: AnnualForecastItem[] = annualPatterns.map((p) => ({
-    counterparty: p.counterparty_name,
-    amount: p.typical_amount,
-    month: p.typical_month,
-  }));
+  // Annual patterns of the target month, decisions applied: rejected and withdrawn
+  // created ones are left out, lapsed ones listed apart.
+  const annualItem = (p: ReturnType<typeof annualPatterns>[number]): AnnualForecastItem => ({
+    counterparty: p.counterparty_name!,
+    amount: p.typical_amount ?? 0,
+    month: p.typical_month!,
+    patternId: p.id,
+    state: p.state,
+    origin: p.origin,
+    lapsed: p.lapsed,
+    lapsedSince: p.lapsed_since,
+  });
+  const annual = annualPatterns().filter((p) => p.typical_month === targetMonth);
+  const annualItems = annual.filter((p) => !p.lapsed).map(annualItem);
+  const lapsedAnnualItems = annual.filter((p) => p.lapsed).map(annualItem);
 
   const monthPad = String(targetMonth).padStart(2, '0');
   // Spending in the same month of the three latest earlier years that have any.
@@ -128,6 +143,7 @@ export function computeMonthlyForecast(
     uncertainRecurringTotal,
     projectedTotalWithUncertain,
     lapsedRecurring,
+    lapsedAnnualItems,
   };
 }
 

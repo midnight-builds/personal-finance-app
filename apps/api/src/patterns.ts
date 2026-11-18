@@ -317,7 +317,8 @@ function reviseUndetected(
   const rows = db.prepare(`
     SELECT p.id, p.counterparty_name, p.pattern_type, p.occurrence_count,
            EXISTS (SELECT 1 FROM pattern_decisions d
-                   WHERE d.account_id = p.account_id AND d.counterparty_name = p.counterparty_name) AS decided
+                   WHERE d.account_id = p.account_id AND d.counterparty_name = p.counterparty_name
+                     AND d.annual = 0) AS decided
     FROM recurring_patterns p
     WHERE p.account_id = ? AND p.is_active = 1 AND p.pattern_type IN ('subscription', 'recurring')
       AND p.user_confirmed IS NOT 1 AND NOT ${VOUCHED_CREATED}
@@ -353,24 +354,34 @@ function reviseUndetected(
 
 /**
  * SQL, true for a pattern `p` an actor created and still vouches for: its latest
- * decision (keyed by account and counterparty, as everywhere) is not `reset`.
+ * decision (keyed by account and counterparty, as everywhere, and of its kind:
+ * annual or monthly/weekly) is not `reset`.
  */
 const VOUCHED_CREATED = `(p.origin = 'created' AND COALESCE((
     SELECT d.decision FROM pattern_decisions d
     WHERE d.account_id = p.account_id AND d.counterparty_name = p.counterparty_name
+      AND d.annual = (p.pattern_type = 'annual')
     ORDER BY d.id DESC LIMIT 1), '') != 'reset')`;
 
-/** Two charges of a created pattern closer than this are not two of its periods. */
-export const MIN_DAYS_APART = { weekly: 5, monthly: 20 } as const;
-const minDaysApart = (intervalDays: number | null) => MIN_DAYS_APART[periodOf(intervalDays)];
+/**
+ * Two charges of a created pattern closer than this are not two of its periods.
+ * Yearly: detection's shortest annual interval.
+ */
+export const MIN_DAYS_APART: Record<Period, number> = { weekly: 5, monthly: 20, yearly: 330 };
 
-/** How far a created pattern's charge may be from its expected amount: detection's ±20 %. */
-export const CREATED_AMOUNT_TOLERANCE = 0.2;
+/**
+ * How far a created pattern's charge may be from its expected amount: detection's
+ * ±20 % for monthly and weekly patterns, its ±25 % for annual ones.
+ */
+export const CREATED_AMOUNT_TOLERANCE: Record<Period, number> = { weekly: 0.2, monthly: 0.2, yearly: 0.25 };
 
-/** Whether a charge of `amount` (signed) fits a created pattern expecting `expected` (positive). */
-export function fitsExpectedAmount(amount: number, expected: number): boolean {
+/** Whether a charge of `amount` (signed) fits a created pattern of `period` expecting `expected` (positive). */
+export function fitsExpectedAmount(amount: number, expected: number, period: Period): boolean {
   // Cents, so 20 % of a round amount is not lost to floating point.
-  return Math.abs(Math.round(Math.abs(amount) * 100) - Math.round(expected * 100)) <= Math.round(expected * 100) * CREATED_AMOUNT_TOLERANCE;
+  return (
+    Math.abs(Math.round(Math.abs(amount) * 100) - Math.round(expected * 100)) <=
+    Math.round(expected * 100) * CREATED_AMOUNT_TOLERANCE[period]
+  );
 }
 
 /**
@@ -382,10 +393,17 @@ export function fitsExpectedAmount(amount: number, expected: number): boolean {
  */
 function createdPatternCharges(
   entries: LedgerEntry[],
-  p: { counterparty_name: string | null; first_seen: string; typical_amount: number | null; interval_days: number | null }
+  p: {
+    counterparty_name: string | null;
+    first_seen: string;
+    typical_amount: number | null;
+    interval_days: number | null;
+    pattern_type: string;
+  }
 ): LedgerEntry[] {
   const from = p.first_seen.slice(0, 10);
-  const minDays = minDaysApart(p.interval_days);
+  const period = periodOf(p.interval_days, p.pattern_type);
+  const minDays = MIN_DAYS_APART[period];
   const charges: LedgerEntry[] = [];
   for (const e of entries) {
     const fits =
@@ -393,7 +411,7 @@ function createdPatternCharges(
       e.amount < 0 &&
       e.counterparty === p.counterparty_name &&
       e.date >= from &&
-      fitsExpectedAmount(e.amount, p.typical_amount ?? 0);
+      fitsExpectedAmount(e.amount, p.typical_amount ?? 0, period);
     const previous = charges.at(-1);
     if (fits && (!previous || (Date.parse(e.date) - Date.parse(previous.date)) / 86400_000 >= minDays)) charges.push(e);
   }
@@ -402,13 +420,16 @@ function createdPatternCharges(
 
 /**
  * Updates what the charges of the account's vouched-for created patterns show: the
- * latest one, how many there are and their confidence. Type, interval, expected
- * amount and activity stay as created.
+ * latest one, how many there are and their confidence, and for a yearly one its
+ * typical month (that of the latest charge, as detection sets it). Type, interval,
+ * expected amount and activity stay as created.
  */
 function refreshCreated(accountId: string, entries: LedgerEntry[], now: string): void {
   const rows = db
     .prepare(
-      `SELECT p.id, p.counterparty_name, p.first_seen, p.typical_amount, p.interval_days FROM recurring_patterns p
+      `SELECT p.id, p.counterparty_name, p.first_seen, p.typical_amount, p.interval_days, p.pattern_type,
+              p.typical_month
+       FROM recurring_patterns p
        WHERE p.account_id = ? AND ${VOUCHED_CREATED}`
     )
     .all(accountId) as Array<{
@@ -417,9 +438,11 @@ function refreshCreated(accountId: string, entries: LedgerEntry[], now: string):
     first_seen: string;
     typical_amount: number | null;
     interval_days: number | null;
+    pattern_type: string;
+    typical_month: number | null;
   }>;
   const update = db.prepare(
-    `UPDATE recurring_patterns SET updated_at = ?, last_seen = ?, occurrence_count = ?,
+    `UPDATE recurring_patterns SET updated_at = ?, last_seen = ?, occurrence_count = ?, typical_month = ?,
        ${SCORE_COLUMNS.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`
   );
   for (const r of rows) {
@@ -431,46 +454,55 @@ function refreshCreated(accountId: string, entries: LedgerEntry[], now: string):
         savings: isSavingsCharge(c.counterparty, c.description),
       }))
     );
-    update.run(now, charges.at(-1)!.bookedAt, charges.length, ...scoreValues(score), r.id);
+    const month = r.pattern_type === 'annual' ? monthOf(charges.at(-1)!.date) : r.typical_month;
+    update.run(now, charges.at(-1)!.bookedAt, charges.length, month, ...scoreValues(score), r.id);
   }
 }
 
 // ── Periods and lapse ───────────────────────────────────────────────
 
-export type Period = 'weekly' | 'monthly';
-const MONTHLY_TYPES = new Set(['subscription', 'recurring']);
+export type Period = 'weekly' | 'monthly' | 'yearly';
+
+/** Month 1–12 of a day YYYY-MM-DD. */
+const monthOf = (day: string) => Number(day.slice(5, 7));
 
 /**
- * Whether a monthly/weekly pattern is charged weekly or monthly. Detection stores the
- * average interval (6–8 days weekly, 25–35 monthly), creation 7 or 30.
+ * How often a pattern is charged. An annual one (`pattern_type` `annual`: detected,
+ * confirmed or created yearly) is yearly. A monthly/weekly one is weekly or monthly
+ * by its interval: detection stores the average (6–8 days weekly, 25–35 monthly),
+ * creation 7 or 30.
  */
-export function periodOf(intervalDays: number | null): Period {
+export function periodOf(intervalDays: number | null, patternType?: string): Period {
+  if (patternType === 'annual') return 'yearly';
   return (intervalDays ?? 30) <= 14 ? 'weekly' : 'monthly';
 }
 
 /** Nominal length of a period in days: the shortest that counts for a lapse. */
-const PERIOD_DAYS: Record<Period, number> = { weekly: 7, monthly: 31 };
-/** How late a period's charge may book (weekends, holidays, card processing). */
-const LAPSE_GRACE_DAYS: Record<Period, number> = { weekly: 3, monthly: DUE_DAY_LATE };
+const PERIOD_DAYS: Record<Period, number> = { weekly: 7, monthly: 31, yearly: 365 };
+/**
+ * How late a period's charge may book (weekends, holidays, card processing). A yearly
+ * bill may move by weeks: detection takes annual intervals up to 400 days.
+ */
+const LAPSE_GRACE_DAYS: Record<Period, number> = { weekly: 3, monthly: DUE_DAY_LATE, yearly: 35 };
 
 /**
  * Days after its latest charge from which a pattern is lapsed: two periods (the
  * stored interval, at least the nominal one) plus the grace for a late booking.
- * Monthly 2 × 31 + 5 = 67, weekly 2 × 7 + 3 = 17.
+ * Monthly 2 × 31 + 5 = 67, weekly 2 × 7 + 3 = 17, yearly 2 × 365 + 35 = 765.
  */
-export function lapseDays(intervalDays: number | null): number {
-  const period = periodOf(intervalDays);
+export function lapseDays(intervalDays: number | null, patternType?: string): number {
+  const period = periodOf(intervalDays, patternType);
   return 2 * Math.max(intervalDays ?? 0, PERIOD_DAYS[period]) + LAPSE_GRACE_DAYS[period];
 }
 
 /**
- * Stores whether each monthly/weekly pattern of the account has lapsed (GLOSSARY.md,
+ * Stores whether each pattern of the account has lapsed (GLOSSARY.md,
  * "Lapsed pattern"): `lapsed_since` is the day `lapseDays` after the latest charge
  * from its counterparty, once the account's latest booking (`entries`, oldest first;
  * not today, so a lagging export lapses nothing) has reached it; otherwise null.
  * A charge is any countable expense from the counterparty that is not a transfer,
  * whatever its amount, so a price change never lapses a live pattern. A new charge
- * clears the lapse on the next detection. Annual patterns never lapse here.
+ * clears the lapse on the next detection. Annual patterns lapse too, with yearly periods.
  */
 function markLapsed(accountId: string, entries: LedgerEntry[]): void {
   const latestBooking = entries.at(-1)?.date;
@@ -480,7 +512,7 @@ function markLapsed(accountId: string, entries: LedgerEntry[]): void {
   }
   const rows = db
     .prepare(
-      `SELECT id, counterparty_name, pattern_type, interval_days, last_seen, lapsed_since
+      `SELECT id, counterparty_name, pattern_type, interval_days, last_seen, lapsed_since, is_active
        FROM recurring_patterns WHERE account_id = ?`
     )
     .all(accountId) as Array<{
@@ -490,13 +522,16 @@ function markLapsed(accountId: string, entries: LedgerEntry[]): void {
     interval_days: number | null;
     last_seen: string;
     lapsed_since: string | null;
+    is_active: number;
   }>;
+  const DAY = /^\d{4}-\d{2}-\d{2}$/;
   const update = db.prepare('UPDATE recurring_patterns SET lapsed_since = ? WHERE id = ?');
   for (const r of rows) {
     let lapsedSince: string | null = null;
-    if (MONTHLY_TYPES.has(r.pattern_type) && latestBooking) {
-      const last = (r.counterparty_name !== null && lastCharge.get(r.counterparty_name)) || r.last_seen.slice(0, 10);
-      const since = daysBefore(last, -lapseDays(r.interval_days));
+    const last = (r.counterparty_name !== null && lastCharge.get(r.counterparty_name)) || r.last_seen.slice(0, 10);
+    // Inactive patterns count nowhere anyway; a row without a real day is not judged.
+    if (r.is_active === 1 && latestBooking && DAY.test(last)) {
+      const since = daysBefore(last, -lapseDays(r.interval_days, r.pattern_type));
       if (latestBooking >= since) lapsedSince = since;
     }
     if (lapsedSince !== r.lapsed_since) update.run(lapsedSince, r.id);
@@ -514,7 +549,7 @@ export function refreshLapse(accountId: string, asOf: string = today()): void {
  * that is a whole number of weeks from its latest charge `lastSeen`, 4 or 5.
  */
 export function chargesInMonth(intervalDays: number | null, lastSeen: string, year: number, month: number): number {
-  if (periodOf(intervalDays) === 'monthly') return 1;
+  if (periodOf(intervalDays) !== 'weekly') return 1;
   const day = (ms: number) => Math.round(ms / 86400_000);
   const anchor = day(Date.parse(lastSeen.slice(0, 10)));
   const first = day(Date.UTC(year, month - 1, 1));
@@ -534,8 +569,9 @@ export function chargesPerMonth(intervalDays: number | null): number {
  * 3: confidence, amount_fixed and payment_method scored for every pattern (2026-11).
  * 4: lapsed_since set for every monthly/weekly pattern (2026-11).
  * 5: savings patterns told apart, never subscriptions (2026-11).
+ * 6: annual patterns lapse too (2026-11).
  */
-export const PATTERN_RULES_VERSION = '5';
+export const PATTERN_RULES_VERSION = '6';
 const RULES_VERSION_KEY = 'patternRulesVersion';
 
 /** Re-runs detection for every account, in one transaction, once per rules version. Returns whether it ran. */

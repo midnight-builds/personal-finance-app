@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { db } from './db.js';
+import { refreshLapse } from './patterns.js';
 
 export type PatternConfirmation = {
   id: string;
@@ -12,10 +13,35 @@ export type PatternConfirmation = {
   status: string;
 };
 
+// Pending confirmations still worth asking: the account has no active pattern for the
+// counterparty (detected, confirmed or created since the question was made). One
+// pattern per account and counterparty, so such a question is never asked; it is
+// hidden, and creating a pattern resolves it (`supersedeConfirmations`).
+const OPEN = `c.status = 'pending' AND NOT EXISTS (
+  SELECT 1 FROM recurring_patterns p
+  WHERE p.account_id = c.account_id AND p.counterparty_name = c.counterparty_name AND p.is_active = 1)`;
+
 export function listPendingConfirmations(): PatternConfirmation[] {
   return db.prepare(
-    'SELECT * FROM pattern_confirmations WHERE status = ? ORDER BY typical_amount DESC LIMIT 10'
-  ).all('pending') as PatternConfirmation[];
+    `SELECT c.* FROM pattern_confirmations c WHERE ${OPEN} ORDER BY c.typical_amount DESC LIMIT 10`
+  ).all() as PatternConfirmation[];
+}
+
+/** Ids of every open confirmation (`listPendingConfirmations` without its limit). */
+export function openConfirmationIds(): Set<string> {
+  const rows = db.prepare(`SELECT c.id FROM pattern_confirmations c WHERE ${OPEN}`).all() as Array<{ id: string }>;
+  return new Set(rows.map((r) => r.id));
+}
+
+/**
+ * Resolves the pending confirmations of an account and counterparty as `superseded`:
+ * a pattern was created for it (patternCreation.ts), so the question is answered.
+ */
+export function supersedeConfirmations(accountId: string, counterparty: string, now: string): void {
+  db.prepare(
+    `UPDATE pattern_confirmations SET status = 'superseded', resolved_at = ?
+     WHERE account_id = ? AND counterparty_name = ? AND status = 'pending'`
+  ).run(now, accountId, counterparty);
 }
 
 export function confirmPatternConfirmation(id: string): void {
@@ -53,6 +79,8 @@ export function confirmPatternConfirmation(id: string): void {
 
   db.prepare('UPDATE pattern_confirmations SET status = ?, resolved_at = ? WHERE id = ?')
     .run('confirmed', now, id);
+  // Its charge may be old: the annual pattern may have lapsed already.
+  refreshLapse(conf.account_id);
 }
 
 export function rejectPatternConfirmation(id: string): void {

@@ -194,29 +194,29 @@ pattern decision, or unconfirmed with confidence at least 0.75 (`CONFIDENT`)
 and not a savings pattern.
 A lapsed pattern stays established but counts nowhere while it is lapsed.
 
-**Lapsed pattern** — a monthly or weekly pattern, detected or created, whose
-counterparty has not charged the account for two periods: the account's latest
-booking (not today, so a lagging export lapses nothing) is at least two
-periods plus a grace for late booking after the latest charge — 2 × 31 + 5 =
-67 days monthly, 2 × 7 + 3 = 17 weekly (a detected interval longer than the
-nominal period counts instead). A charge is any countable expense from the
+**Lapsed pattern** — a pattern, weekly, monthly or annual, detected, confirmed
+or created, whose counterparty has not charged the account for two periods: the
+account's latest booking (not today, so a lagging export lapses nothing) is at
+least two periods plus a grace for late booking after the latest charge — 2 ×
+31 + 5 = 67 days monthly, 2 × 7 + 3 = 17 weekly, 2 × 365 + 35 = 765 annual (a
+detected interval longer than the nominal period counts instead). A charge is any countable expense from the
 counterparty that is not a transfer, whatever its amount, so a new price never
 lapses a live pattern. A lapsed pattern is kept, active and with its decision
 history, and listed with `lapsed: true` and `lapsed_since` (the day it lapsed)
-in `/recurring` and in the forecast's `lapsedRecurring`, but counted in no
-forecast total, not in the subscription total or the subscription-creep
-finding, not asked about and not announced as new. Detection sets it on every
-run (`markLapsed` in `patterns.ts`), creation too: a charge again clears it, so
-the pattern counts again. It can still be decided or rejected. Annual patterns
-do not lapse.
+in `/recurring` and in the forecast's `lapsedRecurring` (annual ones in
+`lapsedAnnualItems` of their month), but counted in no forecast total, not in
+the subscription total or the subscription-creep finding, not asked about and
+not announced as new. Detection sets it on every run (`markLapsed` in
+`patterns.ts`), creation and annual confirmation too: a charge again clears it,
+so the pattern counts again. It can still be decided or rejected.
 
 **Uncertain pattern** — an unconfirmed monthly or weekly pattern below 0.75,
 or an unconfirmed savings pattern.
 The forecast lists it in `uncertainRecurring`, outside `knownFixed` and
 `projectedTotal`.
 
-**Pattern decision** — what the user or an agent (its actor) says a monthly or
-weekly pattern is: `recurring`, `subscription` or `not_recurring`, or `reset` to
+**Pattern decision** — what the user or an agent (its actor) says a pattern,
+monthly, weekly or annual, is: `recurring`, `subscription` or `not_recurring`, or `reset` to
 take a decision back. Its state is then `confirmed_recurring`,
 `confirmed_subscription` or `rejected`; without one, or after a reset, it is
 `unconfirmed`. Decisions are history in `pattern_decisions`, keyed by
@@ -225,25 +225,35 @@ pattern): a new one is appended, the latest counts, and re-stating it appends
 nothing. Every actor is equally trusted: an agent may replace the user's
 decision and the other way round, and the history keeps who decided what.
 Detection never writes decisions, so they survive every re-detection. A
-decision sets the pattern's type; a rejected pattern is
-left out of the forecast, totals, briefing and `/recurring`, and never asked
-about again. A decided pattern is deactivated only when its charges stop, and
-its decision applies again if they resume. Decisions apply to monthly and
-weekly patterns only; a row that turns annual follows the annual rules.
+decision sets a monthly or weekly pattern's type (an annual one stays annual);
+a rejected pattern is left out of the forecast, totals, briefing and
+`/recurring`, and never asked about again. A decided pattern is deactivated only
+when its charges stop, and its decision applies again if they resume. A
+decision is of the pattern's kind when made, annual or monthly/weekly
+(`pattern_decisions.annual`), and applies only while the pattern is of that
+kind: a row that turns annual (or back) follows the decisions of its new kind,
+none until one is made.
 _Avoid_: user_confirmed (the legacy flag of confirmed annual patterns)
 
-**Created pattern** — a monthly or weekly pattern an actor added that detection
-never proposed (`origin` `created`, `created_by`; `POST /patterns`,
-`patternCreation.ts`), e.g. a contract that started last month. One charge is
-enough: the actor cites existing charges, each a booked expense of that account
-and counterparty, not a transfer, within 20 % of the expected amount and at
-least 5 (weekly) or 20 (monthly) days from the next. It is confirmed at once
-with a pattern decision by the same actor and counts like any confirmed pattern,
-at the expected amount. Its charges are the counterparty's countable expenses
-within 20 % of the expected amount from the first cited one on, one per period,
-so later ones attach to it. One pattern per account and counterparty: an
-inactive one is taken over (same id), an active detected one is decided instead
-(`409 pattern_exists`), and creating an active created one again re-states it
+**Created pattern** — a weekly, monthly or yearly pattern an actor added that
+detection never proposed (`origin` `created`, `created_by`; `POST /patterns`,
+`patternCreation.ts`), e.g. a contract that started last month or an annual
+insurance premium. One charge is enough: the actor cites existing charges, each
+a booked expense of that account and counterparty, not a transfer, within 20 %
+of the expected amount (25 % yearly, detection's annual tolerance) and at least
+5 (weekly), 20 (monthly) or 330 (yearly, detection's shortest annual interval)
+days from the next. It is confirmed at once with a pattern decision by the same
+actor and counts like any confirmed pattern, at the expected amount. A yearly
+one is an annual pattern (`pattern_type` `annual`) forecast in its typical
+month, the month of its latest charge; it is not in the monthly subscription
+total. Its charges are the counterparty's countable expenses within the
+tolerance of the expected amount from the first cited one on, one per period,
+so later ones attach to it (and move a yearly one's typical month). One pattern
+per account and counterparty: an inactive one is taken over (same id), an active
+detected one, monthly, weekly or annual (also one confirmed as annual), is
+decided instead (`409 pattern_exists`); creating resolves the account's pending
+confirmation candidate for the counterparty (`superseded`); and creating an
+active created one again re-states it
 (a new price or kind; the same values write nothing). While its latest decision
 is not `reset`, detection never deactivates, retypes or re-prices it and never
 adds a second row; when detection finds the same pattern it stays the created
@@ -254,8 +264,8 @@ works as for any pattern. `reset` withdraws it: nobody vouches for it, so it is
 left out of the forecast, totals, questions and `/recurring` unless its own
 charges make it established (confidence at least 0.75), and detection treats it
 as its own: finding it, it becomes a detected pattern (`created_by` stays as
-history); once its charges stop, it is deactivated. Weekly and monthly only:
-annual patterns follow their own confirmation.
+history); once its charges stop, it is deactivated (a withdrawn yearly one is
+left to annual detection).
 _Avoid_: manual pattern (it is not about manual decisions)
 
 **Recurring question** — "Onko tämä toistuva?": an uncertain pattern (no
@@ -269,11 +279,16 @@ with a spread of a few percent; a wider one may need the user's answer. The
 briefing shows the three largest and hides a question once answered. Answered with a pattern decision
 (`GET /patterns/questions`, `POST /patterns/:id/decision`).
 
-**Annual pattern** — a charge about once a year (330–400 days apart), or one
-the user confirmed as annual.
+**Annual pattern** — a charge about once a year (330–400 days apart), one the
+user confirmed as annual (a confirmation candidate), or a yearly created
+pattern. The forecast counts it in its `typical_month` (`annualItems`) unless
+a pattern decision rejected it or it has lapsed (two years and 35 days without
+a charge). It can be decided like any pattern; it stays annual.
 
 **Confirmation candidate** — a single large expense (≥ 80 €) with no pattern,
-offered to the user to confirm as annual (`pattern_confirmations`).
+offered to the user to confirm as annual (`pattern_confirmations`). It is
+hidden while the account has an active pattern for the counterparty, and
+creating a pattern for it resolves it (`superseded`).
 
 **Pattern rules version** — `PATTERN_RULES_VERSION` in `patterns.ts`. Bumping it
 re-detects every account's patterns on the next API start, so stored patterns

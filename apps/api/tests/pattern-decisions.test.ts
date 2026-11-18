@@ -455,7 +455,7 @@ test('REST: answer a question with the actor, re-stating appends nothing, histor
   assert.equal(missing.statusCode, 404);
 });
 
-test('REST: annual patterns are not decided here', async () => {
+test('REST: annual patterns are decided too; the decision is marked annual and stays one', async () => {
   const a = mkAccount();
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -463,6 +463,9 @@ test('REST: annual patterns are not decided here', async () => {
       interval_days, typical_amount, currency, first_seen, last_seen, occurrence_count, is_active, typical_month)
     VALUES (?, ?, ?, ?, 'Vakuutusyhtiö Turva', 'annual', 365, 300, 'EUR', ?, ?, 2, 1, 3)`).run(id, now, now, a.account, now, now);
   const res = await app.inject({ method: 'POST', url: `/patterns/${id}/decision`, payload: { decision: 'not_recurring' } });
-  assert.equal(res.statusCode, 409);
-  assert.equal(res.json().error, 'not_monthly_pattern');
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(res.json().pattern.state, 'rejected');
+  assert.equal(res.json().pattern.pattern_type, 'annual');
+  const log = (await app.inject({ method: 'GET', url: '/patterns/decisions' })).json();
+  assert.deepEqual(log.items.map((i: { annual: boolean; decision: string }) => [i.annual, i.decision]), [[true, 'not_recurring']]);
 });

@@ -348,6 +348,9 @@ export function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_pattern_decisions_key ON pattern_decisions(account_id, counterparty_name, id);
   `);
+  // A decision is about the pattern as it was: annual (1) or monthly/weekly (0). It
+  // applies only while the row is of the same kind (patternDecisions.ts).
+  safeExec(`ALTER TABLE pattern_decisions ADD COLUMN annual INTEGER NOT NULL DEFAULT 0`);
 
   safeExec(`ALTER TABLE feature_proposals ADD COLUMN kind TEXT NOT NULL DEFAULT 'feature'`);
   safeExec(`ALTER TABLE feature_proposals ADD COLUMN resolution TEXT`);

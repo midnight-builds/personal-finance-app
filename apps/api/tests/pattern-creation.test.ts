@@ -257,7 +257,7 @@ test('create: evidence must exist and be booked charges of that account and coun
 
   for (const bad of [
     { ...body, kind: 'annual' },
-    { ...body, interval: 'yearly' },
+    { ...body, interval: 'daily' },
     { ...body, expectedAmount: -39.9 },
     { ...body, evidenceTransactionIds: [] },
     { ...body, counterparty: '' },

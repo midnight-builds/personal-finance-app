@@ -192,7 +192,15 @@ export type ForecastItem = {
   lapsed?: boolean;
   lapsedSince?: string | null;
 };
-export type AnnualForecastItem = { counterparty: string; amount: number; month: number };
+export type AnnualForecastItem = {
+  counterparty: string;
+  amount: number;
+  month: number;
+  patternId?: string;
+  origin?: 'detected' | 'created';
+  lapsed?: boolean;
+  lapsedSince?: string | null;
+};
 export type MonthlyForecast = {
   targetMonth: string;
   /** Established patterns: confirmed, or confident enough. */
@@ -207,6 +215,8 @@ export type MonthlyForecast = {
   projectedTotalWithUncertain: number;
   /** Patterns with no charge for two periods: counted in no total. */
   lapsedRecurring?: ForecastItem[];
+  /** Annual patterns of the month with no charge for two years: counted in no total. */
+  lapsedAnnualItems?: AnnualForecastItem[];
 };
 
 export type PatternDecision = 'recurring' | 'subscription' | 'not_recurring' | 'reset';

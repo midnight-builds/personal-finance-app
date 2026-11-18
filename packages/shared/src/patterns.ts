@@ -34,16 +34,16 @@ export const patternDecisionListFields = {
 };
 
 // ── Created patterns ────────────────────────────────────────────────
-// POST /patterns: an actor adds a monthly or weekly pattern that detection never
-// proposed (GLOSSARY.md, "Created pattern"). It is confirmed at once, by that actor.
+// POST /patterns: an actor adds a weekly, monthly or yearly pattern that detection
+// never proposed (GLOSSARY.md, "Created pattern"). It is confirmed at once, by that actor.
 
 /** Where a stored pattern comes from: found by detection, or created by an actor. */
 export const PATTERN_ORIGINS = ['detected', 'created'] as const;
 export type PatternOrigin = (typeof PATTERN_ORIGINS)[number];
 
 export const CREATED_PATTERN_KINDS = ['recurring', 'subscription'] as const;
-/** Annual patterns follow their own confirmation (pattern_confirmations) and cannot be created. */
-export const CREATED_PATTERN_INTERVALS = ['weekly', 'monthly'] as const;
+/** A yearly one is an annual pattern (`pattern_type` `annual`), counted in its typical month. */
+export const CREATED_PATTERN_INTERVALS = ['weekly', 'monthly', 'yearly'] as const;
 export type CreatedPatternInterval = (typeof CREATED_PATTERN_INTERVALS)[number];
 export const PATTERN_CREATE_MAX_EVIDENCE = 24;
 
@@ -62,20 +62,22 @@ export const patternCreateFields = {
     ),
   interval: z
     .enum(CREATED_PATTERN_INTERVALS)
-    .describe('How often it is charged: weekly or monthly. Annual payments cannot be created here'),
+    .describe(
+      'How often it is charged: weekly, monthly or yearly (an annual payment, forecast in the month of its latest charge)'
+    ),
   expectedAmount: z
     .number()
     .positive()
     .max(1_000_000)
-    .describe('Expected amount of one charge in EUR, positive (a charge of -12.99 is 12.99)'),
+    .describe('Expected amount of one charge in EUR, positive (a charge of -12.99 is 12.99; a yearly one: the whole yearly charge)'),
   evidenceTransactionIds: z
     .array(z.string().trim().min(1).max(100))
     .min(1)
     .max(PATTERN_CREATE_MAX_EVIDENCE)
     .describe(
       'Ids of existing charges of this pattern (search_transactions): booked expenses of this account and ' +
-        'counterparty, not transfers, each within 20 % of expectedAmount, at least 5 days apart (weekly) or ' +
-        '20 days apart (monthly). One is enough, e.g. a newly started contract'
+        'counterparty, not transfers, each within 20 % of expectedAmount (25 % yearly), at least 5 days apart ' +
+        '(weekly), 20 days apart (monthly) or 330 days apart (yearly). One is enough, e.g. a newly started contract'
     ),
 };
 export const patternCreateRequestSchema = z.object(patternCreateFields);
