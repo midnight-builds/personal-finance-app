@@ -24,13 +24,33 @@ function forecastStart(data: unknown): Record<string, unknown> {
   return { forecastStartMonth: typeof first?.targetMonth === 'string' ? first.targetMonth : null };
 }
 
+/** Only these fields of an account reach the agent: never its IBAN (also dropped by redaction). */
+function agentAccount(a: Record<string, unknown>) {
+  return {
+    id: a.id,
+    name: a.name,
+    type: a.account_subtype,
+    tracking: a.tracking,
+    ownershipShare: a.ownership_share,
+    currency: a.currency,
+    updateIntervalDays: a.update_interval_days ?? null,
+    recognizesTransfers: a.recognizes_transfers === true,
+    archivedAt: a.archived_at ?? null,
+    ownerLabel: a.owner_label ?? null,
+    balance: a.balance ?? null,
+    balanceDate: a.balance_date ?? null,
+  };
+}
+
 const dataTools: ToolDefinition[] = [
   defineTool({
     name: 'search_transactions',
     title: 'Search transactions',
     description:
       'Search normalized bank transactions. Amounts are signed (negative = expense). ' +
-      'Transfers between own accounts are excluded by default. Each transaction is stored once, ' +
+      'Transfers between own accounts are excluded by default. A payment to (or from) a manual account\'s IBAN is ' +
+      'included, with ownTransfer { accountId, accountName, accountType, kind: saving | loan_repayment | other } ' +
+      '(null otherwise; never the IBAN). Each transaction is stored once, ' +
       'also when overlapping exports are imported. ' +
       'Returns { total, limit, offset, items }; page with limit/offset.',
     inputSchema: transactionSearchFields,
@@ -43,7 +63,9 @@ const dataTools: ToolDefinition[] = [
     'Total balance, monthly net (with and without transfers), runway in months and per-account balances. ' +
       'Every account is listed; an account without balance data has balance null (unknown, not zero). ' +
       'totalBalance and runwayMonths cover known balances only: when isComplete is false they are partial ' +
-      'and missingBalanceAccountCount says how many accounts are missing.',
+      'and missingBalanceAccountCount says how many accounts are missing. Only imported accounts have balances ' +
+      'here. monthlySaving and monthlyLoanRepayment: the part of monthlyNet that went to (negative) or came from ' +
+      'manual savings/investment and loan accounts (cash that left, not spending).',
     '/summary'
   ),
   readEndpoint(
@@ -52,7 +74,9 @@ const dataTools: ToolDefinition[] = [
     'Income, expense and net per pay period, oldest first. A period is labelled by its month but is not the ' +
       'calendar month: it follows the payday setting, and from/to give its inclusive bookingDate range ' +
       '(bank booking days, no time zone). Same scope as search_transactions by default (booked only, ' +
-      'transfers excluded), so searching with the same from/to gives the same totals.',
+      'transfers excluded), so searching with the same from/to gives the same totals. saving and loanRepayment: ' +
+      'the part of the net that went to (negative) or came from manual savings and loan accounts; included in ' +
+      'income, expense and net.',
     '/monthly'
   ),
   readEndpoint(
@@ -114,7 +138,19 @@ const dataTools: ToolDefinition[] = [
     annotations: READ_ONLY,
     run: (args, { api }) => api.get('/balances/history', args),
   }),
-  readEndpoint('list_accounts', 'Accounts', 'Accounts with type, owner label and latest balance.', '/accounts'),
+  defineTool({
+    name: 'list_accounts',
+    title: 'Accounts',
+    description:
+      'Accounts: id, name, type (checking, savings, credit_card, loan, investment, property, other_asset, ' +
+      'other_liability), tracking (imported: from bank exports; manual: nothing imported), ownershipShare (0-100, ' +
+      'for net worth only), currency, updateIntervalDays, recognizesTransfers (a manual account whose IBAN makes ' +
+      'payments to it transfers to it), archivedAt, ownerLabel, and latest balance with balanceDate (null = ' +
+      'unknown; manual accounts have no balance yet). Never an IBAN or account number. Change accounts with ' +
+      'plan_account_change.',
+    annotations: READ_ONLY,
+    run: async (_args, { api }) => ((await api.get('/accounts')) as Array<Record<string, unknown>>).map(agentAccount),
+  }),
   readEndpoint(
     'list_recurring',
     'Recurring payments',
