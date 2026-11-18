@@ -16,6 +16,17 @@ import {
 } from '@finance-app/shared';
 import { db } from './db.js';
 import { DomainError } from './http/errors.js';
+import {
+  applyPlanned,
+  inTransaction,
+  insertChangeSet,
+  listChangeSetRows,
+  readChangeSet as readSet,
+  sha256Token,
+  stableJson,
+  undoneById,
+  type ChangeSetRow,
+} from './changeSets.js';
 import { USER_RULE_PRIORITY, appendDecision, categoryIdByRole, learnRuleFromChoice } from './rules.js';
 import { LATEST_DECISION_ORDER, latestCategoryDecisionJoin, notVoid } from './sql/transactions.js';
 
@@ -67,18 +78,6 @@ type Payload = {
   rules: RuleChange[];
   suggestions: { rejected: string[]; restored: string[] };
   exceptions: ChangeException[];
-};
-
-type ChangeSetRow = {
-  id: string;
-  created_at: string;
-  actor: string;
-  kind: string;
-  reason: string | null;
-  plan_token: string;
-  payload: string;
-  status: ChangeSetStatus;
-  undo_of_id: string | null;
 };
 
 // ---------- reading state ----------
@@ -157,7 +156,7 @@ function lastTouch(list: 'categories' | 'rules', id: string): string | null {
   const row = db
     .prepare(
       `SELECT cs.id FROM change_sets cs, json_each(cs.payload, '$.${list}') je
-       WHERE json_extract(je.value, '$.id') = ? ORDER BY cs.rowid DESC LIMIT 1`
+       WHERE cs.domain = 'categorization' AND json_extract(je.value, '$.id') = ? ORDER BY cs.rowid DESC LIMIT 1`
     )
     .get(id) as { id: string } | undefined;
   return row?.id ?? null;
@@ -168,7 +167,8 @@ function lastNameTouch(name: string): string | null {
   const row = db
     .prepare(
       `SELECT cs.id FROM change_sets cs, json_each(cs.payload, '$.categories') je
-       WHERE json_extract(je.value, '$.name') = ? OR json_extract(je.value, '$.fromName') = ?
+       WHERE cs.domain = 'categorization'
+         AND (json_extract(je.value, '$.name') = ? OR json_extract(je.value, '$.fromName') = ?)
        ORDER BY cs.rowid DESC LIMIT 1`
     )
     .get(name, name) as { id: string } | undefined;
@@ -406,11 +406,7 @@ function draftDisableRule(op: Extract<Op, { kind: 'disable_rule' }>): Draft {
   return draft;
 }
 
-function readChangeSet(id: string): ChangeSetRow {
-  const row = db.prepare('SELECT * FROM change_sets WHERE id = ?').get(id);
-  if (!row) throw new DomainError('change_set_not_found', 404, { changeSetId: id });
-  return { ...row } as ChangeSetRow;
-}
+const readChangeSet = (id: string): ChangeSetRow => readSet('categorization', id);
 
 function draftUndo(op: Extract<Op, { kind: 'undo' }>): Draft {
   const set = readChangeSet(op.changeSetId);
@@ -549,28 +545,13 @@ function draftFor(op: Op): Draft {
   }
 }
 
-/** JSON with object keys sorted, so equal values hash equally. */
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, v]) => v !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
-  }
-  return JSON.stringify(value ?? null);
-}
-
 /** The operation as the token sees it: the order of explicit ids does not matter. */
 function tokenOp(op: Op): Op {
   return op.kind === 'recategorize' ? { ...op, transactionIds: [...op.transactionIds].sort() } : op;
 }
 
 function tokenOf(draft: Draft): string {
-  return crypto
-    .createHash('sha256')
-    .update(stableJson({ v: 1, op: tokenOp(draft.op), deps: draft.deps }))
-    .digest('hex');
+  return sha256Token({ v: 1, op: tokenOp(draft.op), deps: draft.deps });
 }
 
 function summaryOf(p: { rows: unknown[]; categories: unknown[]; rules: unknown[]; exceptions: unknown[] }): ChangeSummary {
@@ -600,25 +581,6 @@ export function plan(input: unknown, _actor?: string): CategorizationPlan {
 }
 
 // ---------- applying ----------
-
-let savepoints = 0;
-
-/** Runs fn atomically; nests (savepoints), so callers may already be in a transaction. */
-function inTransaction<T>(fn: () => T): T {
-  const name = `categorization_${savepoints++}`;
-  db.exec(`SAVEPOINT ${name}`);
-  try {
-    const result = fn();
-    db.exec(`RELEASE ${name}`);
-    return result;
-  } catch (err) {
-    db.exec(`ROLLBACK TO ${name}`);
-    db.exec(`RELEASE ${name}`);
-    throw err;
-  } finally {
-    savepoints--;
-  }
-}
 
 export type ApplyOptions = {
   /**
@@ -742,11 +704,17 @@ function execute(draft: Draft, token: string, actor: string, options: ApplyOptio
     suggestions: { rejected: draft.suggestions.reject, restored: draft.suggestions.restore },
     exceptions: draft.exceptions,
   };
-  db.prepare(
-    `INSERT INTO change_sets (id, created_at, actor, kind, reason, plan_token, payload, status, undo_of_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'applied', ?)`
-  ).run(setId, now, actor, draft.op.kind, reason, token, JSON.stringify(payload), draft.undoOf ?? null);
-  if (draft.undoOf) db.prepare(`UPDATE change_sets SET status = 'undone' WHERE id = ?`).run(draft.undoOf);
+  insertChangeSet({
+    id: setId,
+    createdAt: now,
+    domain: 'categorization',
+    actor,
+    kind: draft.op.kind,
+    reason,
+    planToken: token,
+    payload,
+    undoOf: draft.undoOf ?? null,
+  });
   return setId;
 }
 
@@ -757,19 +725,16 @@ function execute(draft: Draft, token: string, actor: string, options: ApplyOptio
  */
 export function apply(input: unknown, planToken: string, actor: string, options: ApplyOptions = {}): ChangeSet {
   const op = categorizationOpSchema.parse(input);
-  return inTransaction(() => {
-    const existing = db.prepare('SELECT id, payload FROM change_sets WHERE plan_token = ?').get(planToken) as
-      | { id: string; payload: string }
-      | undefined;
-    if (existing) {
-      const stored = (JSON.parse(existing.payload) as Payload).op;
-      if (stableJson(tokenOp(stored)) !== stableJson(tokenOp(normalizeOp(op)))) throw DomainError.conflict('plan_stale');
-      return getChangeSet(existing.id);
-    }
-    const draft = draftFor(op);
-    if (tokenOf(draft) !== planToken) throw DomainError.conflict('plan_stale');
-    return getChangeSet(execute(draft, planToken, actor, options));
+  const id = applyPlanned({
+    domain: 'categorization',
+    planToken,
+    sameOp: (payload) =>
+      stableJson(tokenOp((JSON.parse(payload) as Payload).op)) === stableJson(tokenOp(normalizeOp(op))),
+    draft: () => draftFor(op),
+    tokenOf,
+    execute: (draft) => execute(draft, planToken, actor, options),
   });
+  return getChangeSet(id);
 }
 
 /** The operation as a plan normalizes it (rule patterns are stored lowercase). */
@@ -785,7 +750,6 @@ export function applyNow(input: unknown, actor: string, options: ApplyOptions = 
 // ---------- reading change sets ----------
 
 function listItem(row: ChangeSetRow, payload: Payload): ChangeSetListItem {
-  const undoneBy = db.prepare('SELECT id FROM change_sets WHERE undo_of_id = ?').get(row.id) as { id: string } | undefined;
   return {
     id: row.id,
     createdAt: row.created_at,
@@ -794,7 +758,7 @@ function listItem(row: ChangeSetRow, payload: Payload): ChangeSetListItem {
     reason: row.reason,
     status: row.status,
     undoOfId: row.undo_of_id,
-    undoneById: undoneBy?.id ?? null,
+    undoneById: undoneById(row.id),
     summary: summaryOf(payload),
   };
 }
@@ -815,11 +779,7 @@ export function getChangeSet(id: string): ChangeSet {
 
 /** Newest first. */
 export function listChangeSets(params: { limit: number; offset: number }): ChangeSetList {
-  const total = Number((db.prepare('SELECT COUNT(*) AS n FROM change_sets').get() as { n: number }).n);
-  const rows = db
-    .prepare('SELECT * FROM change_sets ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?')
-    .all(params.limit, params.offset)
-    .map((r) => ({ ...r }) as ChangeSetRow);
+  const { total, rows } = listChangeSetRows('categorization', params);
   return { total, limit: params.limit, offset: params.offset, items: rows.map((r) => listItem(r, JSON.parse(r.payload))) };
 }
 

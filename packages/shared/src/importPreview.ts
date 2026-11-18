@@ -1,10 +1,12 @@
 import { z } from 'zod';
+import { ACCOUNT_TYPES, type AccountType } from './accounts.js';
 
 // Contract for the import flow: POST /imports/nordea/preview (writes nothing)
 // and the optional target fields of POST /imports/nordea/csv|xlsx.
 
-export const ACCOUNT_SUBTYPES = ['checking', 'savings', 'credit_card'] as const;
-export type AccountSubtype = (typeof ACCOUNT_SUBTYPES)[number];
+/** An account's type (`account_subtype`); see accounts.ts. */
+export const ACCOUNT_SUBTYPES = ACCOUNT_TYPES;
+export type AccountSubtype = AccountType;
 
 /** Days without any row inside a file that count as a quiet period. */
 export const QUIET_PERIOD_MIN_DAYS = 14;
