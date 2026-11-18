@@ -36,7 +36,7 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   {
     "term": "Card repayment",
     "summary": "the one transfer a credit card (an account without an IBAN) takes part in: a payment from checking into the card.",
-    "definition": "the one transfer a credit card (an account without an IBAN) takes part in: a payment from checking into the card. Extra repayments carry the issuer's IBAN; the monthly bill, paid as an e-invoice, often does not. A payee that an IBAN-carrying repayment went to is the card's issuer, so payments to it without an IBAN count as repayments too and beat other payments of the same amount.",
+    "definition": "the one transfer a credit card (an account without an IBAN) takes part in: a payment from checking into the card. Extra repayments carry the issuer's IBAN; the monthly bill, paid as an e-invoice, often does not. A payee that an IBAN-carrying repayment went to is the card's issuer, so payments to it without an IBAN count as repayments too and beat other payments of the same amount — when the card names the credit as it named that repayment, ignoring the day some cards put in it (\"Suoritus 20.10\"). When these rules change, stored rows they now pair are linked once at API start.",
     "avoid": null
   },
   {
