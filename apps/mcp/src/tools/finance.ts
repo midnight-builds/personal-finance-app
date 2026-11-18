@@ -118,7 +118,8 @@ const dataTools: ToolDefinition[] = [
       'pattern_type is the decided type when there is one (detected_type is what detection found), state is ' +
       'unconfirmed, confirmed_recurring or confirmed_subscription, user_confirmed 1 when confirmed, confidence ' +
       '(0-1) with confidence_factors, established (counts as a fixed cost and, as a subscription, in the ' +
-      'subscription total), decided_by and decided_at. Patterns the user rejected are not listed ' +
+      'subscription total), decided_by and decided_at, origin (detected, or created by an actor with ' +
+      'create_recurring_pattern: created_by, evidence_transaction_ids). Patterns the user rejected are not listed ' +
       '(list_pattern_decisions has them). The id is the patternId of answer_recurring_question.',
     '/recurring'
   ),

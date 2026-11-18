@@ -18,15 +18,16 @@ over the REST API and never opens the database.
 | `list_category_changes`, `get_category_change` | Change log of categorization: who changed what, and undo state (`GET /categorization/change-sets[/:id]`) |
 | `list_recurring_questions` | Open "is this recurring?" questions with evidence (`GET /patterns/questions`) |
 | `answer_recurring_question` | Records a pattern decision: recurring, subscription or not_recurring (`POST /patterns/:id/decision`) |
+| `create_recurring_pattern` | Creates a monthly or weekly pattern detection never proposed, from cited charges, confirmed at once (`POST /patterns`) |
 | `list_pattern_decisions` | Decision history of recurring patterns with actor (`GET /patterns/decisions`) |
 | `get_glossary` | The app's terms with short definitions, generated from `GLOSSARY.md` |
 | `list_feature_proposals` | Earlier proposals and bug reports with their status, notes, resolution and history; `changedSince` (largest `changedAt` seen) returns only what changed, so polling is cheap |
 | `propose_feature` | Adds a feature proposal or bug report (`kind`) to the local review queue |
 
-Three tools write: `propose_feature` adds to the review queue,
-`apply_categorization` changes categorization, and `answer_recurring_question`
-appends a pattern decision. Every other tool is read-only, and no tool deletes
-anything.
+Four tools write: `propose_feature` adds to the review queue,
+`apply_categorization` changes categorization, `answer_recurring_question`
+appends a pattern decision, and `create_recurring_pattern` adds a pattern with its
+decision. Every other tool is read-only, and no tool deletes anything.
 
 ### Recurring patterns
 
@@ -44,7 +45,23 @@ its actor, so nothing is lost. A decision changes only how the pattern counts: i
 whether it is a fixed cost in the forecast and in the subscription total, and
 whether it is asked about again. Transactions, categories, balances and the
 detected pattern itself are never touched. To keep the agent read-only here, hide
-`answer_recurring_question` with `MCP_DISABLED_TOOLS`.
+`answer_recurring_question` and `create_recurring_pattern` with `MCP_DISABLED_TOOLS`.
+
+The agent can also add a pattern detection never proposed (GLOSSARY.md, "Created
+pattern"), e.g. a contract the user just started: `create_recurring_pattern` with
+the account, the counterparty as on the transactions (as the agent sees it, also
+redacted), `kind` (`recurring` or `subscription`), `interval` (`weekly` or
+`monthly`), `expectedAmount` and the ids of one or more existing charges. The API
+checks every cited charge (booked, an expense, not a transfer, that account and
+counterparty, within 20 % of the expected amount, not two in one period) and names
+the failing ids in the error. The pattern gets `origin: created` and `created_by`,
+and a pattern decision of `kind` under the agent's actor, so it counts at once like a
+confirmed pattern. Detection never deactivates, retypes or re-prices it and keeps one
+pattern per account and counterparty; when the account already has an active
+pattern for the counterparty, the tool returns `409 pattern_exists` with its id, to
+be decided with `answer_recurring_question` instead. Creating writes only the
+pattern and its decision. `origin` is in `list_recurring`, decision responses and
+the forecast's pattern items.
 
 `get_glossary` is a tool rather than an MCP resource: resources are read by the
 client application, and an agent such as Hermes reliably reaches only tools. Its
@@ -78,7 +95,7 @@ no separate undo tool, so an undo is also planned and reviewable first.
 ### Responses
 
 Tools backed by imported bank data (all except `list_categories`, the category
-management tools, `answer_recurring_question`, `list_pattern_decisions`,
+management tools, `answer_recurring_question`, `create_recurring_pattern`, `list_pattern_decisions`,
 `get_glossary` and the proposal tools) return a second content block `{ "meta": { generatedAt, lastImportAt, dataAsOf } }`
 from `GET /data-status`; `get_forecast` adds `forecastStartMonth`. The first block
 is the API response unchanged. If the status lookup fails, the timestamps are `null`

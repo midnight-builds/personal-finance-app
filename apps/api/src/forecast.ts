@@ -1,7 +1,7 @@
 import { db } from './db.js';
 import { ledgerTotals, today, type LedgerTotal } from './ledger.js';
 import { monthlyPatterns } from './patternDecisions.js';
-import type { PatternState } from '@finance-app/shared';
+import type { PatternOrigin, PatternState } from '@finance-app/shared';
 
 export type ForecastItem = {
   counterparty: string;
@@ -11,6 +11,8 @@ export type ForecastItem = {
   type?: string;
   state?: PatternState;
   confidence?: number | null;
+  /** detected, or created by an actor (GLOSSARY.md, "Created pattern"). */
+  origin?: PatternOrigin;
 };
 export type AnnualForecastItem = { counterparty: string; amount: number; month: number };
 
@@ -55,6 +57,7 @@ export function computeMonthlyForecast(
     type: p.pattern_type,
     state: p.state,
     confidence: p.confidence,
+    origin: p.origin,
   });
   const patterns = monthlyPatterns();
   const knownFixed = patterns.filter((p) => p.established).map(item);

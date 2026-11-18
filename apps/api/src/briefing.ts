@@ -66,7 +66,7 @@ function newRecurring(): FindingInput[] {
   return patterns.map((p) => ({
     finding_type: 'new_recurring',
     title: `Uusi toistuva veloitus: ${p.counterparty_name}`,
-    description: `Uusi ${p.pattern_type === 'subscription' ? 'tilaus' : 'toistuva maksu'} tunnistettu: ${p.counterparty_name} noin ${fmt(p.typical_amount ?? 0)} n. ${p.interval_days} päivän välein.`,
+    description: `Uusi ${p.pattern_type === 'subscription' ? 'tilaus' : 'toistuva maksu'} ${p.origin === 'created' ? 'lisätty' : 'tunnistettu'}: ${p.counterparty_name} noin ${fmt(p.typical_amount ?? 0)} n. ${p.interval_days} päivän välein.`,
     severity: 'info' as const,
     impact_eur: p.typical_amount ?? 0,
   }));

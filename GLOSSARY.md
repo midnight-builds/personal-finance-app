@@ -144,7 +144,8 @@ Monthly or weekly patterns need at least three charges with a steady interval
 and amount; two charges are one interval and prove nothing. The forecast
 counts established ones as fixed costs and lists uncertain ones apart. Stored
 as `recurring_patterns`; `pattern_type` is `recurring`, `subscription` or
-`annual`, with a pattern decision applied (`patternDecisions.ts`).
+`annual`, with a pattern decision applied (`patternDecisions.ts`). `origin` says
+whether detection found it (`detected`) or an actor created it (`created`).
 
 **Subscription** — a recurring pattern told apart by its charges, not by who
 the merchant is: the same amount every time, booked on about the same day
@@ -190,6 +191,27 @@ about again. A decided pattern is deactivated only when its charges stop, and
 its decision applies again if they resume. Decisions apply to monthly and
 weekly patterns only; a row that turns annual follows the annual rules.
 _Avoid_: user_confirmed (the legacy flag of confirmed annual patterns)
+
+**Created pattern** — a monthly or weekly pattern an actor added that detection
+never proposed (`origin` `created`, `created_by`; `POST /patterns`,
+`patternCreation.ts`), e.g. a contract that started last month. One charge is
+enough: the actor cites existing charges, each a booked expense of that account
+and counterparty, not a transfer, within 20 % of the expected amount and at
+least 5 (weekly) or 20 (monthly) days from the next. It is confirmed at once
+with a pattern decision by the same actor and counts like any confirmed pattern.
+Its charges are the counterparty's countable expenses within 20 % of the expected
+amount from the first cited one on, so later ones attach to it. Detection never
+deactivates, retypes or re-prices it, and never adds a second row: one pattern
+per account and counterparty, so when detection finds the same pattern it stays
+the created one and only its charge count, latest charge and confidence are
+updated. An account's inactive pattern for the counterparty is taken over
+(same id); an active one is decided instead (`409 pattern_exists`). Rejecting it
+works as for any pattern; `reset` withdraws it: nobody vouches for it any more,
+so it is left out of the forecast, totals, questions and `/recurring` until its
+own charges make it established (confidence at least 0.75), from then on counted
+like a detected pattern. Weekly and monthly only: annual patterns follow their own
+confirmation.
+_Avoid_: manual pattern (it is not about manual decisions)
 
 **Recurring question** — "Onko tämä toistuva?": an uncertain pattern (no
 decision, confidence below 0.75) offered to the user with its charges as
