@@ -241,7 +241,7 @@ detection never proposed (`origin` `created`, `created_by`; `POST /patterns`,
 insurance premium. One charge is enough: the actor cites existing charges, each
 a booked expense of that account and counterparty, not a transfer, within 20 %
 of the expected amount (25 % yearly, detection's annual tolerance) and at least
-5 (weekly), 20 (monthly) or 330 (yearly, detection's shortest annual interval)
+5 (weekly), 20 (monthly) or 240 (yearly: two thirds of a period, as for the others)
 days from the next. It is confirmed at once with a pattern decision by the same
 actor and counts like any confirmed pattern, at the expected amount. A yearly
 one is an annual pattern (`pattern_type` `annual`) forecast in its typical
@@ -251,8 +251,8 @@ tolerance of the expected amount from the first cited one on, one per period,
 so later ones attach to it (and move a yearly one's typical month). One pattern
 per account and counterparty: an inactive one is taken over (same id), an active
 detected one, monthly, weekly or annual (also one confirmed as annual), is
-decided instead (`409 pattern_exists`); creating resolves the account's pending
-confirmation candidate for the counterparty (`superseded`); and creating an
+decided instead (`409 pattern_exists`); creating resolves the pending
+confirmation candidates for the counterparty (`superseded`; see there); and creating an
 active created one again re-states it
 (a new price or kind; the same values write nothing). While its latest decision
 is not `reset`, detection never deactivates, retypes or re-prices it and never
@@ -286,9 +286,12 @@ a pattern decision rejected it or it has lapsed (two years and 35 days without
 a charge). It can be decided like any pattern; it stays annual.
 
 **Confirmation candidate** — a single large expense (≥ 80 €) with no pattern,
-offered to the user to confirm as annual (`pattern_confirmations`). It is
-hidden while the account has an active pattern for the counterparty, and
-creating a pattern for it resolves it (`superseded`).
+offered to the user to confirm as annual (`pattern_confirmations`); asked once
+per counterparty and month across accounts. It is hidden while its account has
+an active pattern for the counterparty, or any account an active annual one,
+and then cannot be confirmed (`409 pattern_exists`; an answered one `409
+not_pending`). Creating a pattern for the counterparty resolves it
+(`superseded`): on that account, and on every account for a yearly pattern.
 
 **Pattern rules version** — `PATTERN_RULES_VERSION` in `patterns.ts`. Bumping it
 re-detects every account's patterns on the next API start, so stored patterns

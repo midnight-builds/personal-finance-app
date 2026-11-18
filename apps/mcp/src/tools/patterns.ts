@@ -73,13 +73,13 @@ export const patternTools: ToolDefinition[] = [
       'Adds a weekly, monthly or yearly pattern that detection never proposed, e.g. a contract that started last ' +
       'month or an annual insurance premium: one charge is enough as evidence. Cite the charges by id ' +
       '(search_transactions); each must be a booked expense of that account and counterparty, not a transfer, ' +
-      'within 20 % of expectedAmount (25 % yearly), and charges at least 5 (weekly), 20 (monthly) or 330 ' +
+      'within 20 % of expectedAmount (25 % yearly), and charges at least 5 (weekly), 20 (monthly) or 240 ' +
       '(yearly) days apart. The pattern is confirmed at once as kind (a pattern decision under this server\'s ' +
       'actor, in list_pattern_decisions) and counts like any confirmed pattern: weekly and monthly ones as a ' +
       'fixed cost in the forecast and, as a subscription, in the subscription total; a yearly one is an annual ' +
       'pattern (pattern_type annual, typical_month = the month of its latest charge) in the forecast\'s ' +
       'annualItems of that month only, not in the monthly subscription total. Creating one resolves the pending ' +
-      'annual confirmation of that account and counterparty. Its origin is created and created_by ' +
+      'annual confirmations of the counterparty (on every account, so a payment is not counted twice). Its origin is created and created_by ' +
       'is this server\'s actor. Later charges of the counterparty near expectedAmount attach to it; detection ' +
       'never deactivates, retypes or re-prices it, and when detection finds the same pattern it stays one ' +
       'pattern. Two periods (weeks, months or years) after the latest charge from the counterparty, counted on the ' +

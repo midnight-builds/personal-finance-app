@@ -54,12 +54,12 @@ redacted), `kind` (`recurring` or `subscription`), `interval` (`weekly`,
 `monthly` or `yearly`), `expectedAmount` and the ids of one or more existing
 charges. The API checks every cited charge (booked, an expense, not a transfer,
 that account and counterparty, within 20 % of the expected amount, 25 % yearly,
-not two in one period: 5, 20 or 330 days) and names the failing ids in the error.
+not two in one period: 5, 20 or 240 days) and names the failing ids in the error.
 The pattern gets `origin: created` and `created_by`, and a pattern decision of
 `kind` under the agent's actor, so it counts at once like a confirmed pattern. A
 yearly one is an annual pattern, forecast in the month of its latest charge
-(`annualItems`), and creating it resolves the pending annual confirmation of that
-account and counterparty. Detection never deactivates, retypes or re-prices it and
+(`annualItems`), and creating it resolves the pending annual confirmations of the
+counterparty, on every account. Detection never deactivates, retypes or re-prices it and
 keeps one pattern per account and counterparty. Annual patterns, detected or
 created, can be decided with `answer_recurring_question` too. When the account
 already has an active detected pattern for the counterparty (monthly, weekly or

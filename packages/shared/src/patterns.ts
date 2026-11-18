@@ -77,7 +77,7 @@ export const patternCreateFields = {
     .describe(
       'Ids of existing charges of this pattern (search_transactions): booked expenses of this account and ' +
         'counterparty, not transfers, each within 20 % of expectedAmount (25 % yearly), at least 5 days apart ' +
-        '(weekly), 20 days apart (monthly) or 330 days apart (yearly). One is enough, e.g. a newly started contract'
+        '(weekly), 20 days apart (monthly) or 240 days apart (yearly). One is enough, e.g. a newly started contract'
     ),
 };
 export const patternCreateRequestSchema = z.object(patternCreateFields);
