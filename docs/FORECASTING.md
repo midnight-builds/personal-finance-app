@@ -83,17 +83,19 @@ kuukausi), `projectedTotal`-summan päälle; kohteessa on nyt myös `patternId`,
 `state`, `origin` ja `lapsed`. Kuukausittaiseen tilaussummaan vuosikuvio ei
 kuulu.
 
-- **Luonti:** yksi veloitus riittää; usean veloituksen on oltava vähintään 240
+- **Luonti:** yksi veloitus riittää; usean veloituksen on oltava vähintään 300
   päivän päässä toisistaan ja ±25 % odotetusta summasta (summatoleranssi tunnistuksen
-  vuosisäännöistä; väli kaksi kolmasosaa vuodesta, jotta viikkoja aiemmin maksettu lasku käy). Myöhemmät veloitukset liittyvät kuvioon ja siirtävät sen
-  tyypillistä kuukautta.
+  vuosisäännöistä; 300 päivää, jotta viikkoja aiemmin maksettu lasku käy mutta
+  saman vuoden toinen veloitus ei vie sen paikkaa). Myöhemmät veloitukset
+  liittyvät kuvioon ja siirtävät sen tyypillistä kuukautta.
 - **Yksi kuvio per tili ja vastapuoli:** aktiivinen tunnistettu tai
   vuosikysymyksellä vahvistettu vuosikuvio palauttaa `409 pattern_exists`
   (päätä se sen sijaan). Luonti ratkaisee saman tilin ja vastapuolen avoimen
-  vuosikysymyksen (`superseded`; vuosikuvio ratkaisee vastapuolen kysymykset
-  kaikilta tileiltä). Avoin kysymys piilotetaan aina, kun tilillä on
-  vastapuolelle aktiivinen kuvio tai millä tahansa tilillä aktiivinen
-  vuosikuvio, eikä piilotettua tai ratkaistua kysymystä voi enää vahvistaa
+  vuosikysymyksen (`superseded`; vuosikuvio myös muiden tilien kysymykset
+  samasta maksusta: sama vastapuoli, kuukauden ja 25 %:n sisällä). Avoin
+  kysymys piilotetaan, kun tilillä on vastapuolelle aktiivinen kuvio tai kun
+  toisen tilin laskettava (ei hylätty, peruttu eikä pysähtynyt) vuosikuvio
+  laskee saman maksun, eikä piilotettua tai ratkaistua kysymystä voi enää vahvistaa
   (`409 pattern_exists` / `409 not_pending`), joten samaa maksua ei lasketa
   kahdesti eikä kuukausikuvio muutu vuosikuvioksi.
 - **Päätökset:** vuosikuvion voi vahvistaa tai hylätä kuten minkä tahansa

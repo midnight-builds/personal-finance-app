@@ -241,7 +241,7 @@ detection never proposed (`origin` `created`, `created_by`; `POST /patterns`,
 insurance premium. One charge is enough: the actor cites existing charges, each
 a booked expense of that account and counterparty, not a transfer, within 20 %
 of the expected amount (25 % yearly, detection's annual tolerance) and at least
-5 (weekly), 20 (monthly) or 240 (yearly: two thirds of a period, as for the others)
+5 (weekly), 20 (monthly) or 300 (yearly, so a second charge in a year is not taken for it)
 days from the next. It is confirmed at once with a pattern decision by the same
 actor and counts like any confirmed pattern, at the expected amount. A yearly
 one is an annual pattern (`pattern_type` `annual`) forecast in its typical
@@ -288,10 +288,12 @@ a charge). It can be decided like any pattern; it stays annual.
 **Confirmation candidate** — a single large expense (≥ 80 €) with no pattern,
 offered to the user to confirm as annual (`pattern_confirmations`); asked once
 per counterparty and month across accounts. It is hidden while its account has
-an active pattern for the counterparty, or any account an active annual one,
-and then cannot be confirmed (`409 pattern_exists`; an answered one `409
-not_pending`). Creating a pattern for the counterparty resolves it
-(`superseded`): on that account, and on every account for a yearly pattern.
+an active pattern for the counterparty, or while an annual pattern on another
+account counts the same payment (same counterparty, within a month and 25 %;
+not rejected, withdrawn or lapsed), and then cannot be confirmed (`409
+pattern_exists`; an answered one `409 not_pending`). Creating a pattern for the
+counterparty resolves it (`superseded`): on that account, and for a yearly
+pattern also those about the same payment on other accounts.
 
 **Pattern rules version** — `PATTERN_RULES_VERSION` in `patterns.ts`. Bumping it
 re-detects every account's patterns on the next API start, so stored patterns
