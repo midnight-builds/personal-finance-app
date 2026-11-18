@@ -123,7 +123,7 @@ test('groceries: frequent purchases of varying size form no pattern and no fixed
   assert.equal(forecast().knownFixedTotal, 0);
 });
 
-test('person: a fixed monthly payment to an IBAN is never a subscription without the user’s word, and is asked', () => {
+test('person: a fixed monthly payment to an IBAN is never a subscription without the user’s word; once established it is not asked', () => {
   const a = mkAccount();
   monthly(a, 'Maija Meikäläinen', -50, 10, 6, IBAN);
   detectPatterns(a.account, AS_OF);
@@ -132,11 +132,8 @@ test('person: a fixed monthly payment to an IBAN is never a subscription without
   assert.equal(p.pattern_type, 'recurring');
   assert.equal(p.payment_method, 'account_payment');
   assert.deepEqual(subscriptions(), []);
-  const q = question('Maija Meikäläinen')!;
-  assert.deepEqual(q.reasons, ['fixed_amount_account_payment']);
-  assert.equal(q.suggestedAnswer, 'recurring');
-  assert.equal(q.evidence.chargeCount, 6);
-  assert.equal(q.evidence.transactions.length, 6);
+  assert.equal(p.established, true);
+  assert.equal(question('Maija Meikäläinen'), undefined, 'confident: no confirmation needed');
 
   decide('Maija Meikäläinen', 'subscription');
   assert.deepEqual(subscriptions(), ['Maija Meikäläinen']);
@@ -161,9 +158,10 @@ test('streaming subscription: counted once confident; at three charges only afte
   assert.equal(getHouseholdSummary(AS_OF).monthlySubscriptions, 12.99);
   assert.deepEqual(fixed(), ['Suoratoisto Kuvavirta']);
   assert.deepEqual(uncertain(), ['Äänikirjapalvelu Tarina']);
-  // A fixed card amount could also be savings, so both are asked.
-  assert.deepEqual(question('Suoratoisto Kuvavirta')!.reasons, ['fixed_amount_card']);
+  // Only the uncertain one is asked; the fixed card amount is a hint, not a trigger.
+  assert.equal(question('Suoratoisto Kuvavirta'), undefined);
   assert.deepEqual(question('Äänikirjapalvelu Tarina')!.reasons, ['low_confidence', 'fixed_amount_card']);
+  assert.equal(question('Äänikirjapalvelu Tarina')!.evidence.transactions.length, 3);
   assert.equal(question('Äänikirjapalvelu Tarina')!.suggestedAnswer, 'subscription');
 
   decide('Äänikirjapalvelu Tarina', 'subscription');
@@ -184,6 +182,22 @@ test('monthly bill: six months of an e-invoice of varying amount is an establish
   assert.deepEqual(fixed(), ['Sähkölaitos Virta Oy']);
   assert.equal(question('Sähkölaitos Virta Oy'), undefined);
   assert.deepEqual(subscriptions(), []);
+});
+
+test('only uncertain, undecided patterns are asked; decided and rejected ones never', () => {
+  const a = mkAccount();
+  monthly(a, 'Suoratoisto Kuvavirta', -12.99, 3, 6); // established
+  monthly(a, 'Rahasto Kasvu', -100, 12, 3, IBAN); // uncertain
+  monthly(a, 'Maija Meikäläinen', -50, 10, 3, IBAN); // uncertain
+  monthly(a, 'Äänikirjapalvelu Tarina', -9.99, 15, 3); // uncertain
+  detectPatterns(a.account, AS_OF);
+  assert.deepEqual(recurringQuestions().map((q) => q.counterparty).sort(), ['Maija Meikäläinen', 'Rahasto Kasvu', 'Äänikirjapalvelu Tarina']);
+  for (const q of recurringQuestions()) assert.ok(q.reasons.includes('low_confidence'));
+
+  decide('Rahasto Kasvu', 'not_recurring', 'hermes');
+  decide('Maija Meikäläinen', 'recurring', 'user');
+  detectPatterns(a.account, AS_OF);
+  assert.deepEqual(recurringQuestions().map((q) => q.counterparty), ['Äänikirjapalvelu Tarina']);
 });
 
 test('monthly bill: four charges with a wider spread stay uncertain and are asked until confirmed', () => {
@@ -342,8 +356,9 @@ test('a decision applies to monthly/weekly patterns only: a row turned annual fo
 test('the briefing asks the open questions with their charges and leaves rejected patterns out', async () => {
   const { runBriefing } = await import('../src/briefing.js');
   const a = mkAccount();
-  const ids = monthly(a, 'Rahasto Kasvu', -100, 12, 6, IBAN);
-  monthly(a, 'Maija Meikäläinen', -50, 10, 6, IBAN);
+  const ids = monthly(a, 'Rahasto Kasvu', -100, 12, 3, IBAN);
+  monthly(a, 'Maija Meikäläinen', -50, 10, 3, IBAN);
+  monthly(a, 'Suoratoisto Kuvavirta', -12.99, 3, 6);
   detectPatterns(a.account, AS_OF);
   decide('Maija Meikäläinen', 'not_recurring');
 
@@ -358,6 +373,7 @@ test('the briefing asks the open questions with their charges and leaves rejecte
   assert.equal(JSON.parse(questions[0].metadata).patternId, pattern('Rahasto Kasvu')!.id);
   assert.ok(!findings.some((f) => f.title.includes('Maija')), 'a rejected pattern is not reported');
   assert.ok(!findings.some((f) => f.finding_type === 'new_recurring' && f.title.includes('Rahasto')), 'asked, not also announced');
+  assert.ok(!questions.some((f) => f.title.includes('Kuvavirta')), 'an established pattern is not asked');
 
   // Answered since (e.g. by an agent): the stored card is no longer shown.
   const { withoutAnsweredQuestions } = await import('../src/briefing.js');
@@ -379,7 +395,7 @@ after(() => app.close());
 
 test('REST: answer a question with the actor, re-stating appends nothing, history lists it', async () => {
   const a = mkAccount();
-  monthly(a, 'Rahasto Kasvu', -100, 12, 6, IBAN);
+  monthly(a, 'Rahasto Kasvu', -100, 12, 3, IBAN);
   detectPatterns(a.account, AS_OF);
 
   const questions = (await app.inject({ method: 'GET', url: '/patterns/questions' })).json();

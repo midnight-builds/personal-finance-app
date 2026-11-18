@@ -19,13 +19,14 @@ export const patternTools: ToolDefinition[] = [
     name: 'list_recurring_questions',
     title: 'Open "is this recurring?" questions',
     description:
-      'Monthly or weekly patterns nobody has decided on yet that the app is unsure about ("Onko tämä toistuva?"), ' +
-      'largest typical amount first. reasons: low_confidence (confidence below 0.75: the rhythm is not proven), ' +
-      'fixed_amount_account_payment (the same amount to an IBAN every time: savings, rent or a person?), ' +
-      'fixed_amount_card (the same amount by card every time: a subscription or e.g. savings?). Each item: ' +
-      'patternId, accountId, counterparty, suggestedAnswer (what detection found), reasons, confidence (0-1) with ' +
-      'confidenceFactors {charges, interval, amount}, established (already counted as a fixed cost while ' +
-      'unanswered), typicalAmount (positive EUR), intervalDays, and evidence { chargeCount, firstDate, lastDate, ' +
+      'Uncertain monthly or weekly patterns ("Onko tämä toistuva?"): nobody has decided on them and their ' +
+      'confidence is below 0.75, so they are not counted as fixed costs. Largest typical amount first. Established ' +
+      'patterns (confidence >= 0.75) need no confirmation and are not listed; decided and rejected ones never are. ' +
+      'reasons: always low_confidence, plus a hint when the amount is the same every time: ' +
+      'fixed_amount_account_payment (to an IBAN every time: savings, rent or a person?) or fixed_amount_card ' +
+      '(a subscription or e.g. savings?). Each item: patternId, accountId, counterparty, suggestedAnswer (what ' +
+      'detection found), reasons, confidence (0-1) with confidenceFactors {charges, interval, amount}, ' +
+      'typicalAmount (positive EUR), intervalDays, and evidence { chargeCount, firstDate, lastDate, ' +
       'smallestAmount, largestAmount (signed, expenses negative), amountFixed, paymentMethod (account_payment, card ' +
       'or mixed), transactions [{id, date, amount}] } - the charges the pattern rests on, which search_transactions ' +
       'can show in full. Answer with answer_recurring_question. A second content block { meta } tells how fresh ' +
@@ -41,7 +42,8 @@ export const patternTools: ToolDefinition[] = [
       'Records what a monthly or weekly pattern is: recurring (a recurring cost that is not a subscription: a ' +
       'bill, savings, a payment to a person), subscription, or not_recurring (not a recurring cost: it leaves the ' +
       'forecast, the subscription total and the briefing, and is never asked about again). patternId comes from ' +
-      'list_recurring_questions or list_recurring (any monthly/weekly pattern, also one not asked about). The ' +
+      'list_recurring_questions or list_recurring: any active monthly/weekly pattern, also an established one ' +
+      'never asked about (e.g. reject a confident pattern that is really savings or a one-off series). The ' +
       'decision is appended to the history under this server\'s actor (list_pattern_decisions) and survives ' +
       're-detection; a later answer replaces it, and repeating the current answer records nothing (recorded: ' +
       'false). A decision the user made cannot be changed here (409 user_decision); one an agent made can. ' +

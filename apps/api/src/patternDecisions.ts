@@ -117,17 +117,16 @@ export function establishedSubscriptions(): PatternView[] {
 // ── "Onko tämä toistuva?" questions ─────────────────────────────────
 
 /**
- * Why an undecided pattern is worth asking about. A low confidence means the rhythm is
- * not proven; a fixed amount means the kind is unknown even when the rhythm is: paid to
- * an IBAN it may be savings, rent or a person, by card it may be savings or a
- * subscription. A varying amount on a steady rhythm (a bill) is clear enough not to ask.
+ * Why an undecided pattern is asked about. Only an uncertain one is (confidence below
+ * CONFIDENT): an established pattern needs no confirmation, though the user or an agent
+ * may still decide it. A fixed amount is added as a hint of what it may be: paid to an
+ * IBAN every time, savings, rent or a person; otherwise savings or a subscription.
  */
 export type QuestionReason = 'low_confidence' | 'fixed_amount_account_payment' | 'fixed_amount_card';
 
 function questionReasons(p: PatternView): QuestionReason[] {
-  if (p.state !== 'unconfirmed' || !MONTHLY_TYPES.has(p.pattern_type)) return [];
-  const reasons: QuestionReason[] = [];
-  if ((p.confidence ?? 0) < CONFIDENT) reasons.push('low_confidence');
+  if (p.state !== 'unconfirmed' || !MONTHLY_TYPES.has(p.pattern_type) || p.established) return [];
+  const reasons: QuestionReason[] = ['low_confidence'];
   if (p.amount_fixed) {
     reasons.push(p.payment_method === 'account_payment' ? 'fixed_amount_account_payment' : 'fixed_amount_card');
   }
@@ -143,8 +142,6 @@ export type RecurringQuestion = {
   reasons: QuestionReason[];
   confidence: number | null;
   confidenceFactors: ConfidenceFactors | null;
-  /** Counted in the forecast and totals already while unanswered (confidence ≥ CONFIDENT). */
-  established: boolean;
   typicalAmount: number | null;
   intervalDays: number | null;
   currency: string;
@@ -185,7 +182,6 @@ function question({ pattern: p, reasons }: OpenQuestion, charges: Occurrence[]):
     reasons,
     confidence: p.confidence,
     confidenceFactors: p.confidence_factors,
-    established: p.established === true,
     typicalAmount: p.typical_amount,
     intervalDays: p.interval_days,
     currency: p.currency,

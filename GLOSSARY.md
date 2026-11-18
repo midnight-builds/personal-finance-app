@@ -151,8 +151,8 @@ the merchant is: the same amount every time, booked on about the same day
 each month (3 days early to 5 days late), with no other charge to the
 counterparty in between. A counterparty paid only to an IBAN (a person, an
 e-invoice biller) is never one unless the user says so. Fixed monthly savings
-paid by card look the same, so every unconfirmed subscription is a recurring
-question. The monthly subscription total and the subscription-creep finding
+paid by card look the same; the user or an agent can reject or reclassify one
+with a pattern decision. The monthly subscription total and the subscription-creep finding
 count established subscriptions only.
 
 **Recurring (pattern type)** — a monthly or weekly pattern that is not a
@@ -188,14 +188,15 @@ its decision applies again if they resume. Decisions apply to monthly and
 weekly patterns only; a row that turns annual follows the annual rules.
 _Avoid_: user_confirmed (the legacy flag of confirmed annual patterns)
 
-**Recurring question** — "Onko tämä toistuva?": an unconfirmed monthly or
-weekly pattern offered to the user, with its charges as evidence, because its
-confidence is below 0.75 or its amount is the same every time (paid to an IBAN
-every time it may be savings, rent or a person; otherwise savings or a
-subscription). A bill of varying amount is asked only while its confidence is
-below 0.75: a spread of a few percent reaches it in four or five months, a
-wider one may need the user's answer. The briefing shows the three largest and
-hides a question once answered. Answered with a pattern decision
+**Recurring question** — "Onko tämä toistuva?": an uncertain pattern (no
+decision, confidence below 0.75) offered to the user with its charges as
+evidence. An established pattern needs no confirmation and is not asked, and a
+decided or rejected one never is; any active monthly or weekly pattern can still
+be decided, asked or not. A fixed amount is shown as a hint of what it may be
+(paid to an IBAN every time: savings, rent or a person; otherwise savings or a
+subscription). A bill of varying amount reaches 0.75 in four or five months
+with a spread of a few percent; a wider one may need the user's answer. The
+briefing shows the three largest and hides a question once answered. Answered with a pattern decision
 (`GET /patterns/questions`, `POST /patterns/:id/decision`).
 
 **Annual pattern** — a charge about once a year (330–400 days apart), or one

@@ -43,7 +43,8 @@ olivat ennusteen pohja. Kuukausittainen tilaussumma (`/household/summary`,
 `monthlySubscriptions`) ja tilauspalveluhavainto laskevat vain vakiintuneet
 tilaukset; `/subscriptions` listaa samat.
 
-Epävarmat ja kiinteän summan kuviot kysytään käyttäjältä ("Onko tämä
-toistuva?", GLOSSARY.md "Recurring question"): `GET /patterns/questions`
+Epävarmat kuviot (ei päätöstä, varmuus < 0,75) kysytään käyttäjältä ("Onko
+tämä toistuva?", GLOSSARY.md "Recurring question"): `GET /patterns/questions`
 palauttaa ne todisteineen (veloitukset, päivät, summat), ja briefing näyttää
-kolme suurinta kysymyskorttina.
+kolme suurinta kysymyskorttina. Vakiintunutta kuviota ei kysytä, mutta
+käyttäjä tai agentti voi silti hylätä tai luokitella sen.

@@ -32,7 +32,10 @@ anything.
 
 The agent answers "Onko tämä toistuva?" questions as the user does in the
 briefing (GLOSSARY.md, "Recurring question", "Pattern decision"), without asking
-the user to confirm, like category management. An answer is appended to
+the user to confirm, like category management. Only uncertain patterns are asked;
+an established one needs no confirmation, but the agent can still decide any
+active monthly or weekly pattern by its id from `list_recurring`, e.g. reject a
+confident one that is really savings. An answer is appended to
 `pattern_decisions` with the agent as actor, the latest decision counts, and a
 later one replaces it; `list_pattern_decisions` shows who decided what. A
 decision the user made is changed only by the user: the agent gets
