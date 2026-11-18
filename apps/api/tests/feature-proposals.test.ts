@@ -215,7 +215,7 @@ test('amendFeatureProposal corrects the note and resolution of a final proposal,
   const p = createFeatureProposal(valid).proposal;
   resolveFeatureProposal(p.id, 'done', null, 'x');
   // Decided a while ago, so the correction is strictly later even within one millisecond.
-  db.prepare("UPDATE feature_proposals SET resolved_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(p.id);
+  db.prepare("UPDATE feature_proposals SET resolved_at = '2026-01-01T00:00:00.000Z', updated_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(p.id);
   const done = listFeatureProposals().find((x) => x.id === p.id)!;
   const fixed = amendFeatureProposal(p.id, { resolution: 'https://example.test/pull/1', note: 'Real reason' });
   assert.equal(fixed.status, 'done');

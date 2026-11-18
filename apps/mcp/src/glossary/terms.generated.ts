@@ -162,13 +162,19 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   {
     "term": "Subscription",
     "summary": "a recurring pattern told apart by its charges, not by who the merchant is: the same amount every time, booked on about the same day each month (3 days early to 5 days late), with no other charge to the counterparty in between.",
-    "definition": "a recurring pattern told apart by its charges, not by who the merchant is: the same amount every time, booked on about the same day each month (3 days early to 5 days late), with no other charge to the counterparty in between. A counterparty paid only to an IBAN (a person, an e-invoice biller) is never one unless the user says so. Fixed monthly savings paid by card look the same; the user or an agent can reject or reclassify one with a pattern decision. The monthly subscription total and the subscription-creep finding count established subscriptions that have not lapsed, a weekly one at 52/12 charges a month (`monthly_amount`).",
+    "definition": "a recurring pattern told apart by its charges, not by who the merchant is: the same amount every time, booked on about the same day each month (3 days early to 5 days late), with no other charge to the counterparty in between. A counterparty paid only to an IBAN (a person, an e-invoice biller) is never one unless the user says so, nor is a savings pattern. The monthly subscription total and the subscription-creep finding count established subscriptions that have not lapsed, a weekly one at 52/12 charges a month (`monthly_amount`).",
     "avoid": null
   },
   {
     "term": "Recurring (pattern type)",
-    "summary": "a monthly or weekly pattern that is not a subscription: varying amount or day, or paid to an IBAN.",
-    "definition": "a monthly or weekly pattern that is not a subscription: varying amount or day, or paid to an IBAN.",
+    "summary": "a monthly or weekly pattern that is not a subscription: varying amount or day, paid to an IBAN, or savings.",
+    "definition": "a monthly or weekly pattern that is not a subscription: varying amount or day, paid to an IBAN, or savings.",
+    "avoid": null
+  },
+  {
+    "term": "Savings pattern",
+    "summary": "a monthly or weekly pattern saved or invested rather than spent (`savings`): most of its charges (over half) are fund purchases by their description (`MERKINTÄ … KURSSI …`) or go to a counterparty named for a fund or saving (`rahasto`, `säästö` but not `säästöpankki`, `fund`, `etf`; `isSavingsCharge`).",
+    "definition": "a monthly or weekly pattern saved or invested rather than spent (`savings`): most of its charges (over half) are fund purchases by their description (`MERKINTÄ … KURSSI …`) or go to a counterparty named for a fund or saving (`rahasto`, `säästö` but not `säästöpankki`, `fund`, `etf`; `isSavingsCharge`). A fixed monthly fund purchase by card charges like a subscription, so detection never makes one a subscription, and it is established only by a pattern decision: until then it is uncertain and asked about, whatever its confidence. A decision settles it, `subscription` too.",
     "avoid": null
   },
   {
@@ -179,8 +185,8 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   },
   {
     "term": "Established pattern",
-    "summary": "a monthly or weekly pattern that counts as a fixed cost (and, if a subscription, in the subscription total): confirmed by a pattern decision, or unconfirmed with confidence at least 0.75 (`CONFIDENT`).",
-    "definition": "a monthly or weekly pattern that counts as a fixed cost (and, if a subscription, in the subscription total): confirmed by a pattern decision, or unconfirmed with confidence at least 0.75 (`CONFIDENT`). A lapsed pattern stays established but counts nowhere while it is lapsed.",
+    "summary": "a monthly or weekly pattern that counts as a fixed cost (and, if a subscription, in the subscription total): confirmed by a pattern decision, or unconfirmed with confidence at least 0.75 (`CONFIDENT`) and not a savings pattern.",
+    "definition": "a monthly or weekly pattern that counts as a fixed cost (and, if a subscription, in the subscription total): confirmed by a pattern decision, or unconfirmed with confidence at least 0.75 (`CONFIDENT`) and not a savings pattern. A lapsed pattern stays established but counts nowhere while it is lapsed.",
     "avoid": null
   },
   {
@@ -191,8 +197,8 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   },
   {
     "term": "Uncertain pattern",
-    "summary": "an unconfirmed monthly or weekly pattern below 0.75.",
-    "definition": "an unconfirmed monthly or weekly pattern below 0.75. The forecast lists it in `uncertainRecurring`, outside `knownFixed` and `projectedTotal`.",
+    "summary": "an unconfirmed monthly or weekly pattern below 0.75, or an unconfirmed savings pattern.",
+    "definition": "an unconfirmed monthly or weekly pattern below 0.75, or an unconfirmed savings pattern. The forecast lists it in `uncertainRecurring`, outside `knownFixed` and `projectedTotal`.",
     "avoid": null
   },
   {
@@ -209,8 +215,8 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   },
   {
     "term": "Recurring question",
-    "summary": "\"Onko tämä toistuva?\": an uncertain pattern (no decision, confidence below 0.75) offered to the user with its charges as evidence.",
-    "definition": "\"Onko tämä toistuva?\": an uncertain pattern (no decision, confidence below 0.75) offered to the user with its charges as evidence. An established pattern needs no confirmation and is not asked, and a decided or rejected one never is; any active monthly or weekly pattern can still be decided, asked or not. A fixed amount is shown as a hint of what it may be (paid to an IBAN every time: savings, rent or a person; otherwise savings or a subscription). A bill of varying amount reaches 0.75 in four or five months with a spread of a few percent; a wider one may need the user's answer. The briefing shows the three largest and hides a question once answered. Answered with a pattern decision (`GET /patterns/questions`, `POST /patterns/:id/decision`).",
+    "summary": "\"Onko tämä toistuva?\": an uncertain pattern (no decision, confidence below 0.75 or savings) offered to the user with its charges as evidence.",
+    "definition": "\"Onko tämä toistuva?\": an uncertain pattern (no decision, confidence below 0.75 or savings) offered to the user with its charges as evidence. An established pattern needs no confirmation and is not asked, and a decided or rejected one never is; any active monthly or weekly pattern can still be decided, asked or not. A fixed amount is shown as a hint of what it may be (paid to an IBAN every time: savings, rent or a person; otherwise savings or a subscription). A bill of varying amount reaches 0.75 in four or five months with a spread of a few percent; a wider one may need the user's answer. The briefing shows the three largest and hides a question once answered. Answered with a pattern decision (`GET /patterns/questions`, `POST /patterns/:id/decision`).",
     "avoid": null
   },
   {

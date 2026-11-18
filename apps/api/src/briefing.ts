@@ -267,6 +267,7 @@ const shownQuestions = () => recurringQuestions().slice(0, 3);
 
 const QUESTION_REASON_TEXT: Record<string, string> = {
   low_confidence: 'näyttöä on vielä vähän',
+  savings: 'näyttää säästämiseltä tai sijoittamiselta, ei tilaukselta',
   fixed_amount_account_payment: 'sama summa tilille joka kerta (esim. säästö, vuokra tai henkilö)',
   fixed_amount_card: 'sama summa kortilla joka kerta (tilaus vai esim. säästö?)',
 };

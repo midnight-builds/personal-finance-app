@@ -20,9 +20,10 @@ export const patternTools: ToolDefinition[] = [
     title: 'Open "is this recurring?" questions',
     description:
       'Uncertain monthly or weekly patterns ("Onko tämä toistuva?"): nobody has decided on them and their ' +
-      'confidence is below 0.75, so they are not counted as fixed costs. Largest typical amount first. Established ' +
-      'patterns (confidence >= 0.75) need no confirmation and are not listed; decided and rejected ones never are. ' +
-      'reasons: always low_confidence, plus a hint when the amount is the same every time: ' +
+      'confidence is below 0.75, or they look like savings or investing, so they are not counted as fixed costs. ' +
+      'Largest typical amount first. Established patterns (confidence >= 0.75, not savings) need no confirmation and ' +
+      'are not listed; decided and rejected ones never are. reasons: low_confidence (below 0.75) and/or savings (a ' +
+      'fund purchase or saving: never a subscription until decided so), plus a hint when the amount is the same every time: ' +
       'fixed_amount_account_payment (to an IBAN every time: savings, rent or a person?) or fixed_amount_card ' +
       '(a subscription or e.g. savings?). Each item: patternId, accountId, counterparty, suggestedAnswer (what ' +
       'detection found), reasons, confidence (0-1) with confidenceFactors {charges, interval, amount}, ' +

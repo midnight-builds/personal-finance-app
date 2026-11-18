@@ -162,14 +162,23 @@ whether detection found it (`detected`) or an actor created it (`created`).
 the merchant is: the same amount every time, booked on about the same day
 each month (3 days early to 5 days late), with no other charge to the
 counterparty in between. A counterparty paid only to an IBAN (a person, an
-e-invoice biller) is never one unless the user says so. Fixed monthly savings
-paid by card look the same; the user or an agent can reject or reclassify one
-with a pattern decision. The monthly subscription total and the subscription-creep finding
+e-invoice biller) is never one unless the user says so, nor is a savings
+pattern. The monthly subscription total and the subscription-creep finding
 count established subscriptions that have not lapsed, a weekly one at 52/12
 charges a month (`monthly_amount`).
 
 **Recurring (pattern type)** — a monthly or weekly pattern that is not a
-subscription: varying amount or day, or paid to an IBAN.
+subscription: varying amount or day, paid to an IBAN, or savings.
+
+**Savings pattern** — a monthly or weekly pattern saved or invested rather
+than spent (`savings`): most of its charges (over half) are fund purchases by
+their description (`MERKINTÄ … KURSSI …`) or go to a counterparty named for a
+fund or saving (`rahasto`, `säästö` but not `säästöpankki`, `fund`, `etf`;
+`isSavingsCharge`).
+A fixed monthly fund purchase by card charges like a subscription, so detection
+never makes one a subscription, and it is established only by a pattern
+decision: until then it is uncertain and asked about, whatever its confidence.
+A decision settles it, `subscription` too.
 
 **Confidence (of a pattern)** — how strongly a monthly or weekly pattern's
 charges show a steady rhythm, 0–1, scored at detection (`scorePattern`):
@@ -181,7 +190,8 @@ returned with it.
 
 **Established pattern** — a monthly or weekly pattern that counts as a fixed
 cost (and, if a subscription, in the subscription total): confirmed by a
-pattern decision, or unconfirmed with confidence at least 0.75 (`CONFIDENT`).
+pattern decision, or unconfirmed with confidence at least 0.75 (`CONFIDENT`)
+and not a savings pattern.
 A lapsed pattern stays established but counts nowhere while it is lapsed.
 
 **Lapsed pattern** — a monthly or weekly pattern, detected or created, whose
@@ -200,7 +210,8 @@ run (`markLapsed` in `patterns.ts`), creation too: a charge again clears it, so
 the pattern counts again. It can still be decided or rejected. Annual patterns
 do not lapse.
 
-**Uncertain pattern** — an unconfirmed monthly or weekly pattern below 0.75.
+**Uncertain pattern** — an unconfirmed monthly or weekly pattern below 0.75,
+or an unconfirmed savings pattern.
 The forecast lists it in `uncertainRecurring`, outside `knownFixed` and
 `projectedTotal`.
 
@@ -248,7 +259,7 @@ annual patterns follow their own confirmation.
 _Avoid_: manual pattern (it is not about manual decisions)
 
 **Recurring question** — "Onko tämä toistuva?": an uncertain pattern (no
-decision, confidence below 0.75) offered to the user with its charges as
+decision, confidence below 0.75 or savings) offered to the user with its charges as
 evidence. An established pattern needs no confirmation and is not asked, and a
 decided or rejected one never is; any active monthly or weekly pattern can still
 be decided, asked or not. A fixed amount is shown as a hint of what it may be

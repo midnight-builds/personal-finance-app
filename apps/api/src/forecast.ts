@@ -20,6 +20,8 @@ export type ForecastItem = {
   confidence?: number | null;
   /** detected, or created by an actor (GLOSSARY.md, "Created pattern"). */
   origin?: PatternOrigin;
+  /** Saved or invested rather than spent (GLOSSARY.md, "Savings pattern"). */
+  savings?: boolean;
 };
 export type AnnualForecastItem = { counterparty: string; amount: number; month: number };
 
@@ -71,6 +73,7 @@ export function computeMonthlyForecast(
       state: p.state,
       confidence: p.confidence,
       origin: p.origin,
+      savings: p.savings,
       lapsed: p.lapsed,
       lapsedSince: p.lapsed_since,
     };
