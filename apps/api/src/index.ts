@@ -19,6 +19,7 @@ import { listBalanceAdjustments, createBalanceAdjustment, deleteBalanceAdjustmen
 import { getBalanceSnapshotsForAccount } from './balanceSnapshots.js';
 import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
 import { redetectPatternsIfRulesChanged } from './patterns.js';
+import { relinkTransfersIfRulesChanged } from './importer.js';
 import { withoutAnsweredQuestions } from './briefing.js';
 import { routes } from './routes/index.js';
 
@@ -27,6 +28,11 @@ seedDefaultCategories();
 
 const server = Fastify({ logger: true });
 
+try {
+  if (relinkTransfersIfRulesChanged()) server.log.info('Stored transactions re-linked for new transfer rules');
+} catch (err) {
+  server.log.error({ err }, 'Re-linking transfers failed; stored links kept');
+}
 try {
   if (redetectPatternsIfRulesChanged()) server.log.info('Recurring patterns re-detected for new detection rules');
 } catch (err) {

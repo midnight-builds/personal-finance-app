@@ -3,7 +3,7 @@ import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { db } from '../src/db.js';
-import { checksum, processImport, type ImportTarget } from '../src/importer.js';
+import { checksum, processImport, relinkTransfersIfRulesChanged, type ImportTarget } from '../src/importer.js';
 import { ledgerEntries } from '../src/ledger.js';
 import { resetDb } from './setup/resetDb.js';
 
@@ -264,6 +264,78 @@ test('a card refund is not taken for a repayment of a purchase at the issuer', a
   );
   assert.equal(links().length, 1);
   assert.equal(ledgerEntries().filter((e) => e.amount === -35 || e.amount === 35).length, 2);
+});
+
+test('a card bill is a transfer when the card dates each credit in its name', async () => {
+  // The card names each credit after its day ("Suoritus 05.10"), so no two repayments share a name.
+  await importRows(CHECKING, [
+    { date: '2026-10-01', amount: -950, other: FRIEND, name: 'Vuokranantaja' },
+    { date: '2026-10-05', amount: -300, other: 'FI99 9999 9999 9999 99', name: 'Korttipankki Oyj' },
+    { date: '2026-10-20', amount: -212.4, other: 'Korttipankki Oyj', name: 'Korttipankki Oyj' },
+  ]);
+  await upload(
+    'Luottokortti.csv',
+    [
+      { date: '2026-10-20', amount: 212.4, other: '', name: 'Suoritus 20.10' },
+      { date: '2026-10-05', amount: 300, other: '', name: 'Suoritus 05.10.2026' },
+      { date: '2026-10-31', amount: 4.5, other: '', name: 'Hyvitys 31.10' },
+    ],
+    NEW_CARD
+  );
+  assert.equal(links().length, 2);
+  assert.equal(ledgerEntries().filter((e) => e.counterparty === 'Korttipankki Oyj').length, 0);
+});
+
+test('a card refund dated in its name is still not a repayment', async () => {
+  await importRows(CHECKING, [
+    { date: '2026-10-05', amount: -500, other: 'FI99 9999 9999 9999 99', name: 'Korttipankki Oyj' },
+    { date: '2026-10-12', amount: -35, other: 'Korttipankki Oyj', name: 'Korttipankki Oyj' },
+  ]);
+  await upload(
+    'Luottokortti.csv',
+    [
+      { date: '2026-10-05', amount: 500, other: '', name: 'Suoritus 05.10' },
+      { date: '2026-10-13', amount: 35, other: '', name: 'Hyvitys 13.10' },
+    ],
+    NEW_CARD
+  );
+  assert.equal(links().length, 1);
+});
+
+test('transfers already imported are linked again when the linking rules change', async () => {
+  await importRows(CHECKING, [
+    { date: '2026-10-05', amount: -300, other: 'FI99 9999 9999 9999 99', name: 'Korttipankki Oyj' },
+    { date: '2026-10-20', amount: -212.4, other: 'Korttipankki Oyj', name: 'Korttipankki Oyj' },
+  ]);
+  await upload(
+    'Luottokortti.csv',
+    [
+      { date: '2026-10-05', amount: 300, other: '', name: 'Suoritus 05.10' },
+      { date: '2026-10-20', amount: 212.4, other: '', name: 'Suoritus 20.10' },
+    ],
+    NEW_CARD
+  );
+  // As an earlier version left it: only the IBAN repayment linked.
+  const bill = db.prepare('SELECT id FROM normalized_transactions WHERE amount = -212.4').get() as { id: string };
+  db.prepare('DELETE FROM transfer_links WHERE from_transaction_id = ?').run(bill.id);
+  db.prepare("DELETE FROM app_settings WHERE key = 'transferRulesVersion'").run();
+  const rowsBefore = db.prepare('SELECT COUNT(*) AS n FROM normalized_transactions').get();
+
+  assert.equal(relinkTransfersIfRulesChanged(), true);
+  assert.equal(links().length, 2);
+  assert.equal(relinkTransfersIfRulesChanged(), false);
+  assert.deepEqual(db.prepare('SELECT COUNT(*) AS n FROM normalized_transactions').get(), rowsBefore);
+});
+
+test('re-linking leaves a tie between two cards unlinked, as the import did', async () => {
+  const card2: ImportTarget = { newAccount: { name: 'Toinen kortti', subtype: 'credit_card' } };
+  await upload('Luottokortti.csv', [{ date: '2026-10-10', amount: 100, other: '', name: 'Hyvitys' }], NEW_CARD);
+  await upload('Toinen.csv', [{ date: '2026-10-10', amount: 100, other: '', name: 'Hyvitys' }], card2);
+  await importRows(CHECKING, [{ date: '2026-10-10', amount: -100, other: FRIEND, name: 'Vuokranantaja' }]);
+  assert.deepEqual(links(), []);
+  db.prepare("DELETE FROM app_settings WHERE key = 'transferRulesVersion'").run();
+  relinkTransfersIfRulesChanged();
+  assert.deepEqual(links(), []);
 });
 
 test('a payment without an IBAN to a payee never repaid by IBAN is not a transfer', async () => {

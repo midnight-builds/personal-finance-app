@@ -267,6 +267,13 @@ type LinkSide = {
 };
 
 /**
+ * How a card names a credit, without the day some cards put in it
+ * ("Suoritus 20.10" and "Suoritus 05.11" are the same kind of credit).
+ */
+const creditLabel = (name: string | null) =>
+  name === null ? null : name.replace(/\b\d{1,2}\.\d{1,2}(?:\.\d{0,4})?(?!\d)/g, ' ').replace(/\s+/g, ' ').trim();
+
+/**
  * Pairs each new transaction with the other side of a transfer between own
  * accounts: the opposite amount on another account within two days. Each
  * transaction is in at most one transfer.
@@ -329,7 +336,7 @@ function linkTransfers(ids: string[]) {
        AND f.counterparty_iban IS NOT NULL AND f.counterparty_name IS NOT NULL`
   );
   const payeeKey = (from: Pick<LinkSide, 'account_id' | 'counterparty_name'>, card: Pick<LinkSide, 'account_id' | 'counterparty_name'>) =>
-    [from.account_id, from.counterparty_name, card.account_id, card.counterparty_name].join('\u0000');
+    [from.account_id, from.counterparty_name, card.account_id, creditLabel(card.counterparty_name)].join('\u0000');
   const loadPayees = () =>
     new Set(
       (
@@ -426,6 +433,54 @@ function linkTransfers(ids: string[]) {
   ids.forEach((id) => linkOne(id, false));
   payees = loadPayees();
   ids.forEach((id) => linkOne(id, true));
+}
+
+/** Bump when linkTransfers would link stored rows it once left unlinked. */
+export const TRANSFER_RULES_VERSION = '1';
+const TRANSFER_RULES_VERSION_KEY = 'transferRulesVersion';
+
+/**
+ * Links the stored card bills the current transfer rules pair but an earlier
+ * version left unlinked (runs once per rules version). Only payments without an
+ * IBAN from accounts with one are tried: the paying side sees every card credit,
+ * so a tie between cards stays unlinked as on import, and rows linked under older
+ * rules are not re-judged. Existing links and the rows themselves are kept as
+ * they are; patterns are re-detected when a link is added.
+ */
+export function relinkTransfersIfRulesChanged(): boolean {
+  const stored = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(TRANSFER_RULES_VERSION_KEY) as
+    | { value: string }
+    | undefined;
+  if (stored?.value === TRANSFER_RULES_VERSION) return false;
+
+  const countLinks = () => Number((db.prepare('SELECT COUNT(*) AS n FROM transfer_links').get() as { n: number }).n);
+  db.exec('BEGIN');
+  try {
+    const before = countLinks();
+    const ids = (
+      db
+        .prepare(
+          `SELECT t.id FROM normalized_transactions t JOIN accounts a ON a.id = t.account_id
+           WHERE t.booking_date IS NOT NULL AND t.amount < 0 AND t.counterparty_iban IS NULL
+             AND a.iban IS NOT NULL AND NOT ${isLinked('t')}
+           ORDER BY t.booking_date, t.created_at, t.id`
+        )
+        .all() as Array<{ id: string }>
+    ).map((r) => r.id);
+    linkTransfers(ids);
+    if (countLinks() > before) {
+      for (const { id } of db.prepare('SELECT id FROM accounts').all() as Array<{ id: string }>) detectPatterns(id);
+    }
+    db.prepare(
+      `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    ).run(TRANSFER_RULES_VERSION_KEY, TRANSFER_RULES_VERSION, new Date().toISOString());
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return true;
 }
 
 /** Where an import goes, as the user chose it. */
