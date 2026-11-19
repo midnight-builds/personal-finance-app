@@ -39,6 +39,9 @@ function agentAccount(a: Record<string, unknown>) {
     ownerLabel: a.owner_label ?? null,
     balance: a.balance ?? null,
     balanceDate: a.balance_date ?? null,
+    balanceSource: a.balance_source ?? null,
+    balanceAgeDays: a.balance_age_days ?? null,
+    stale: a.stale === true,
   };
 }
 
@@ -60,11 +63,12 @@ const dataTools: ToolDefinition[] = [
   readEndpoint(
     'get_summary',
     'Financial summary',
-    'Total balance, monthly net (with and without transfers), runway in months and per-account balances. ' +
-      'Every account is listed; an account without balance data has balance null (unknown, not zero). ' +
-      'totalBalance and runwayMonths cover known balances only: when isComplete is false they are partial ' +
-      'and missingBalanceAccountCount says how many accounts are missing. Only imported accounts have balances ' +
-      'here. monthlySaving and monthlyLoanRepayment: the part of monthlyNet that went to (negative) or came from ' +
+    'Cash view: total balance, monthly net (with and without transfers), runway in months and per-account ' +
+      'balances of imported accounts (balance observations on them included). An account without balance data has ' +
+      'balance null (unknown, not zero). totalBalance and runwayMonths count EUR cash accounts only (checking, ' +
+      'savings, credit_card; never loans, investments or property) and known balances only: when isComplete is false ' +
+      'they are partial and missingBalanceAccountCount says how many cash accounts are missing. Manual accounts and ' +
+      'ownership shares are net worth (get_net_worth), not cash. monthlySaving and monthlyLoanRepayment: the part of monthlyNet that went to (negative) or came from ' +
       'manual savings/investment and loan accounts (cash that left, not spending).',
     '/summary'
   ),
@@ -128,12 +132,17 @@ const dataTools: ToolDefinition[] = [
     name: 'get_balance_history',
     title: 'Balance and net worth history',
     description:
-      'Account balances, assets, liabilities (credit card debt) and net worth at the end of each day, week ' +
-      '(Sunday) or month between from and to, read from the balances the bank exports report. A balance is null ' +
-      '(unknown, never zero) before an account’s first balance, after the last day its imported data covers, and when ' +
-      'bookings came after its last balance; such a point has isComplete false and coverage.missingAccountIds lists ' +
-      'the accounts left out of net worth (totals are null when no account is known). ' +
-      'untrackedAssetClasses (e.g. investments) are never included. Transfers between own accounts do not change net worth.',
+      'Account balances, assets, liabilities (debt, positive) and net worth at the end of each day, week ' +
+      '(Sunday) or month between from and to, read from the balances the bank exports report and from balance ' +
+      'observations; never estimated between two. Every account that is not archived, imported and manual ' +
+      '(accounts[].tracking). Net worth counts each account\'s ownershipShare of its balance (ownedBalance; ' +
+      'balance is the whole account\'s). Totals are EUR; accounts in another currency are never converted and get ' +
+      'totals of their own in otherCurrencies. A balance is null (unknown, never zero) before an account’s first ' +
+      'balance; for imported accounts also after the last day its imported data covers (knownUntil) and when ' +
+      'bookings came after its last balance; a manual account\'s latest observation holds until the next (knownUntil ' +
+      'null; get_net_worth tells if it is stale). Such a point has isComplete false and coverage.missingAccountIds ' +
+      'lists the accounts left out (totals are null when no account is known). Transfers between own accounts do not ' +
+      'change net worth.',
     inputSchema: balanceHistoryFields,
     annotations: READ_ONLY,
     run: (args, { api }) => api.get('/balances/history', args),
@@ -145,12 +154,26 @@ const dataTools: ToolDefinition[] = [
       'Accounts: id, name, type (checking, savings, credit_card, loan, investment, property, other_asset, ' +
       'other_liability), tracking (imported: from bank exports; manual: nothing imported), ownershipShare (0-100, ' +
       'for net worth only), currency, updateIntervalDays, recognizesTransfers (a manual account whose IBAN makes ' +
-      'payments to it transfers to it), archivedAt, ownerLabel, and latest balance with balanceDate (null = ' +
-      'unknown; manual accounts have no balance yet). Never an IBAN or account number. Change accounts with ' +
-      'plan_account_change.',
+      'payments to it transfers to it), archivedAt, ownerLabel, and latest balance (signed: debt negative) with ' +
+      'balanceDate, balanceSource (import: the bank\'s; manual: a balance observation), balanceAgeDays and stale ' +
+      '(older than updateIntervalDays). balance null = unknown, not zero. Never an IBAN or account number. Change ' +
+      'accounts and record balances with plan_account_change.',
     annotations: READ_ONLY,
     run: async (_args, { api }) => ((await api.get('/accounts')) as Array<Record<string, unknown>>).map(agentAccount),
   }),
+  readEndpoint(
+    'get_net_worth',
+    'Net worth now',
+    'Net worth over every account that is not archived, imported and manual, each at its latest balance: accounts ' +
+      '[{ accountId, name, type, tracking, currency, ownershipShare, balance (whole account, signed), ownedBalance ' +
+      '(balance x share: what net worth counts), balanceDate, source (import | manual), ageDays, stale, ' +
+      'unknownReason (no_balance, or bookings_after_balance for an imported account whose bookings came after the ' +
+      'balance it rests on) }], assets, liabilities (debt, positive), netWorth, isComplete and coverage over the EUR ' +
+      'accounts; staleAccountIds (included, but older than their update interval); otherCurrencies (one total per ' +
+      'other currency, never converted). Unknown balances are left out, never counted as zero. Ownership shares ' +
+      'apply here only, never to cash flow.',
+    '/net-worth'
+  ),
   readEndpoint(
     'list_recurring',
     'Recurring payments',
