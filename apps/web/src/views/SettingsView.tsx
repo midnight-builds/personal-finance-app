@@ -312,30 +312,6 @@ export default function SettingsView({
               Tyhjennä importit (debug)
             </button>
           </div>
-          <div className="logs">
-            <div className="card-head">
-              <div>
-                <p className="eyebrow">Logi</p>
-                <h3>Import + AI</h3>
-              </div>
-            </div>
-            <div className="table mini">
-              <div className="row mini header">
-                <span>Aika</span>
-                <span>Tyyppi</span>
-                <span>Viesti</span>
-                <span>Payload</span>
-              </div>
-              {logs.map((l) => (
-                <div className="row mini" key={l.id}>
-                  <span>{new Date(l.created_at).toLocaleTimeString('fi-FI')}</span>
-                  <span>{l.type}</span>
-                  <span>{l.message}</span>
-                  <span className="json tiny">{l.payload ? JSON.stringify(l.payload) : '-'}</span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
         <div className="settings-column">
           <div className="category-editor">
@@ -456,7 +432,7 @@ export default function SettingsView({
               </button>
             </div>
 
-            <div className="table mini">
+            <div className="table mini adjustments">
               <div className="row mini header">
                 <span>Päivä</span>
                 <span>Tili</span>
@@ -498,6 +474,32 @@ export default function SettingsView({
           </div>
         </div>
       </div>
+        <div className="logs">
+          <div className="card-head">
+            <div>
+              <p className="eyebrow">Logi</p>
+              <h3>Import + AI</h3>
+            </div>
+          </div>
+          <div className="table mini">
+            <div className="row mini header">
+              <span>Aika</span>
+              <span>Tyyppi</span>
+              <span>Viesti</span>
+              <span>Payload</span>
+            </div>
+            {logs.map((l) => (
+              <div className="row mini" key={l.id}>
+                <span>{new Date(l.created_at).toLocaleTimeString('fi-FI')}</span>
+                <span>{l.type}</span>
+                <span>{l.message}</span>
+                <span className="json tiny" title={l.payload ? JSON.stringify(l.payload) : undefined}>
+                  {l.payload ? JSON.stringify(l.payload) : '-'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
     </section>
   );
 }
