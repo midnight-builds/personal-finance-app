@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { isLiabilityType } from '@finance-app/shared';
 import {
   getSettings,
   getLogs,
@@ -56,7 +57,8 @@ export default function SettingsView({
     getAccounts().then(setAccounts).catch(() => {});
   }, []);
 
-  // Balances and adjustments are for imported accounts (manual ones get balance observations later).
+  // Adjustments correct the bank's balance, so they are for imported accounts; a manual account's
+  // balance is only its observations (account settings, BalanceObservations.tsx).
   const balanceAccounts = accounts.filter((a) => a.tracking !== 'manual');
   // Default adjAccountId to first account
   useEffect(() => {
@@ -98,7 +100,8 @@ export default function SettingsView({
   };
 
   const adjAccount = accounts.find((a) => a.id === adjAccountId);
-  // An account without any balance gets its first one; an adjustment only corrects an existing balance.
+  // An account without any balance gets its first one as a balance observation; an adjustment only
+  // corrects an existing balance.
   const settingFirstBalance = adjAccount != null && adjAccount.balance == null;
   // Adjustments saved before the account had a balance start counting once it has one.
   const waitingAdjustments = balanceAdjustments.filter((ba) => ba.account_id === adjAccountId && !ba.applied);
@@ -107,6 +110,8 @@ export default function SettingsView({
     balance_snapshot_missing: 'Tilillä ei ole saldoa – aseta ensin sen saldo',
     snapshot_exists: 'Tälle päivälle on jo saldo – korjaa se saldo-oikaisulla',
     date_in_future: 'Päivä ei voi olla tulevaisuudessa',
+    observation_exists: 'Tälle päivälle on jo saldohavainto – muokkaa sitä tilin Saldot-kohdassa',
+    debt_negative: 'Kirjaa velka positiivisena summana',
   };
 
   const createBalanceAdjustmentApi = async () => {
@@ -115,10 +120,10 @@ export default function SettingsView({
     if (!adjDate) { showToast(setToast, 'Päivä puuttuu'); return; }
     if (adjAmount.trim() === '' || !Number.isFinite(amountNum)) { showToast(setToast, 'Summa ei ole numero'); return; }
     const res = settingFirstBalance
-      ? await fetch(`${API}/balance-snapshots`, {
+      ? await fetch(`${API}/accounts/${encodeURIComponent(adjAccountId)}/balance-observations`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accountId: adjAccountId, date: adjDate, balance: amountNum }),
+          body: JSON.stringify({ date: adjDate, amount: amountNum }),
         })
       : await fetch(`${API}/balance-adjustments`, {
           method: 'POST',
@@ -408,7 +413,7 @@ export default function SettingsView({
             </div>
             <p className="muted">
               {settingFirstBalance
-                ? 'Tilillä ei ole pankin ilmoittamaa saldoa, joten oikaistavaa ei ole. Aseta tilin saldo valittuna päivänä (luottokortin velka miinusmerkkisenä). Etusivu ja nettovarallisuus käyttävät sitä siitä päivästä alkaen. Saldohistoria pitää sitä tunnettuna vain siihen asti, kunnes tilille tuodaan sitä myöhempiä tapahtumia – aseta silloin uusi saldo.'
+                ? 'Tilillä ei ole pankin ilmoittamaa saldoa, joten oikaistavaa ei ole. Aseta tilin saldo valittuna päivänä (luottokortin velka positiivisena summana: 600 = velkaa 600). Se tallentuu saldohavaintona, jota voit muokata tai poistaa tilin Saldot-kohdassa. Etusivu ja nettovarallisuus käyttävät sitä siitä päivästä alkaen. Saldohistoria pitää sitä tunnettuna vain siihen asti, kunnes tilille tuodaan sitä myöhempiä tapahtumia – lisää silloin uusi havainto.'
                 : 'Saldo-oikaisu korjaa pankin ilmoittamaa saldoa summalla, ja se otetaan huomioon oikaisupäivänä ja sen jälkeen päivätyissä saldoissa. Tilille, jolla ei vielä ole saldoa, asetetaan ensin saldo.'}
             </p>
 
@@ -435,7 +440,7 @@ export default function SettingsView({
                 <input type="date" value={adjDate} onChange={(e) => setAdjDate(e.target.value)} />
               </label>
               <label>
-                {settingFirstBalance ? 'Saldo' : 'Summa'} ({adjAccount?.currency ?? 'EUR'})
+                {settingFirstBalance ? (adjAccount && isLiabilityType(adjAccount.account_subtype) ? 'Velka' : 'Saldo') : 'Summa'} ({adjAccount?.currency ?? 'EUR'})
                 <input type="number" step="0.01" value={adjAmount} onChange={(e) => setAdjAmount(e.target.value)} />
               </label>
               {!settingFirstBalance && (

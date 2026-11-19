@@ -1,4 +1,4 @@
-import { isLiabilityType } from "@finance-app/shared";
+import { isCashType, isLiabilityType } from "@finance-app/shared";
 import { db } from "./db.js";
 import { accountBalances, daysBefore, ledgerEntries, today, type LedgerScope } from "./ledger.js";
 import { annualSubscriptions, establishedSubscriptions } from "./patternDecisions.js";
@@ -27,9 +27,13 @@ export type HouseholdSummary = {
 };
 
 /**
- * Every account is listed. An account without any balance snapshot has
+ * Every imported account is listed. An account without any balance snapshot has
  * `balance: null` (unknown, not zero); `totalBalance` and `runwayMonths` then
- * cover known balances only and `isComplete` is false.
+ * cover known balances only and `isComplete` is false. Both count cash only:
+ * EUR accounts of a cash type (checking, savings, credit card), whatever else an
+ * imported account is typed as, so a loan, investment or property never
+ * stretches the runway. Manual accounts and ownership shares belong to net
+ * worth (balanceHistory.ts), never to this cash view.
  *
  * "Monthly" net is the last 30 days up to and including `asOf`. Of it,
  * `monthlySaving` and `monthlyLoanRepayment` went to (negative) or came from
@@ -37,8 +41,18 @@ export type HouseholdSummary = {
  */
 export function getSummary(asOf: string = today()) {
   const balances = accountBalances(asOf);
-  const missingBalanceAccountCount = balances.filter((b) => b.balance === null).length;
-  const totalBalance = cents(balances.reduce((sum, b) => sum + (b.balance ?? 0), 0));
+  const cashIds = new Set(
+    (db.prepare("SELECT id, account_subtype, currency FROM accounts WHERE tracking = 'imported'").all() as Array<{
+      id: string;
+      account_subtype: string;
+      currency: string;
+    }>)
+      .filter((a) => isCashType(a.account_subtype) && a.currency === 'EUR')
+      .map((a) => a.id)
+  );
+  const cash = balances.filter((b) => cashIds.has(b.accountId));
+  const missingBalanceAccountCount = cash.filter((b) => b.balance === null).length;
+  const totalBalance = cents(cash.reduce((sum, b) => sum + (b.balance ?? 0), 0));
 
   const last30Days = { from: daysBefore(asOf, 30), to: asOf };
   const last30 = ledgerEntries(last30Days);

@@ -17,6 +17,11 @@ UI näyttää ollaanko vaurastumassa vai köyhtymässä.
 UI näyttää myös varoituksen, jos ennuste kertoo jatkuvasta negatiivisesta nettovirrasta ja runway on lyhyt.
 
 Runway lasketaan likvidistä saldosta ja ennustetusta netosta, huomioiden suurimmat tunnetut kausipiikit.
+Likvidi saldo on vain käteistilien saldo: tuodut EUR-tilit, joiden tyyppi on käyttötili, säästötili tai
+luottokortti (`CASH_TYPES`, `packages/shared/src/accounts.ts`). Laina, sijoitukset, asunto ja muut varat
+tai velat eivät pidennä eivätkä lyhennä runwayta, vaikka tuotu tili olisi merkitty sellaiseksi; ne kuuluvat
+nettovarallisuuteen (GLOSSARY.md, "Net worth"). Omistusosuus ei koskaan vaikuta kassavirtaan, ennusteeseen
+eikä runwayhin.
 Ennusteeseen liitetään selitys siitä, että se on karkea ja voi poiketa toteumasta.
 
 ## Kiinteät menot ja epävarmat toistuvat maksut

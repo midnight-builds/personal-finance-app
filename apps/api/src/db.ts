@@ -323,8 +323,13 @@ export function initDb() {
   safeExec(`ALTER TABLE accounts ADD COLUMN update_interval_days INTEGER`);
   // Only manual accounts are archived (accountChanges.ts): hidden, and no longer recognising transfers.
   safeExec(`ALTER TABLE accounts ADD COLUMN archived_at TEXT`);
-  // `import` (the bank's Saldo) or `manual` (the user's first balance for an account without one).
+  // `import` (the bank's Saldo) or `manual`: a balance observation (GLOSSARY.md), stated by
+  // `actor` with an optional `note`, written through account change sets (balanceObservations.ts).
+  // Manual rows from before actors were recorded have actor NULL (read as `system`).
   safeExec(`ALTER TABLE balance_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'import'`);
+  safeExec(`ALTER TABLE balance_snapshots ADD COLUMN note TEXT`);
+  safeExec(`ALTER TABLE balance_snapshots ADD COLUMN actor TEXT`);
+  safeExec(`ALTER TABLE balance_snapshots ADD COLUMN updated_at TEXT`);
 
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN typical_month INTEGER`);
   safeExec(`ALTER TABLE recurring_patterns ADD COLUMN user_confirmed INTEGER`);

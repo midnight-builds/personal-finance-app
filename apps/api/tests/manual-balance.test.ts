@@ -12,8 +12,9 @@ import { routes } from '../src/routes/index.js';
 import { resetDb } from './setup/resetDb.js';
 
 // A balance adjustment corrects a balance the bank reported; an account without
-// one gets its first balance as a manual snapshot instead. An adjustment the
-// Ledger cannot use is refused or flagged, never silently dropped.
+// one gets its first balance as a balance observation instead (a manual
+// snapshot; balance-observations.test.ts covers the change sets). An adjustment
+// the Ledger cannot use is refused or flagged, never silently dropped.
 
 const app = Fastify();
 await app.register(routes);
@@ -59,6 +60,9 @@ function importedSnapshot(accountId: string, date: string, balance: number) {
 }
 
 const post = (url: string, payload: unknown) => app.inject({ method: 'POST', url, payload: payload as object });
+/** A balance observation from the web UI; a liability's debt is stated positive. */
+const observe = (accountId: string, date: string, amount: unknown) =>
+  post(`/accounts/${encodeURIComponent(accountId)}/balance-observations`, { date, amount });
 
 test('an adjustment on a credit card without any balance is refused, not stored', async () => {
   const card = account('Testikortti', 'credit_card');
@@ -85,17 +89,18 @@ test('an adjustment on an unknown account is 404', async () => {
   assert.equal(res.statusCode, 404);
 });
 
-test("a credit card's manual balance is debt in accounts, summary and balance history alike", async () => {
+test("a credit card's observed debt is debt in accounts, summary and balance history alike", async () => {
   const card = account('Testikortti', 'credit_card');
   const checking = account('Testikäyttötili', 'checking');
   bookedOn(card, '2026-10-20');
   importedSnapshot(checking, '2026-10-20', 1000);
   bookedOn(checking, '2026-10-20');
 
-  const res = await post('/balance-snapshots', { accountId: card, date: '2026-10-20', balance: -600 });
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.json().source, 'manual');
-  assert.equal(res.json().currency, 'EUR');
+  const res = await observe(card, '2026-10-20', 600);
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(res.json().observation.after.balance, -600);
+  assert.equal(res.json().observation.after.debt, 600);
+  assert.equal(res.json().observation.after.currency, 'EUR');
 
   const listed = listAccounts().find((a) => a.id === card)!;
   assert.equal(listed.balance, -600);
@@ -109,7 +114,7 @@ test("a credit card's manual balance is debt in accounts, summary and balance hi
 
   const history = balanceHistory({ interval: 'day', from: '2026-10-19', to: '2026-10-20' });
   const [before, on] = history.points;
-  assert.equal(before.accounts.find((a) => a.accountId === card)!.balance, null, 'nothing carried back before the manual balance');
+  assert.equal(before.accounts.find((a) => a.accountId === card)!.balance, null, 'nothing carried back before the observation');
   assert.equal(before.isComplete, false);
   assert.equal(on.accounts.find((a) => a.accountId === card)!.balance, -600);
   assert.equal(on.liabilities, 600);
@@ -118,10 +123,10 @@ test("a credit card's manual balance is debt in accounts, summary and balance hi
   assert.equal(history.accounts.find((a) => a.id === card)!.knownFrom, '2026-10-20');
 });
 
-test('the snapshot list tells a manual balance from an imported one', async () => {
+test('the snapshot list tells an observation from an imported balance', async () => {
   const checking = account('Testikäyttötili', 'checking');
   importedSnapshot(checking, '2026-10-01', 1000);
-  await post('/balance-snapshots', { accountId: checking, date: '2026-10-15', balance: 900 });
+  await observe(checking, '2026-10-15', 900);
 
   const res = await app.inject({ method: 'GET', url: `/balance-snapshots/${checking}` });
   assert.deepEqual(
@@ -133,23 +138,23 @@ test('the snapshot list tells a manual balance from an imported one', async () =
   );
 });
 
-test('a manual balance never replaces a balance stored for the same day', async () => {
+test('an observation never replaces a balance stored for the same day', async () => {
   const checking = account('Testikäyttötili', 'checking');
   importedSnapshot(checking, '2026-10-20', 1000);
 
-  const res = await post('/balance-snapshots', { accountId: checking, date: '2026-10-20', balance: 5 });
+  const res = await observe(checking, '2026-10-20', 5);
 
   assert.equal(res.statusCode, 409);
   assert.equal(res.json().error, 'snapshot_exists');
   assert.equal(listAccounts()[0].balance, 1000);
 });
 
-test('a manual balance is refused for an unknown account, a future day or a bad value', async () => {
+test('an observation is refused for an unknown account, a future day or a bad value', async () => {
   const checking = account('Testikäyttötili', 'checking');
-  assert.equal((await post('/balance-snapshots', { accountId: 'nope', date: '2026-10-20', balance: 1 })).statusCode, 404);
-  assert.equal((await post('/balance-snapshots', { accountId: checking, date: '2999-01-01', balance: 1 })).json().error, 'date_in_future');
-  assert.equal((await post('/balance-snapshots', { accountId: checking, date: '20.10.2026', balance: 1 })).statusCode, 400);
-  assert.equal((await post('/balance-snapshots', { accountId: checking, date: '2026-10-20', balance: 'x' })).statusCode, 400);
+  assert.equal((await observe('nope', '2026-10-20', 1)).statusCode, 404);
+  assert.equal((await observe(checking, '2999-01-01', 1)).json().error, 'date_in_future');
+  assert.equal((await observe(checking, '20.10.2026', 1)).statusCode, 400);
+  assert.equal((await observe(checking, '2026-10-20', 'x')).statusCode, 400);
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM balance_snapshots').get() as { n: number }).n, 0);
 });
 

@@ -125,3 +125,51 @@ test('an invalid IBAN is refused without echoing it', async () => {
     (err: Error) => /iban_invalid/.test(err.message) && !err.message.includes('1234')
   );
 });
+
+test('an agent records, reads and undoes a loan balance; net worth counts its share and no response has the IBAN', async () => {
+  await importLoanPayments();
+  const agent = await connectAgent();
+  const create = { kind: 'create_account', name: 'Yhteinen asuntolaina', type: 'loan', ownershipShare: 50, iban: LOAN, updateIntervalDays: 30 };
+  const created = await agent.call('apply_account_change', {
+    op: create,
+    planToken: (await agent.call('plan_account_change', { op: create })).planToken,
+  });
+  const loanId = created.accountId;
+
+  // The debt is stated positive; the plan shows how it will be stored.
+  const op = { kind: 'add_balance_observation', accountId: loanId, date: '2026-10-04', amount: 1000, note: 'lainan saldoilmoitus' };
+  const plan = await agent.call('plan_account_change', { op });
+  assert.equal(plan.observation.after.balance, -1000);
+  assert.equal(plan.observation.after.debt, 1000);
+  const set = await agent.call('apply_account_change', { op, planToken: plan.planToken });
+  assert.equal(set.actor, 'agent-under-test');
+  assert.equal(set.observation.after.actor, 'agent-under-test');
+
+  const list = await agent.call('list_balance_observations', { accountId: loanId });
+  assert.equal(list.observations.length, 1);
+  assert.equal(list.observations[0].note, 'lainan saldoilmoitus');
+  assert.equal(list.latest.debt, 1000);
+  const listed = (await agent.call('list_accounts')).find((a: { id: string }) => a.id === loanId);
+  assert.equal(listed.balance, -1000);
+  assert.equal(listed.balanceSource, 'manual');
+  assert.equal(typeof listed.stale, 'boolean');
+
+  const nw = await agent.call('get_net_worth');
+  const row = nw.accounts.find((a: { accountId: string }) => a.accountId === loanId);
+  assert.equal(row.ownedBalance, -500);
+  assert.ok(nw.coverage.includedAccountIds.includes(loanId));
+
+  // The loan repayments stay cash flow; the observation changes no transaction.
+  const search = await agent.call('search_transactions', {});
+  assert.equal(search.items.length, 2);
+
+  const undoOp = { kind: 'undo', changeSetId: set.id };
+  await agent.call('apply_account_change', { op: undoOp, planToken: (await agent.call('plan_account_change', { op: undoOp })).planToken });
+  assert.equal((await agent.call('list_balance_observations', { accountId: loanId })).observations.length, 0);
+
+  for (const text of agent.texts) {
+    assert.equal(text.includes(LOAN), false, text);
+    assert.equal(text.includes(compact(LOAN)), false, text);
+    assert.equal(text.includes(LOAN_DIGITS), false, text);
+  }
+});

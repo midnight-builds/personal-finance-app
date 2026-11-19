@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { isoDate } from './schemas.js';
 
 // The account model (GLOSSARY.md, "Account", "Tracking", "Transfer to a manual
-// account"; docs/adr/0002-transfers-to-manual-accounts.md) and the contract of
+// account", "Balance observation"; docs/adr/0002-transfers-to-manual-accounts.md,
+// docs/adr/0003-balance-observations-are-snapshots.md) and the contract of
 // account change sets: POST /accounts/plan, POST /accounts/apply and the
 // change-set listing. Shared by the API, the web app and the MCP tools.
 
@@ -29,6 +31,34 @@ export const isLiabilityType = (type: string): boolean => (LIABILITY_TYPES as re
  */
 export function balanceFromDebt(type: string, amount: number): number {
   return isLiabilityType(type) ? -Math.abs(amount) : amount;
+}
+
+/**
+ * Types whose balance is cash for the runway: what can pay next month's bills
+ * (a credit card's debt reduces it). Loans, investments, property and other
+ * assets or liabilities count in net worth only.
+ */
+export const CASH_TYPES: readonly AccountType[] = ['checking', 'savings', 'credit_card'];
+export const isCashType = (type: string): boolean => (CASH_TYPES as readonly string[]).includes(type);
+
+/** Whole days from `from` to `to` (YYYY-MM-DD; negative when `to` is earlier). */
+export function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+}
+
+/**
+ * How old an account's balance is on `today`, and whether it is stale: the
+ * account has an update interval and its balance is older than that. An
+ * account without a balance is unknown, not stale (`ageDays` null).
+ */
+export function balanceStaleness(
+  balanceDate: string | null,
+  updateIntervalDays: number | null,
+  today: string
+): { ageDays: number | null; stale: boolean } {
+  if (balanceDate === null) return { ageDays: null, stale: false };
+  const ageDays = daysBetween(balanceDate.slice(0, 10), today);
+  return { ageDays, stale: updateIntervalDays !== null && ageDays > updateIntervalDays };
 }
 
 /** `imported`: transactions and balances come from bank exports. `manual`: nothing is imported. */
@@ -99,6 +129,24 @@ const updateIntervalDays = z
   .max(3650)
   .describe('How often, in days, the balance is meant to be updated (staleness)');
 
+const observationId = id.describe('Balance observation id from list_balance_observations');
+const observationDate = isoDate.describe('The day the balance is for (YYYY-MM-DD; today or earlier, never in the future)');
+const observationAmount = z
+  .number()
+  .finite()
+  .min(-1e12)
+  .max(1e12)
+  .describe(
+    'The balance at the end of that day in the account currency. For credit_card, loan and other_liability state the ' +
+      'DEBT as a positive amount (owing 1200 = 1200); it is stored as a negative balance. Other types: the balance as is'
+  );
+const observationNote = z
+  .string()
+  .trim()
+  .min(1)
+  .max(500)
+  .describe('Where the balance comes from, e.g. "card statement" or "checked in the bank app"');
+
 export const accountOpSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('create_account'),
@@ -135,8 +183,34 @@ export const accountOpSchema = z.discriminatedUnion('kind', [
     accountId: id.describe('An archived account; it keeps its name and IBAN while archived'),
     reason,
   }),
+  z.object({
+    kind: z.literal('add_balance_observation'),
+    accountId: id.describe('Account id from list_accounts'),
+    date: observationDate,
+    amount: observationAmount,
+    note: observationNote.optional(),
+    reason,
+  }),
+  z
+    .object({
+      kind: z.literal('correct_balance_observation'),
+      observationId,
+      date: observationDate.optional(),
+      amount: observationAmount.optional(),
+      note: observationNote.nullable().optional().describe('New note; null removes it'),
+      reason,
+    })
+    .refine(
+      (op) => op.date !== undefined || op.amount !== undefined || op.note !== undefined,
+      'nothing_to_change'
+    ),
+  z.object({ kind: z.literal('delete_balance_observation'), observationId, reason }),
   z.object({ kind: z.literal('undo'), changeSetId: id.describe('Account change set id'), reason }),
 ]);
+
+/** Operations on an account's dated balance observations (GLOSSARY.md, "Balance observation"). */
+export const OBSERVATION_OP_KINDS = ['add_balance_observation', 'correct_balance_observation', 'delete_balance_observation'] as const;
+export const isObservationOpKind = (kind: string): boolean => (OBSERVATION_OP_KINDS as readonly string[]).includes(kind);
 
 export type AccountOpInput = z.input<typeof accountOpSchema>;
 export type AccountOp = z.output<typeof accountOpSchema>;
@@ -159,7 +233,63 @@ export type PublicAccountOp =
   | (Omit<Extract<AccountOp, { kind: 'update_account' }>, 'iban'> & { recognizesTransfers?: boolean })
   | Extract<AccountOp, { kind: 'archive_account' }>
   | Extract<AccountOp, { kind: 'unarchive_account' }>
+  | Extract<AccountOp, { kind: 'add_balance_observation' }>
+  | Extract<AccountOp, { kind: 'correct_balance_observation' }>
+  | Extract<AccountOp, { kind: 'delete_balance_observation' }>
   | Extract<AccountOp, { kind: 'undo' }>;
+
+/**
+ * A dated balance an actor stated for an account: for a manual account its only
+ * balance, for an imported one an anchor between the bank's own balances. It is
+ * a balance snapshot (`source: manual`), so every balance view reads it like the
+ * bank's; nothing is estimated between two of them.
+ */
+export type BalanceObservation = {
+  id: string;
+  accountId: string;
+  /** YYYY-MM-DD: the balance at the end of that day. */
+  date: string;
+  /** Signed, as the Ledger uses it: debt is negative. */
+  balance: number;
+  /** For a liability type (credit_card, loan, other_liability) the debt as a positive amount; null otherwise. */
+  debt: number | null;
+  currency: string;
+  note: string | null;
+  /** Who stated (or last corrected) it; `system` for balances from before actors were recorded. */
+  actor: string;
+  createdAt: string;
+  updatedAt: string | null;
+};
+
+/**
+ * An observation on an imported account checked against the account's previous
+ * balance and the bookings between: `difference` = balance − (previous balance +
+ * booked sum). Non-zero means the bookings and the two balances disagree (rows
+ * missing, or a wrong balance); nothing is booked to even it out.
+ */
+export type ObservationReconciliation = {
+  previousDate: string;
+  previousBalance: number;
+  bookedSum: number;
+  bookedCount: number;
+  difference: number;
+};
+
+export type AccountBalanceObservations = {
+  accountId: string;
+  type: AccountType;
+  tracking: AccountTracking;
+  currency: string;
+  updateIntervalDays: number | null;
+  /** The latest balance (an observation or, for imported accounts, the bank's), null = unknown. */
+  latest: { date: string; balance: number; debt: number | null; source: 'import' | 'manual' } | null;
+  ageDays: number | null;
+  stale: boolean;
+  /** Newest first. */
+  observations: Array<BalanceObservation & { reconciliation: ObservationReconciliation | null }>;
+  /** Balances the bank exports reported (imported accounts), not editable. */
+  imported: { count: number; firstDate: string | null; lastDate: string | null };
+};
 
 /** An account as agents and change sets see it: never its IBAN. */
 export type AccountView = {
@@ -177,7 +307,18 @@ export type AccountView = {
 
 /** One field a change set changed. The IBAN shows only as `recognizesTransfers` (true/false), never its value. */
 export type AccountFieldChange = {
-  field: 'name' | 'type' | 'ownershipShare' | 'currency' | 'recognizesTransfers' | 'updateIntervalDays' | 'archived' | 'created';
+  field:
+    | 'name'
+    | 'type'
+    | 'ownershipShare'
+    | 'currency'
+    | 'recognizesTransfers'
+    | 'updateIntervalDays'
+    | 'archived'
+    | 'created'
+    | 'observationDate'
+    | 'observationBalance'
+    | 'observationNote';
   from: string | number | boolean | null;
   to: string | number | boolean | null;
   /** For `recognizesTransfers` true → true: the IBAN was replaced by another one. */
@@ -208,9 +349,21 @@ export type AccountPlan = {
   account: Omit<AccountView, 'id'> & { id: string | null };
   changes: AccountFieldChange[];
   transfers: AccountTransferEffects;
+  /** For balance observation ops: the observation before and after (null = none). */
+  observation: ObservationChange | null;
   exceptions: AccountException[];
   planToken: string;
 };
+
+/** An observation in a plan: one still to be added has no id, actor or creation time yet. */
+export type PlannedObservation = Omit<BalanceObservation, 'id' | 'actor' | 'createdAt'> & {
+  id: string | null;
+  actor: string | null;
+  createdAt: string | null;
+};
+
+/** What a change set does to one observation: before and after (null = none), as applied. */
+export type ObservationChange = { before: PlannedObservation | null; after: PlannedObservation | null };
 
 export type AccountChangeSetListItem = {
   id: string;
@@ -235,6 +388,7 @@ export type AccountChangeSet = AccountChangeSetListItem & {
   op: PublicAccountOp;
   changes: AccountFieldChange[];
   transfers: AccountTransferEffects;
+  observation: ObservationChange | null;
   exceptions: AccountException[];
 };
 

@@ -10,6 +10,7 @@ import ImportDialog from '../components/ImportDialog';
 import type { ImportOutcome } from '../components/ImportDialog';
 import BriefingPanel from '../components/BriefingPanel';
 import RuleSuggestionsPanel from '../components/RuleSuggestionsPanel';
+import NetWorthPanel from '../components/NetWorthPanel';
 import ForecastPanel from '../components/ForecastPanel';
 
 type Account = { id: string; name: string; balance: number | null; currency: string | null; date: string | null };
@@ -316,6 +317,8 @@ export default function HomeView({
           <p>Ei saldoja vielä.</p>
         )}
       </section>
+
+      <NetWorthPanel refreshKey={summary} />
 
       <section className="card glass">
         <div className="card-head">

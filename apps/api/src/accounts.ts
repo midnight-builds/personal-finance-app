@@ -1,15 +1,18 @@
+import { balanceStaleness } from '@finance-app/shared';
 import { db } from './db.js';
-import { accountBalances } from './ledger.js';
+import { accountBalances, today } from './ledger.js';
 
 /**
- * Accounts with their latest balance (the Ledger's rule), in creation order,
- * for the web UI: the IBAN is included (agents get `AccountView`s instead,
- * accountChanges.ts). `currency` is the balance's, or the account's own when
- * there is no balance; `recognizes_transfers` says whether payments to a manual
- * account's IBAN are transfers to it.
+ * Accounts with their latest balance (the Ledger's rule: the bank's or an
+ * observation, `balance_source`), in creation order, for the web UI: the IBAN is
+ * included (agents get `AccountView`s instead, accountChanges.ts). `currency` is
+ * the balance's, or the account's own when there is no balance;
+ * `recognizes_transfers` says whether payments to a manual account's IBAN are
+ * transfers to it; `stale` that the balance is older than the update interval.
  */
 export function listAccounts() {
-  const balances = new Map(accountBalances().map((b) => [b.accountId, b]));
+  const balances = new Map(accountBalances(undefined, { includeManual: true }).map((b) => [b.accountId, b]));
+  const day = today();
   const rows = db
     .prepare(
       // balance_date keeps the snapshot's stored form (the Ledger reports its day).
@@ -24,11 +27,15 @@ export function listAccounts() {
     .all() as Array<Record<string, any>>;
   return rows.map(({ balance_date, account_currency, ...account }) => {
     const b = balances.get(account.id);
+    const { ageDays, stale } = balanceStaleness(b?.date ?? null, account.update_interval_days ?? null, day);
     return {
       ...account,
       balance: b?.balance ?? null,
       currency: b?.currency ?? account_currency,
       balance_date,
+      balance_source: b?.source ?? null,
+      balance_age_days: ageDays,
+      stale,
       recognizes_transfers: account.tracking === 'manual' && account.archived_at === null && account.iban !== null,
     };
   });

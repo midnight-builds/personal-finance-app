@@ -10,13 +10,15 @@ over the REST API and never opens the database.
 |------|--------|
 | `search_transactions` | Filtered, paginated transactions (`GET /transactions/search`) |
 | `get_summary`, `get_monthly_overview`, `get_insights`, `get_latest_briefing`, `get_forecast` | Read reports |
-| `get_balance_history` | Balances and net worth per day/week/month with coverage (`GET /balances/history`) |
+| `get_balance_history` | Balances and net worth per day/week/month with coverage, manual accounts and ownership shares included (`GET /balances/history`) |
+| `get_net_worth` | Net worth now: every account at its latest balance with share, age and staleness (`GET /net-worth`) |
+| `list_balance_observations` | One account's dated balance observations, latest balance, staleness, reconciliation (`GET /accounts/:id/balance-observations`) |
 | `list_categories`, `list_accounts`, `list_recurring` | Read reference data (`list_categories` includes each category's `role`; `list_accounts` the account model without any IBAN) |
 | `list_category_rules` | Categorization rules in match order (`GET /categorization/rules`) |
 | `plan_categorization` | Works out a categorization change without writing (`POST /categorization/plan`) |
 | `apply_categorization` | Applies a planned change with its plan token (`POST /categorization/apply`) |
 | `list_category_changes`, `get_category_change` | Change log of categorization: who changed what, and undo state (`GET /categorization/change-sets[/:id]`) |
-| `plan_account_change` | Works out an account change without writing: create a manual account, update, archive, undo (`POST /accounts/plan`) |
+| `plan_account_change` | Works out an account change without writing: create a manual account, update, archive, add/correct/delete a balance observation, undo (`POST /accounts/plan`) |
 | `apply_account_change` | Applies a planned account change with its plan token (`POST /accounts/apply`) |
 | `list_account_changes`, `get_account_change` | Change log of accounts with actor and undo state (`GET /accounts/change-sets[/:id]`) |
 | `list_recurring_questions` | Open "is this recurring?" questions with evidence (`GET /patterns/questions`) |
@@ -30,8 +32,10 @@ over the REST API and never opens the database.
 Five tools write: `propose_feature` adds to the review queue,
 `apply_categorization` changes categorization, `answer_recurring_question`
 appends a pattern decision, `create_recurring_pattern` adds a pattern with its
-decision, and `apply_account_change` creates or changes an account. Every other
-tool is read-only, and no tool deletes anything.
+decision, and `apply_account_change` creates or changes an account or its balance
+observations. Every other tool is read-only. The only thing a tool removes is a
+balance observation (`delete_balance_observation`), and its change set keeps it
+for undo.
 
 ### Accounts
 
@@ -47,6 +51,33 @@ and lists the transactions whose reporting it changes (`transfers.recognized`,
 to another kind); a plan goes stale (`409 plan_stale`) when any account change
 set is applied, or those transactions change, before it is applied. An imported account's IBAN and
 currency come from its exports and cannot be changed, and it cannot be archived.
+
+**Balance observations** (GLOSSARY.md, "Balance observation") are account change
+sets too: `add_balance_observation` (account, day, amount, optional note on its
+source), `correct_balance_observation` and `delete_balance_observation` by the
+observation's id from `list_balance_observations`, and `undo`. The amount is the
+balance at the end of the day; for a credit card, loan or other liability it is
+the **debt as a positive amount**, stored as a negative balance
+(`balanceFromDebt`); a negative debt is refused (`400 debt_negative`) rather
+than guessed, so a sign mistake can never turn debt into an asset. Balance
+adjustments correct only the bank's balances, never an observation. A day in
+the future is refused (`400 date_in_future`), and so is a second balance for a
+day: `409 observation_exists` names the observation to correct, `409
+snapshot_exists` means the bank reported that day's balance (the bank's balances
+are never edited; `snapshot_imported`). The same plan token applied twice returns
+the same set, so a retry never adds a second observation. An observation creates
+no transaction and changes no cash flow; it is a manual account's only balance
+and an imported account's anchor between the bank's balances (`reconciliation`
+shows how far the bookings in between are from explaining it). Once an account
+has observations its currency and its side of the asset/liability line are fixed
+(`409 account_has_observations`; an undo that would bring the old ones back, or
+an observation stated under them, is left alone and reported with that reason):
+changing them would silently reinterpret every stored amount. `get_net_worth` and `get_balance_history` count each account at
+its ownership share, keep accounts in other currencies apart (never converted),
+leave unknown balances out (listed in `coverage.missingAccountIds`, never zero)
+and flag a balance older than the account's update interval as `stale` (still
+counted; no reminders are sent). `get_summary` stays the cash view: imported
+accounts, cash types only for its total and runway, no shares.
 
 **The IBAN is write-only for the agent.** The user decided that the agent is as
 trusted as the user in the web UI, so it may *set* a manual account's IBAN (when

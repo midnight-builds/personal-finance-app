@@ -16,7 +16,7 @@ after(() => app.close());
 
 beforeEach(() => resetDb());
 
-function account(name: string, subtype: 'checking' | 'savings' | 'credit_card' = 'checking') {
+function account(name: string, subtype: 'checking' | 'savings' | 'credit_card' | 'investment' = 'checking') {
   const id = crypto.randomUUID();
   db.prepare('INSERT INTO accounts (id, created_at, name, iban, type, account_subtype) VALUES (?, ?, ?, ?, ?, ?)').run(
     id,
@@ -162,11 +162,14 @@ test('credit card debt is a liability', () => {
   assert.equal(p.isComplete, true);
 });
 
-test('investments are reported as untracked, never counted', () => {
+test('an investment account counts like any asset once it has a balance', () => {
   const checking = account('Käyttötili');
   balanceOn(checking, '2026-10-01', 100);
+  const fund = account('Rahasto', 'investment');
+  balanceOn(fund, '2026-10-01', 400);
   const h = balanceHistory({ from: '2026-10-01', to: '2026-10-01', interval: 'day' });
-  assert.deepEqual(h.untrackedAssetClasses, ['investments']);
+  assert.equal(point(h, '2026-10-01').assets, 500);
+  assert.equal('untrackedAssetClasses' in h, false);
 });
 
 test('balance adjustments are part of the balance', () => {

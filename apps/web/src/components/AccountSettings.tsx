@@ -10,17 +10,22 @@ import {
 } from '../api/client';
 import { ACCOUNT_TYPE_LABELS } from '../accountTypes';
 import { formatAmount, showToast } from '../utils';
+import BalanceObservations, { StaleBadge } from './BalanceObservations';
 
 // Account settings (GLOSSARY.md, "Account"): every account's name, type, owner
 // and ownership share; for manual accounts also currency, IBAN and update
-// interval, and archiving. A new account made here is manual: nothing is
-// imported into it, and its IBAN makes payments to it transfers to it.
+// interval, and archiving; every account's latest balance, its staleness and
+// its dated balance observations (BalanceObservations.tsx). A new account made
+// here is manual: nothing is imported into it, and its IBAN makes payments to
+// it transfers to it.
 
 const ERRORS: Record<string, string> = {
   iban_in_use: 'Toisella tilillä on jo tämä IBAN.',
   account_name_exists: 'Samanniminen tili on jo olemassa.',
   account_imported: 'Tuodun tilin IBAN ja valuutta tulevat pankin tiedostoista.',
   account_archived: 'Tili on arkistoitu.',
+  account_has_observations:
+    'Tilillä on saldohavaintoja: valuuttaa tai velka-/varatyyppiä ei voi vaihtaa, koska tallennetut saldot muuttaisivat merkitystään. Poista havainnot ensin.',
   invalid_request: 'Tarkista kentät: IBAN, osuus 0–100 %, valuutta kolmella kirjaimella.',
 };
 const message = (err: unknown) =>
@@ -60,6 +65,7 @@ export default function AccountSettings({
 }) {
   const [draft, setDraft] = useState({ name: '', type: 'savings' as AccountType, share: '100', currency: 'EUR', iban: '', days: '' });
   const [saving, setSaving] = useState(false);
+  const [openBalances, setOpenBalances] = useState<string | null>(null);
   const active = accounts.filter((a) => !a.archived_at);
   const archived = accounts.filter((a) => a.archived_at);
 
@@ -111,7 +117,9 @@ export default function AccountSettings({
         Tuotujen tilien tapahtumat ja saldot tulevat pankin tiedostoista. Manuaaliselle tilille ei tuoda mitään:
         jos annat sille IBANin, tuoduilta tileiltä siihen menevät maksut ovat siirtoja omalle tilille. Säästö- ja
         sijoitustilille ne ovat säästämistä ja lainalle lainanhoitoa – eivät kulutusta, mutta vähentävät silti
-        kassaa. Omistusosuutta käytetään vain nettovarallisuudessa. Manuaalisen tilin saldoa ei vielä voi kirjata.
+        kassaa. Omistusosuutta käytetään vain nettovarallisuudessa, ei kassavirrassa. Saldot-painikkeella kirjaat tilin
+        päivätyn saldon (velka positiivisena); manuaalisella tilillä se on ainoa saldo. Jos tilille on asetettu
+        päivitysväli ja saldo on sitä vanhempi, se merkitään vanhentuneeksi.
       </p>
       <div className="table mini">
         <div className="row mini header">
@@ -166,8 +174,15 @@ export default function AccountSettings({
                   }}
                 />
               </span>
-              <span>{a.balance != null ? formatAmount(a.balance, a.currency ?? 'EUR') : '—'}</span>
+              <span>
+                {a.balance != null ? formatAmount(a.balance, a.currency ?? 'EUR') : '—'}{' '}
+                <StaleBadge stale={a.stale} ageDays={a.balance_age_days} />
+                <button type="button" className="ghost mini" onClick={() => setOpenBalances(openBalances === a.id ? null : a.id)}>
+                  {openBalances === a.id ? 'Sulje' : 'Saldot'}
+                </button>
+              </span>
             </div>
+            {openBalances === a.id && <BalanceObservations account={a} onChanged={reload} setToast={setToast} />}
             {a.tracking === 'manual' && (
               <div className="row mini manual-account-details">
                 <span>

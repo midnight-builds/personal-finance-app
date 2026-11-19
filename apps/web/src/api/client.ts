@@ -1,5 +1,6 @@
 // Typed API client for finance app
 import type {
+  AccountBalanceObservations,
   AccountSubtype,
   AccountTracking,
   AccountType,
@@ -10,6 +11,7 @@ import type {
   FeatureProposalInput,
   FeatureProposalUpdate,
   ImportPreview,
+  NetWorth,
 } from '@finance-app/shared';
 // All fetch functions use /api as base; Vite proxies to http://127.0.0.1:3001
 
@@ -26,9 +28,15 @@ export type Account = {
   owner_label: string | null;
   credit_limit: number | null;
   savings_goal: number | null;
-  balance: number;
+  /** Latest balance (the bank's or an observation), signed: debt is negative. Null = unknown. */
+  balance: number | null;
   currency: string;
   balance_date: string | null;
+  /** `import`: the bank's balance; `manual`: a balance observation. */
+  balance_source: 'import' | 'manual' | null;
+  balance_age_days: number | null;
+  /** Older than the update interval. */
+  stale: boolean;
   tracking: AccountTracking;
   ownership_share: number;
   update_interval_days: number | null;
@@ -410,6 +418,40 @@ export async function unarchiveAccount(id: string): Promise<void> {
 /** Archives a manual account: hidden, and payments to its IBAN count as ordinary payments again. */
 export async function archiveAccount(id: string): Promise<void> {
   await accountRequest(`${API}/accounts/${id}/archive`, { method: 'POST', body: '{}' });
+}
+
+// ============================================================================
+// Balance observations and net worth (GLOSSARY.md, "Balance observation", "Net worth")
+// ============================================================================
+
+export async function getBalanceObservations(accountId: string): Promise<AccountBalanceObservations> {
+  return (await accountRequest(`${API}/accounts/${encodeURIComponent(accountId)}/balance-observations`, {
+    method: 'GET',
+  })) as AccountBalanceObservations;
+}
+
+/** `amount`: the balance; for a credit card, loan or other liability the debt as a positive amount. */
+export async function addBalanceObservation(accountId: string, obs: { date: string; amount: number; note?: string }): Promise<void> {
+  await accountRequest(`${API}/accounts/${encodeURIComponent(accountId)}/balance-observations`, {
+    method: 'POST',
+    body: JSON.stringify(obs),
+  });
+}
+
+/** `note: ''` removes the note. */
+export async function correctBalanceObservation(id: string, patch: { date?: string; amount?: number; note?: string }): Promise<void> {
+  await accountRequest(`${API}/balance-observations/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+/** Removes the observation; its change set keeps it and can restore it. */
+export async function deleteBalanceObservation(id: string): Promise<void> {
+  await accountRequest(`${API}/balance-observations/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' });
+}
+
+export async function getNetWorth(): Promise<NetWorth> {
+  const res = await safeFetch(`${API}/net-worth`);
+  if (!res.ok) throw new Error(`getNetWorth failed: ${res.statusText}`);
+  return res.json();
 }
 
 // ============================================================================
