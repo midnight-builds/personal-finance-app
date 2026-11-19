@@ -11,10 +11,11 @@
 //   stays a transfer. See docs/adr/0002-transfers-to-manual-accounts.md.
 // - A transaction's category is its most recent categorization decision.
 // - Dates are calendar days (YYYY-MM-DD); "today" is today in Helsinki.
-// - An account's balance is its latest snapshot on or before the day, plus
-//   balance adjustments dated on or before that snapshot. A snapshot is the
-//   bank's balance (`import`) or a balance observation (`manual`); the latest
-//   one wins, they are never added. Nothing is estimated between two of them.
+// - An account's balance is its latest snapshot on or before the day. A
+//   snapshot is the bank's balance (`import`) or a balance observation
+//   (`manual`); the latest one wins, they are never added. The bank's balance is
+//   corrected by the balance adjustments dated on or before it; an observation
+//   is the balance as an actor stated it, so adjustments never touch it. Nothing is estimated between two of them.
 //   Cash views (summary, briefing, import preview) read imported accounts only;
 //   net worth (balanceHistory.ts) reads manual accounts too (`includeManual`).
 import { ownTransferKind, type OwnTransferKind } from '@finance-app/shared';
@@ -268,7 +269,7 @@ export function accountBalances(asOf?: string, options: { includeManual?: boolea
       return { accountId: r.id, accountName: r.name, balance: null, currency: null, date: null, source: null, adjustmentSum: 0 };
     }
     const day = r.date.slice(0, 10);
-    const adj = Number((adjustmentSum.get(r.id, day) as { s: number }).s);
+    const adj = r.source === 'manual' ? 0 : Number((adjustmentSum.get(r.id, day) as { s: number }).s);
     return {
       accountId: r.id,
       accountName: r.name,

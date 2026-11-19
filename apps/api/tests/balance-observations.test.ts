@@ -99,10 +99,14 @@ test('a loan debt is entered positive, stored negative, and only the plan token 
   assert.equal(list.observations[0].actor, 'agent-under-test');
   assert.deepEqual(list.latest, { date: '2026-09-30', balance: -1000, debt: 1000, source: 'manual' });
 
-  // A negative debt is read as debt too: the sign can never turn a loan into an asset.
+  // A negative debt is ambiguous (a debt written with a minus, or a card in credit): refused, never guessed.
   const card = await manualAccount({ name: 'Testikortti', type: 'credit_card' });
-  await planAndApply({ kind: 'add_balance_observation', accountId: card, date: '2026-09-30', amount: -50 });
-  assert.equal((await observations(card)).observations[0].balance, -50);
+  const negative = await plan({ kind: 'add_balance_observation', accountId: card, date: '2026-09-30', amount: -50 });
+  assert.equal(negative.statusCode, 400);
+  assert.equal(negative.json().error, 'debt_negative');
+  const id = (await observations(loan)).observations[0].id;
+  const negativeCorrection = await plan({ kind: 'correct_balance_observation', observationId: id, amount: -5 });
+  assert.equal(negativeCorrection.json().error, 'debt_negative');
 });
 
 test('an observation cannot be in the future, on a day that has one, or on an archived account', async () => {
@@ -393,4 +397,50 @@ test('the runway counts only cash accounts, whatever an imported account is type
   assert.equal(summary.totalBalance, 1000);
   assert.equal(summary.runwayMonths, 2);
   assert.equal(summary.accounts.length, 3, 'every imported account is still listed');
+});
+
+test('undo never restores a type or currency that would reinterpret stored observations', async () => {
+  const fund = await manualAccount({ name: 'Testirahasto', type: 'investment' });
+  const toSek = await planAndApply({ kind: 'update_account', accountId: fund, currency: 'SEK' });
+  await planAndApply({ kind: 'add_balance_observation', accountId: fund, date: '2026-09-01', amount: 100 });
+  const undoCurrency = await planAndApply({ kind: 'undo', changeSetId: toSek.id });
+  assert.deepEqual(undoCurrency.exceptions, [{ reason: 'account_has_observations', field: 'currency' }]);
+  assert.equal((await netWorth()).otherCurrencies[0].netWorth, 100);
+  assert.equal((await netWorth()).netWorth, null);
+
+  const savings = await manualAccount({ name: 'Testisäästö', type: 'savings' });
+  const toLoan = await planAndApply({ kind: 'update_account', accountId: savings, type: 'loan' });
+  await planAndApply({ kind: 'add_balance_observation', accountId: savings, date: '2026-09-01', amount: 10 });
+  const undoType = await planAndApply({ kind: 'undo', changeSetId: toLoan.id });
+  assert.deepEqual(undoType.exceptions, [{ reason: 'account_has_observations', field: 'type' }]);
+
+  // Deleted under one type, restored under another: refused.
+  const loan = await manualAccount({ name: 'Testilaina', type: 'loan' });
+  await planAndApply({ kind: 'add_balance_observation', accountId: loan, date: '2026-09-01', amount: 5000 });
+  const id = (await observations(loan)).observations[0].id;
+  const deleted = await planAndApply({ kind: 'delete_balance_observation', observationId: id });
+  await planAndApply({ kind: 'update_account', accountId: loan, type: 'savings' });
+  const undoDelete = await planAndApply({ kind: 'undo', changeSetId: deleted.id });
+  assert.deepEqual(undoDelete.exceptions, [{ reason: 'account_has_observations', field: 'type' }]);
+  assert.equal((await observations(loan)).observations.length, 0);
+});
+
+test("an observation is the account's balance as stated: adjustments correct only the bank's balances", async () => {
+  const checking = importedAccount('Testikäyttötili');
+  importedSnapshot(checking, '2026-09-01', 1000);
+  db.prepare(
+    `INSERT INTO balance_adjustments (id, created_at, account_id, date, amount, reason) VALUES (?, ?, ?, '2026-09-01', 100, 'käteinen')`
+  ).run(crypto.randomUUID(), new Date().toISOString(), checking);
+  booked(checking, '2026-09-15', -50);
+  await planAndApply({ kind: 'add_balance_observation', accountId: checking, date: '2026-10-01', amount: 1050 });
+
+  assert.equal(getSummary('2026-10-01').totalBalance, 1050);
+  const point = (await history('from=2026-10-01&to=2026-10-01&interval=day')).points[0];
+  assert.equal(point.netWorth, 1050);
+  // 1000 + 100 (adjustment) − 50 (booked) = 1050: the observation agrees with the corrected balance.
+  assert.equal((await observations(checking)).observations[0].reconciliation.difference, 0);
+
+  // A later bank balance is corrected again: the adjustment stands for a row its exports miss.
+  importedSnapshot(checking, '2026-10-15', 950);
+  assert.equal(getSummary('2026-10-15').totalBalance, 1050);
 });

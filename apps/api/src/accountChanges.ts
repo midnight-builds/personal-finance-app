@@ -359,10 +359,17 @@ function draftUndo(op: Extract<AccountOp, { kind: 'undo' }>): Draft {
     exceptions.push({ reason: 'account_archived' });
   } else {
     const before = payload.before!;
+    const observed = hasObservations(id);
     for (const field of FIELDS) {
       if (payload.after[field] === before[field]) continue;
       if (current[field] !== payload.after[field]) {
         exceptions.push({ reason: 'changed_since', field });
+      } else if (
+        observed &&
+        (field === 'currency' || (field === 'type' && isLiabilityType(before.type) !== isLiabilityType(current.type)))
+      ) {
+        // As in an update: stored observations rest on the currency and the asset/liability side.
+        exceptions.push({ reason: 'account_has_observations', field });
       } else if (field === 'name' && nameTaken(before.name, id)) {
         exceptions.push({ reason: 'name_exists', field });
       } else {

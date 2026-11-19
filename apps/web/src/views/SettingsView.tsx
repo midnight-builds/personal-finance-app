@@ -111,6 +111,7 @@ export default function SettingsView({
     snapshot_exists: 'Tälle päivälle on jo saldo – korjaa se saldo-oikaisulla',
     date_in_future: 'Päivä ei voi olla tulevaisuudessa',
     observation_exists: 'Tälle päivälle on jo saldohavainto – muokkaa sitä tilin Saldot-kohdassa',
+    debt_negative: 'Kirjaa velka positiivisena summana',
   };
 
   const createBalanceAdjustmentApi = async () => {

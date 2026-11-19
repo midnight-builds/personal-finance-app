@@ -13,8 +13,9 @@ export type BalanceAdjustment = {
 
 export type ListedBalanceAdjustment = BalanceAdjustment & {
   /**
-   * The Ledger uses it: some balance snapshot is dated on or after it. False while
-   * the account has no balance yet or every snapshot is older (it waits for one).
+   * The Ledger uses it: some bank balance (an imported snapshot) is dated on or after
+   * it. False while the account has none yet or every one is older (it waits for one).
+   * Balance observations are never adjusted.
    */
   applied: boolean;
 };
@@ -24,7 +25,7 @@ export function listBalanceAdjustments(): ListedBalanceAdjustment[] {
     .prepare(
       `SELECT ba.id, ba.created_at, ba.account_id, ba.date, ba.amount, ba.reason,
               EXISTS (SELECT 1 FROM balance_snapshots s
-                      WHERE s.account_id = ba.account_id
+                      WHERE s.account_id = ba.account_id AND s.source = 'import'
                         AND substr(s.date, 1, 10) >= substr(ba.date, 1, 10)) AS applied
        FROM balance_adjustments ba
        ORDER BY ba.date DESC, ba.created_at DESC`
@@ -43,9 +44,10 @@ export function createBalanceAdjustment(input: {
   if (!account) throw DomainError.notFound();
   // A manual account's balance is only what its observations say: correct an observation instead.
   if (account.tracking === "manual") throw DomainError.conflict("account_manual");
-  // An adjustment corrects a balance; without one the Ledger would drop it silently.
+  // An adjustment corrects the bank's balance; without one the Ledger would drop it silently
+  // (an observation is the balance as stated and is never adjusted).
   // The account's first balance is a balance observation (balanceObservations.ts) instead.
-  if (!db.prepare("SELECT 1 FROM balance_snapshots WHERE account_id = ?").get(input.accountId)) {
+  if (!db.prepare("SELECT 1 FROM balance_snapshots WHERE account_id = ? AND source = 'import'").get(input.accountId)) {
     throw DomainError.conflict("balance_snapshot_missing");
   }
   const now = new Date().toISOString();

@@ -58,7 +58,9 @@ source), `correct_balance_observation` and `delete_balance_observation` by the
 observation's id from `list_balance_observations`, and `undo`. The amount is the
 balance at the end of the day; for a credit card, loan or other liability it is
 the **debt as a positive amount**, stored as a negative balance
-(`balanceFromDebt`), so a sign mistake can never turn debt into an asset. A day in
+(`balanceFromDebt`); a negative debt is refused (`400 debt_negative`) rather
+than guessed, so a sign mistake can never turn debt into an asset. Balance
+adjustments correct only the bank's balances, never an observation. A day in
 the future is refused (`400 date_in_future`), and so is a second balance for a
 day: `409 observation_exists` names the observation to correct, `409
 snapshot_exists` means the bank reported that day's balance (the bank's balances
@@ -68,8 +70,9 @@ no transaction and changes no cash flow; it is a manual account's only balance
 and an imported account's anchor between the bank's balances (`reconciliation`
 shows how far the bookings in between are from explaining it). Once an account
 has observations its currency and its side of the asset/liability line are fixed
-(`409 account_has_observations`): changing them would silently reinterpret every
-stored amount. `get_net_worth` and `get_balance_history` count each account at
+(`409 account_has_observations`; an undo that would bring the old ones back, or
+an observation stated under them, is left alone and reported with that reason):
+changing them would silently reinterpret every stored amount. `get_net_worth` and `get_balance_history` count each account at
 its ownership share, keep accounts in other currencies apart (never converted),
 leave unknown balances out (listed in `coverage.missingAccountIds`, never zero)
 and flag a balance older than the account's update interval as `stale` (still

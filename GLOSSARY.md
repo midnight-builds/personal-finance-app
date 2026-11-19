@@ -174,7 +174,8 @@ from the export in between.
 
 **Balance (of an account, on a day)** — the latest balance snapshot on or
 before that day (the bank's or a balance observation, whichever is later; two
-are never added), plus balance adjustments dated on or before the snapshot.
+are never added), plus, for the bank's balance, the balance adjustments dated on
+or before it.
 Unknown (null), not zero, when there is no snapshot yet. Nothing is estimated
 between two snapshots: the balance is a step function.
 
@@ -187,11 +188,16 @@ snapshot with `source: manual`, so every balance view reads it like the bank's
 (`docs/adr/0003-balance-observations-are-snapshots.md`); the bank's own snapshots
 are never edited, only corrected with balance adjustments. Debt (credit_card,
 loan, other_liability) is entered as a positive amount and stored as a negative
-balance (`balanceFromDebt`). One per account and day, not in the future, never in
+balance (`balanceFromDebt`); a negative debt is refused (`debt_negative`), since
+it may be a debt written with the bank's minus or a card in credit, and guessing
+would flip net worth. It is the balance as stated: balance adjustments, which
+correct the bank's balances, are never added to it. One per account and day, not in the future, never in
 cash flow, never a transaction. Added, corrected and deleted through account
 change sets, each undoable; a deleted one is kept in its change set. Once an
 account has one, its currency and its side of the asset/liability line are
-fixed (`account_has_observations`), since every stored amount rests on them. An
+fixed (`account_has_observations`, also for an undo that would bring the old
+type or currency back, or an observation stated under them), since every stored
+amount rests on them. An
 import with a balance for the same day replaces it (and its undo then reports
 `observation_missing`). On an imported account it is reconciled with the
 previous balance and the bookings in between (`reconciliation.difference`), and
@@ -222,9 +228,10 @@ any other once they have a balance. Transfers between own accounts leave it
 unchanged.
 
 **Balance adjustment** — a manual correction to an account's balance, e.g. a
-cash withdrawal missing from the export. It corrects a snapshot, so an account
-without any snapshot refuses one (`balance_snapshot_missing`), and one dated
-after the latest snapshot waits for a later snapshot (listed as not `applied`).
+cash withdrawal missing from the export. It corrects the bank's balances (imported
+snapshots dated on or after it), never a balance observation, so an account
+without a bank balance refuses one (`balance_snapshot_missing`), and one dated
+after the latest bank balance waits for a later one (listed as not `applied`).
 A manual account refuses one (`account_manual`): its balance is only what its
 observations say, so correct the observation instead.
 

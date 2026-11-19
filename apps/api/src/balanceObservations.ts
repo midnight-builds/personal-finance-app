@@ -55,7 +55,30 @@ function snapshotOn(accountId: string, date: string, exceptId: string | null = n
     .get(accountId, date, exceptId ?? '') as { id: string; source: string } | undefined;
 }
 
-const debtOf = (type: string, balance: number) => (isLiabilityType(type) ? cents(Math.max(0, -balance)) : null);
+/** A liability's debt, positive; negative only when the balance is in credit (e.g. a card the bank reports in credit). */
+const debtOf = (type: string, balance: number) => (isLiabilityType(type) ? cents(-balance) + 0 : null);
+
+/**
+ * The signed balance of an amount as entered. A liability takes its debt, which
+ * must not be negative: a minus there is either a debt written as the bank shows
+ * it or a card in credit, and guessing would put a sign on net worth.
+ */
+function enteredBalance(type: string, amount: number): number {
+  if (isLiabilityType(type) && amount < 0) throw new DomainError('debt_negative', 400, { amount });
+  return cents(balanceFromDebt(type, amount));
+}
+
+/**
+ * Why an earlier observation cannot come back on the account as it is now: it
+ * was stated in another currency, or on the other side of the asset/liability
+ * line (its `debt` is set only for a liability), so its stored amount would mean
+ * something else.
+ */
+function reinterpreted(obs: PlannedObservation, account: AccountFacts): 'currency' | 'type' | null {
+  if (obs.currency !== account.currency) return 'currency';
+  if ((obs.debt !== null) !== isLiabilityType(account.type)) return 'type';
+  return null;
+}
 
 function view(row: ObservationRow, type: string): PlannedObservation & { id: string; actor: string; createdAt: string } {
   return {
@@ -93,20 +116,38 @@ export function hasObservations(accountId: string): boolean {
   return Boolean(db.prepare("SELECT 1 FROM balance_snapshots WHERE account_id = ? AND source = 'manual'").get(accountId));
 }
 
+const adjustmentsBetween = (accountId: string, after: string | null, upTo: string) =>
+  Number(
+    (
+      db
+        .prepare(
+          `SELECT COALESCE(SUM(amount), 0) AS s FROM balance_adjustments
+           WHERE account_id = ? AND (? IS NULL OR substr(date, 1, 10) > ?) AND substr(date, 1, 10) <= ?`
+        )
+        .get(accountId, after, after, upTo) as { s: number }
+    ).s
+  );
+
 /**
  * Checks an observation on an imported account against the account's previous
- * balance (either source) and the bookings after it, up to its own day.
+ * balance (either source, as the Ledger reads it: the bank's with its
+ * adjustments) and what happened after it up to its own day: the bookings and
+ * the adjustments (rows the exports miss) dated in between.
  */
 function reconcile(row: ObservationRow): ObservationReconciliation | null {
   const day = row.date.slice(0, 10);
   const previous = db
     .prepare(
-      `SELECT substr(date, 1, 10) AS day, balance FROM balance_snapshots
+      `SELECT substr(date, 1, 10) AS day, balance, source FROM balance_snapshots
        WHERE account_id = ? AND substr(date, 1, 10) < ?
        ORDER BY date DESC, created_at DESC LIMIT 1`
     )
-    .get(row.account_id, day) as { day: string; balance: number } | undefined;
+    .get(row.account_id, day) as { day: string; balance: number; source: string } | undefined;
   if (!previous) return null;
+  const previousBalance = cents(
+    Number(previous.balance) + (previous.source === 'manual' ? 0 : adjustmentsBetween(row.account_id, null, previous.day))
+  );
+  const adjusted = adjustmentsBetween(row.account_id, previous.day, day);
   const booked = db
     .prepare(
       `SELECT COALESCE(SUM(t.amount), 0) AS total, COUNT(*) AS n FROM normalized_transactions t
@@ -118,10 +159,10 @@ function reconcile(row: ObservationRow): ObservationReconciliation | null {
   const bookedSum = cents(Number(booked.total));
   return {
     previousDate: previous.day,
-    previousBalance: Number(previous.balance),
+    previousBalance,
     bookedSum,
     bookedCount: Number(booked.n),
-    difference: cents(Number(row.balance) - (Number(previous.balance) + bookedSum)),
+    difference: cents(Number(row.balance) - (previousBalance + bookedSum + adjusted)) + 0,
   };
 }
 
@@ -252,7 +293,7 @@ export function draftObservationOp(op: ObservationOp): ObservationDraft {
     const account = usableAccount(op.accountId);
     requireDay(op.date);
     requireFreeDay(op.accountId, op.date, null);
-    const balance = cents(balanceFromDebt(account.type, op.amount));
+    const balance = enteredBalance(account.type, op.amount);
     const after: PlannedObservation = {
       id: null,
       accountId: op.accountId,
@@ -279,7 +320,7 @@ export function draftObservationOp(op: ObservationOp): ObservationDraft {
     requireDay(date);
     requireFreeDay(row.account_id, date, row.id);
   }
-  const balance = op.amount === undefined ? before.balance : cents(balanceFromDebt(account.type, op.amount));
+  const balance = op.amount === undefined ? before.balance : enteredBalance(account.type, op.amount);
   const after: PlannedObservation = {
     ...before,
     date,
@@ -305,6 +346,8 @@ export function draftObservationUndo(kind: string, change: { before: PlannedObse
 
   if (kind === 'delete_balance_observation') {
     // Restore the deleted observation as it was, with its id.
+    const field = reinterpreted(change.before!, account);
+    if (field) return exception('account_has_observations', field);
     if (snapshotOn(accountId, change.before!.date, id)) return exception('date_taken', 'observationDate');
     return draft(accountId, null, change.before, { stamp: false, deps });
   }
@@ -314,6 +357,8 @@ export function draftObservationUndo(kind: string, change: { before: PlannedObse
   const changed = OBSERVATION_FIELDS.find(([key]) => now[key] !== change.after![key]);
   if (changed) return exception('changed_since', changed[1]);
   if (kind === 'add_balance_observation') return draft(accountId, now, null, { stamp: false, deps });
+  const field = reinterpreted(change.before!, account);
+  if (field) return exception('account_has_observations', field);
   if (snapshotOn(accountId, change.before!.date, id)) return exception('date_taken', 'observationDate');
   const restored = { ...change.before!, debt: debtOf(account.type, change.before!.balance) };
   return draft(accountId, now, restored, { stamp: false, deps });

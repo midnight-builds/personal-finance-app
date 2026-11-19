@@ -22,6 +22,8 @@ const ERRORS: Record<string, string> = {
   account_archived: 'Tili on arkistoitu.',
   nothing_to_change: 'Ei muutettavaa.',
   invalid_request: 'Tarkista päivä ja summa.',
+  debt_negative: 'Kirjaa velka positiivisena summana. Luottoa (plussalla olevaa korttia) ei voi kirjata velaksi.',
+  account_has_observations: 'Tilin tyyppi tai valuutta on muuttunut, joten aiempaa havaintoa ei voi palauttaa.',
 };
 const message = (err: unknown) =>
   err instanceof AccountRequestError ? (ERRORS[err.code] ?? `Tallennus epäonnistui (${err.code}).`) : 'Tallennus epäonnistui.';
@@ -91,6 +93,7 @@ export default function BalanceObservations({
     const amount = parseAmount(draft.amount);
     if (!draft.date) return showToast(setToast, 'Päivä puuttuu.');
     if (amount === null) return showToast(setToast, 'Summa ei ole numero.');
+    if (debt && amount < 0) return showToast(setToast, ERRORS.debt_negative, 4000);
     const ok = await run(
       () => addBalanceObservation(account.id, { date: draft.date, amount, ...(draft.note.trim() ? { note: draft.note.trim() } : {}) }),
       'Saldohavainto lisätty.'
@@ -100,12 +103,20 @@ export default function BalanceObservations({
 
   const saveEdit = async () => {
     if (!editing) return;
+    const original = data?.observations.find((o) => o.id === editing.id);
+    if (!original) return;
     const amount = parseAmount(editing.amount);
     if (amount === null) return showToast(setToast, 'Summa ei ole numero.');
-    const ok = await run(
-      () => correctBalanceObservation(editing.id, { date: editing.date, amount, note: editing.note.trim() }),
-      'Saldohavainto korjattu.'
-    );
+    // Only what the user changed is sent: an untouched amount is never re-entered (and re-signed).
+    const patch: { date?: string; amount?: number; note?: string } = {};
+    if (editing.date !== original.date) patch.date = editing.date;
+    if (editing.amount !== String(shown(original))) {
+      if (debt && amount < 0) return showToast(setToast, ERRORS.debt_negative, 4000);
+      patch.amount = amount;
+    }
+    if (editing.note.trim() !== (original.note ?? '')) patch.note = editing.note.trim();
+    if (Object.keys(patch).length === 0) return setEditing(null);
+    const ok = await run(() => correctBalanceObservation(editing.id, patch), 'Saldohavainto korjattu.');
     if (ok) setEditing(null);
   };
 

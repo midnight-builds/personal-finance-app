@@ -20,7 +20,8 @@ const ERROR_CODES =
   '(e.g. op.iban: iban_invalid); 404 account_not_found, change_set_not_found; 409 plan_stale, account_name_exists, ' +
   'iban_in_use (another account has that IBAN), account_imported (an imported account\'s IBAN and currency come from ' +
   'its exports; it cannot be archived), account_archived, account_not_archived, nothing_to_change, already_undone, ' +
-  'cannot_undo_undo; observations: 400 date_in_future; 404 observation_not_found; 409 observation_exists (that day ' +
+  'cannot_undo_undo; observations: 400 date_in_future, debt_negative (a liability\'s debt is never negative; a card ' +
+  'in credit cannot be entered); 404 observation_not_found; 409 observation_exists (that day ' +
   'has one: correct it, details.observationId), snapshot_exists (the bank reported that day\'s balance), ' +
   'snapshot_imported (the bank\'s balance is never edited), account_has_observations (a type change across ' +
   'asset/liability or a currency change would reinterpret stored balances; details.field).';
@@ -39,7 +40,7 @@ export const accountTools: ToolDefinition[] = [
       'keeps its name and IBAN); unarchive_account (brings an archived account back, also one whose creation was undone); ' +
       'add_balance_observation (accountId, date YYYY-MM-DD today or earlier, amount, optional note on where it comes ' +
       'from: the balance at the end of that day; for credit_card, loan and other_liability the DEBT as a POSITIVE ' +
-      'amount, stored as a negative balance; one per account and day; works for imported accounts too, as an anchor ' +
+      'amount (never negative), stored as a negative balance; one per account and day; works for imported accounts too, as an anchor ' +
       'between the bank\'s balances, never added to them); correct_balance_observation (observationId from ' +
       'list_balance_observations and any of date, amount, note (null removes)); delete_balance_observation ' +
       '(observationId; kept in the change set, undo restores it). An observation creates no transactions and never ' +
