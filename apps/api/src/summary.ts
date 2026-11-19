@@ -1,3 +1,4 @@
+import { isLiabilityType } from "@finance-app/shared";
 import { db } from "./db.js";
 import { accountBalances, daysBefore, ledgerEntries, today, type LedgerScope } from "./ledger.js";
 import { annualSubscriptions, establishedSubscriptions } from "./patternDecisions.js";
@@ -168,12 +169,12 @@ export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
     .reduce((sum, a) => sum + a.balance, 0));
 
   const totalSavings = cents(accounts
-    .filter((a) => a.subtype === 'savings')
+    .filter((a) => a.subtype === 'savings' || a.subtype === 'investment')
     .reduce((sum, a) => sum + a.balance, 0));
 
-  // Credit debt: sum of credit_card raw balances as positive
+  // Credit debt: sum of liability (credit card, loan, other) raw balances as positive
   const creditDebt = cents(accountRows
-    .filter((a) => a.account_subtype === 'credit_card')
+    .filter((a) => isLiabilityType(a.account_subtype))
     .reduce((sum, a) => {
       const rawBalance = rawBalanceOf(a.id);
       return sum + Math.abs(rawBalance < 0 ? rawBalance : 0);

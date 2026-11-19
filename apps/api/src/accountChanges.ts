@@ -3,6 +3,7 @@ import {
   ACCOUNT_CHANGE_MAX_LISTED_TRANSFERS,
   accountOpSchema,
   compactIban,
+  ownTransferKind,
   type AccountChangeSet,
   type AccountChangeSetList,
   type AccountChangeSetListItem,
@@ -58,7 +59,7 @@ type AccountState = {
   archivedAt: string | null;
 };
 
-type StoredEffects = { recognized: TransferEffect[]; released: TransferEffect[] };
+type StoredEffects = { recognized: TransferEffect[]; released: TransferEffect[]; reclassified: TransferEffect[] };
 
 /** Stored with the change set: everything its undo needs (the IBAN only here). */
 type Payload = {
@@ -187,9 +188,12 @@ function effects(accountId: string | null, before: AccountState | null, after: A
   const will = transfersFor(accountId, after);
   const wasIds = new Set(was.map((t) => t.transactionId));
   const willIds = new Set(will.map((t) => t.transactionId));
+  // Still recognised, but reported differently: the type moved to another kind (saving → other).
+  const kindChanged = before !== null && ownTransferKind(before.type) !== ownTransferKind(after.type);
   return {
     recognized: will.filter((t) => !wasIds.has(t.transactionId)),
     released: was.filter((t) => !willIds.has(t.transactionId)),
+    reclassified: kindChanged ? will.filter((t) => wasIds.has(t.transactionId)) : [],
   };
 }
 
@@ -236,7 +240,7 @@ function draftCreate(op: Extract<AccountOp, { kind: 'create_account' }>): Draft 
     changes: [{ field: 'created', from: null, to: op.name }],
     transfers,
     exceptions: [],
-    deps: { recognized: transfers.recognized.map((t) => t.transactionId) },
+    deps: effectDeps(transfers),
   };
 }
 
@@ -290,6 +294,23 @@ function draftArchive(op: Extract<AccountOp, { kind: 'archive_account' }>): Draf
   };
 }
 
+function draftUnarchive(op: Extract<AccountOp, { kind: 'unarchive_account' }>): Draft {
+  const before = requireAccount(op.accountId);
+  if (!before.archivedAt) throw DomainError.conflict('account_not_archived');
+  const after: AccountState = { ...before, archivedAt: null };
+  const transfers = effects(op.accountId, before, after);
+  return {
+    op,
+    accountId: op.accountId,
+    before,
+    after,
+    changes: diff(before, after),
+    transfers,
+    exceptions: [],
+    deps: depsOf(op.accountId, before, transfers),
+  };
+}
+
 function draftUndo(op: Extract<AccountOp, { kind: 'undo' }>): Draft {
   const set = readChangeSet('accounts', op.changeSetId);
   if (set.kind === 'undo') throw DomainError.conflict('cannot_undo_undo');
@@ -300,9 +321,10 @@ function draftUndo(op: Extract<AccountOp, { kind: 'undo' }>): Draft {
   const after: AccountState = { ...current };
   const exceptions: AccountException[] = [];
 
-  if (set.kind === 'create_account' || set.kind === 'archive_account') {
-    // Undoing a creation archives the account (accounts are never deleted); undoing an archive brings it back.
-    const archive = set.kind === 'create_account';
+  if (set.kind === 'create_account' || set.kind === 'archive_account' || set.kind === 'unarchive_account') {
+    // Undoing a creation archives the account (accounts are never deleted; unarchive_account brings it
+    // back); undoing an archive brings it back, undoing an unarchive archives it again.
+    const archive = set.kind !== 'archive_account';
     if ((current.archivedAt !== null) === archive) exceptions.push({ reason: 'changed_since', field: 'archived' });
     else after.archivedAt = archive ? ARCHIVE_NOW : null;
   } else if (current.archivedAt) {
@@ -342,8 +364,24 @@ function draftUndo(op: Extract<AccountOp, { kind: 'undo' }>): Draft {
 function depsOf(accountId: string, state: AccountState, transfers: StoredEffects) {
   return {
     account: [accountId, state],
+    ...effectDeps(transfers),
+  };
+}
+
+/**
+ * The newest account change set: any applied account change makes earlier plans
+ * stale, so a state that returns to an earlier value (A → B → A) never gives an
+ * earlier plan's token, which would return that old set instead of applying.
+ */
+function effectDeps(transfers: StoredEffects) {
+  const latest = db
+    .prepare(`SELECT id FROM change_sets WHERE domain = 'accounts' ORDER BY rowid DESC LIMIT 1`)
+    .get() as { id: string } | undefined;
+  return {
+    latestSet: latest?.id ?? null,
     recognized: transfers.recognized.map((t) => t.transactionId),
     released: transfers.released.map((t) => t.transactionId),
+    reclassified: transfers.reclassified.map((t) => t.transactionId),
   };
 }
 
@@ -355,6 +393,8 @@ function draftFor(op: AccountOp): Draft {
       return draftUpdate(op);
     case 'archive_account':
       return draftArchive(op);
+    case 'unarchive_account':
+      return draftUnarchive(op);
     case 'undo':
       return draftUndo(op);
   }
@@ -375,6 +415,8 @@ function publicTransfers(t: StoredEffects) {
     recognizedTotal: t.recognized.length,
     released: t.released.slice(0, ACCOUNT_CHANGE_MAX_LISTED_TRANSFERS),
     releasedTotal: t.released.length,
+    reclassified: (t.reclassified ?? []).slice(0, ACCOUNT_CHANGE_MAX_LISTED_TRANSFERS),
+    reclassifiedTotal: (t.reclassified ?? []).length,
   };
 }
 
@@ -484,6 +526,7 @@ function listItem(row: ChangeSetRow, payload: Payload): AccountChangeSetListItem
       fieldsChanged: payload.changes.length,
       transfersRecognized: payload.transfers.recognized.length,
       transfersReleased: payload.transfers.released.length,
+      transfersReclassified: (payload.transfers.reclassified ?? []).length,
       exceptions: payload.exceptions.length,
     },
   };

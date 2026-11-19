@@ -176,10 +176,12 @@ test('setting an IBAN later recognises stored transactions; removing it and undo
   assert.equal(kindOf(), 'loan_repayment');
 });
 
-test('new imports are recognised too, and the payment is never paired with another account', async () => {
+test('new imports are recognised too; a pair link the import makes still wins', async () => {
   createManual({ name: 'Säästö', type: 'savings', iban: SAVINGS });
-  // A card credit of the same amount the same day: a payment to an own account is not its repayment.
   await importChecking([{ date: '2026-10-02', amount: -200, other: SAVINGS, name: 'Testi Henkilö' }]);
+  assert.equal(ledgerEntries().find((e) => e.counterparty === 'Testi Henkilö')!.ownTransfer?.kind, 'saving');
+  // A card credit of the same amount: the import links it as a card repayment, as before
+  // manual accounts existed; the linked pair stays a transfer, not a saving.
   await processImport({
     records: [
       { Kirjauspäivä: '2026/10/02', Määrä: '200,00', Maksaja: '', Maksunsaaja: '', Nimi: 'Suoritus', Otsikko: '', Viesti: '', Saldo: '', Valuutta: 'EUR' },
@@ -190,8 +192,58 @@ test('new imports are recognised too, and the payment is never paired with anoth
     format: 'csv',
     target: { newAccount: { name: 'Kortti', subtype: 'credit_card' } },
   });
-  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM transfer_links').get() as { n: number }).n, 0);
-  assert.equal(ledgerEntries().find((e) => e.counterparty === 'Testi Henkilö')!.ownTransfer?.kind, 'saving');
+  const payment = ledgerEntries({ includeTransfers: true }).find((e) => e.counterparty === 'Testi Henkilö')!;
+  assert.equal(payment.isTransfer, true);
+  assert.equal(payment.ownTransfer, null);
+});
+
+test('repeating an earlier change applies it again (no stale token returns an old set)', async () => {
+  await importChecking(STANDARD_ROWS);
+  const id = createManual({ name: 'A', type: 'savings' });
+  const first = applyAccountChangeNow({ kind: 'update_account', accountId: id, iban: SAVINGS }, 'user');
+  applyAccountChangeNow({ kind: 'update_account', accountId: id, iban: null }, 'user');
+  const again = applyAccountChangeNow({ kind: 'update_account', accountId: id, iban: SAVINGS }, 'user');
+  assert.notEqual(again.id, first.id);
+  assert.equal(ledgerEntries().filter((e) => e.ownTransfer).length, 1);
+
+  const archived = applyAccountChangeNow({ kind: 'archive_account', accountId: id }, 'user');
+  applyAccountChangeNow({ kind: 'undo', changeSetId: archived.id }, 'user');
+  const archivedAgain = applyAccountChangeNow({ kind: 'archive_account', accountId: id }, 'user');
+  assert.notEqual(archivedAgain.id, archived.id);
+  assert.ok((db.prepare('SELECT archived_at FROM accounts WHERE id = ?').get(id) as { archived_at: string | null }).archived_at);
+});
+
+test('an archived account, also one whose creation was undone, comes back with unarchive_account', async () => {
+  await importChecking(STANDARD_ROWS);
+  const created = applyAccountChangeNow({ kind: 'create_account', name: 'Laina', type: 'loan', iban: LOAN }, 'user');
+  applyAccountChangeNow({ kind: 'undo', changeSetId: created.id }, 'user');
+  assert.equal(ledgerEntries().filter((e) => e.ownTransfer).length, 0);
+  const back = applyAccountChangeNow({ kind: 'unarchive_account', accountId: created.accountId }, 'user');
+  assert.equal(back.transfers.recognizedTotal, 1);
+  assert.equal(ledgerEntries().filter((e) => e.ownTransfer).length, 1);
+  // Now it can be edited again, e.g. its IBAN removed.
+  applyAccountChangeNow({ kind: 'update_account', accountId: created.accountId, iban: null }, 'user');
+  assert.throws(() => planAccountChange({ kind: 'unarchive_account', accountId: created.accountId }), (err: any) => err.code === 'account_not_archived');
+});
+
+test('a type change that changes the reporting lists the transactions as reclassified', async () => {
+  await importChecking(STANDARD_ROWS);
+  const id = createManual({ name: 'Säästö', type: 'savings', iban: SAVINGS });
+  const plan = planAccountChange({ kind: 'update_account', accountId: id, type: 'property' });
+  assert.equal(plan.transfers.reclassifiedTotal, 1);
+  assert.equal(plan.transfers.recognizedTotal, 0);
+  assert.equal(planAccountChange({ kind: 'update_account', accountId: id, type: 'investment' }).transfers.reclassifiedTotal, 0);
+});
+
+test('household totals follow the new types of imported accounts', async () => {
+  await importChecking([{ date: '2026-10-01', amount: 10, other: OTHER_PERSON, name: 'Palkka Oy' }]);
+  const checkingId = (db.prepare("SELECT id FROM accounts WHERE tracking = 'imported'").get() as { id: string }).id;
+  db.prepare("INSERT INTO balance_snapshots (id, created_at, account_id, date, balance, currency) VALUES ('s1', ?, ?, '2026-10-01', -300, 'EUR')").run(
+    new Date().toISOString(),
+    checkingId
+  );
+  applyAccountChangeNow({ kind: 'update_account', accountId: checkingId, type: 'other_liability' }, 'user');
+  assert.equal(getHouseholdSummary('2026-10-20').creditDebt, 300);
 });
 
 test('a linked transfer between imported accounts stays a linked transfer', async () => {

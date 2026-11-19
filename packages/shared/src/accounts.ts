@@ -130,6 +130,11 @@ export const accountOpSchema = z.discriminatedUnion('kind', [
       'nothing_to_change'
     ),
   z.object({ kind: z.literal('archive_account'), accountId: id, reason }),
+  z.object({
+    kind: z.literal('unarchive_account'),
+    accountId: id.describe('An archived account; it keeps its name and IBAN while archived'),
+    reason,
+  }),
   z.object({ kind: z.literal('undo'), changeSetId: id.describe('Account change set id'), reason }),
 ]);
 
@@ -153,6 +158,7 @@ export type PublicAccountOp =
   | (Omit<Extract<AccountOp, { kind: 'create_account' }>, 'iban'> & { recognizesTransfers?: boolean })
   | (Omit<Extract<AccountOp, { kind: 'update_account' }>, 'iban'> & { recognizesTransfers?: boolean })
   | Extract<AccountOp, { kind: 'archive_account' }>
+  | Extract<AccountOp, { kind: 'unarchive_account' }>
   | Extract<AccountOp, { kind: 'undo' }>;
 
 /** An account as agents and change sets see it: never its IBAN. */
@@ -188,6 +194,9 @@ export type AccountTransferEffects = {
   /** Transactions that stop being transfers to this account and count as ordinary payments again. */
   released: TransferEffect[];
   releasedTotal: number;
+  /** Still transfers to this account, but reported as another kind (the type changed, e.g. savings → property). */
+  reclassified: TransferEffect[];
+  reclassifiedTotal: number;
 };
 
 export type AccountException = { reason: string; field?: string };
@@ -213,7 +222,13 @@ export type AccountChangeSetListItem = {
   undoOfId: string | null;
   undoneById: string | null;
   accountId: string;
-  summary: { fieldsChanged: number; transfersRecognized: number; transfersReleased: number; exceptions: number };
+  summary: {
+    fieldsChanged: number;
+    transfersRecognized: number;
+    transfersReleased: number;
+    transfersReclassified: number;
+    exceptions: number;
+  };
 };
 
 export type AccountChangeSet = AccountChangeSetListItem & {

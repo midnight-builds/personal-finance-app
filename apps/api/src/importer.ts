@@ -344,17 +344,6 @@ function linkTransfers(ids: string[]) {
       ).map((p) => payeeKey(p, { account_id: p.card_id, counterparty_name: p.credit_name }))
     );
   let payees = loadPayees();
-  // A payment naming a manual account's IBAN is a transfer to that account (the
-  // Ledger's rule): never one side of a pair with some other account's row.
-  const manualIbans = new Set(
-    (
-      db
-        .prepare("SELECT iban FROM accounts WHERE tracking = 'manual' AND archived_at IS NULL AND iban IS NOT NULL")
-        .all() as Array<{ iban: string }>
-    ).map((a) => normIban(a.iban))
-  );
-  const toManual = (s: Pick<LinkSide, 'counterparty_iban'>) =>
-    s.counterparty_iban !== null && manualIbans.has(normIban(s.counterparty_iban));
 
   /**
    * A payment from `from` to the card's issuer, named on the card as its earlier repayments
@@ -367,13 +356,13 @@ function linkTransfers(ids: string[]) {
     const day = credit.booking_date.slice(0, 10);
     return (
       candidatesOf.all(credit.booking_date, credit.account_id, -credit.amount, daysBefore(day, 2), daysBefore(day, -3), credit.booking_date) as LinkSide[]
-    ).filter((c) => c.account_iban && !toManual(c));
+    ).filter((c) => c.account_iban);
   };
 
   /** Links one row. With `settle` false, a card credit several payments could have repaid waits. */
   const linkOne = (id: string, settle: boolean) => {
     const row = sideOf.get(id) as (LinkSide & { booking_date: string; amount: number }) | undefined;
-    if (!row || row.amount === 0 || toManual(row)) return;
+    if (!row || row.amount === 0) return;
     // An export naming the account's own IBAN as the other party says nothing about it.
     const ownIbanAsNone = (s: LinkSide) =>
       normIban(s.counterparty_iban) === normIban(s.account_iban) ? { ...s, counterparty_iban: null } : s;
@@ -382,9 +371,7 @@ function linkTransfers(ids: string[]) {
     const day = row.booking_date.slice(0, 10);
     const candidates = (
       candidatesOf.all(row.booking_date, row.account_id, -row.amount, daysBefore(day, 2), daysBefore(day, -3), row.booking_date) as LinkSide[]
-    )
-      .filter((c) => !toManual(c))
-      .map(ownIbanAsNone);
+    ).map(ownIbanAsNone);
 
     const pointsAt = (from: LinkSide, to: LinkSide) =>
       from.counterparty_iban !== null && normIban(from.counterparty_iban) === normIban(to.account_iban);
