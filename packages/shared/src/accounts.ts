@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { isoDate } from './schemas.js';
 
 // The account model (GLOSSARY.md, "Account", "Tracking", "Transfer to a manual
-// account"; docs/adr/0002-transfers-to-manual-accounts.md) and the contract of
+// account", "Balance observation"; docs/adr/0002-transfers-to-manual-accounts.md,
+// docs/adr/0003-balance-observations-are-snapshots.md) and the contract of
 // account change sets: POST /accounts/plan, POST /accounts/apply and the
 // change-set listing. Shared by the API, the web app and the MCP tools.
 

@@ -20,17 +20,25 @@ data comes from. It also has an *ownership share* (0–100 %, default 100: the
 household's part, for net worth only, never for cash flow), a *currency*
 (default EUR; stored, never converted) and an optional *update interval* (days
 between balance updates, for staleness). Created, changed, archived and undone
-through account change sets (`accountChanges.ts`), with an actor.
+through account change sets (`accountChanges.ts`), with an actor; so are its
+balance observations. The cash types (checking, savings, credit_card,
+`CASH_TYPES`) are the only ones the runway counts.
 _Avoid_: asset item, alias (for the account; its name is what agents see)
 
 **Tracking (of an account)** — `imported`: its transactions and balance come
-from bank exports (every account an import creates); `manual`: nothing is
-imported into it (an import naming it is refused, `409 account_manual`), and it
-has no balance yet (dated balance observations come later). Every balance view
-and aggregate covers imported accounts only. Set when the account is created,
-not changed afterwards. Only a manual account can be archived: hidden, it stops
-recognising transfers, and keeps its name, IBAN and history; unarchiving brings it
-back (undoing its creation archives it).
+from bank exports (every account an import creates), with balance observations
+as anchors where the export has no balance; `manual`: nothing is imported into it
+(an import naming it is refused, `409 account_manual`), and its balance is only
+its balance observations. Cash views (summary, runway, briefing, import preview)
+cover imported accounts only; net worth and balance history cover both. Set when
+the account is created, never changed afterwards: an imported account's
+transactions and bank balances would be left on a manual account (which has no
+transactions and recognises payments to it as one-sided transfers), and a manual
+account turned imported would make those transfers count twice once its own
+side is imported. Only a manual account can be archived: hidden (out of net
+worth and balance history too), it stops recognising transfers, and keeps its
+name, IBAN, observations and history; unarchiving brings it back (undoing its
+creation archives it).
 
 **Transfer to a manual account** — a payment between an imported account and a
 manual account, recognised by the manual account's IBAN as the payment's
@@ -136,7 +144,7 @@ _Avoid_: deleted category
 **Change set** — one applied change to categorization (recategorizing rows,
 creating, renaming, archiving or merging a category, creating or disabling a
 rule) or to an account (creating a manual account, changing an account,
-archiving a manual one), recorded with its actor and reason, and undoable as a
+archiving a manual one, adding, correcting or deleting a balance observation), recorded with its actor and reason, and undoable as a
 whole. Each domain lists, reads and undoes only its own sets (`changeSets.ts`).
 
 **Plan** — a change set worked out without writing anything: what would move
@@ -165,28 +173,60 @@ plus the day's amounts does not give the day's last Saldo: rows are missing
 from the export in between.
 
 **Balance (of an account, on a day)** — the latest balance snapshot on or
-before that day, plus balance adjustments dated on or before the snapshot.
-Unknown (null), not zero, when there is no snapshot yet.
+before that day (the bank's or a balance observation, whichever is later; two
+are never added), plus balance adjustments dated on or before the snapshot.
+Unknown (null), not zero, when there is no snapshot yet. Nothing is estimated
+between two snapshots: the balance is a step function.
 
-**Known balance period** — from an account's first balance snapshot to the
-last day its imported data covers (latest snapshot or booking). Outside it the
+**Balance observation** — a dated balance an actor states for an account (the
+user in the web UI, an agent through MCP): account, day, amount, optional note on
+its source (e.g. a card statement), actor and time. For a manual account it is
+the only balance; for an imported one an anchor where the export has no balance
+(a credit card) or a closing balance of an old statement. Stored as a balance
+snapshot with `source: manual`, so every balance view reads it like the bank's
+(`docs/adr/0003-balance-observations-are-snapshots.md`); the bank's own snapshots
+are never edited, only corrected with balance adjustments. Debt (credit_card,
+loan, other_liability) is entered as a positive amount and stored as a negative
+balance (`balanceFromDebt`). One per account and day, not in the future, never in
+cash flow, never a transaction. Added, corrected and deleted through account
+change sets, each undoable; a deleted one is kept in its change set. Once an
+account has one, its currency and its side of the asset/liability line are
+fixed (`account_has_observations`), since every stored amount rests on them. An
+import with a balance for the same day replaces it (and its undo then reports
+`observation_missing`). On an imported account it is reconciled with the
+previous balance and the bookings in between (`reconciliation.difference`), and
+a difference is shown, never booked away.
+_Avoid_: manual balance, snapshot (for the observation), estimate
+
+**Stale balance** — an account with an update interval whose latest balance is
+older than that many days (`stale`, with `ageDays`). It still counts in net
+worth and is flagged; an account without any balance is unknown, not stale. No
+reminders are sent.
+
+**Known balance period** — for an imported account, from its first balance
+snapshot to the last day its imported data covers (latest snapshot or booking). Outside it the
 account's balance is unknown, and so is a day with bookings after the snapshot
 the balance rests on (rows with a blank Saldo): a balance series never carries
-a stale balance or one past or before the data.
+a stale balance or one past or before the data. A manual account has no end:
+from its first observation on, its latest one holds (see "Stale balance").
 
-**Net worth (on a day)** — known balances of imported accounts minus
-liability (credit card, loan) debt, over the accounts whose balance is known that day (`balanceHistory.ts`).
-Complete only when every account is known; investments are not tracked and
-never included. Transfers between own accounts leave it unchanged.
+**Net worth (on a day)** — the ownership share of every known balance, assets
+minus liability debt, over the accounts that are not archived, imported and
+manual (`balanceHistory.ts`; now: `GET /net-worth`, each account at its latest
+balance). The share applies here only, never to cash flow. Totals are in EUR;
+an account in another currency is never converted and has totals of its own
+(`otherCurrencies`). An unknown balance is left out and listed
+(`coverage.missingAccountIds`), never counted as zero, so net worth is complete
+only when every account is known. Investment and property accounts count like
+any other once they have a balance. Transfers between own accounts leave it
+unchanged.
 
 **Balance adjustment** — a manual correction to an account's balance, e.g. a
 cash withdrawal missing from the export. It corrects a snapshot, so an account
 without any snapshot refuses one (`balance_snapshot_missing`), and one dated
 after the latest snapshot waits for a later snapshot (listed as not `applied`).
-
-**Manual balance** — a balance snapshot the user sets (`source: manual`) for an
-imported account whose export has no balance (a manual account takes none), e.g. a credit card (debt is negative). Every
-balance view uses it like an imported one; an import of the same day replaces it.
+A manual account refuses one (`account_manual`): its balance is only what its
+observations say, so correct the observation instead.
 
 **Recurring pattern** — a counterparty an account pays again and again,
 detected from its countable expenses in the 180 days up to the account's
