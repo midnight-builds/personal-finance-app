@@ -321,7 +321,7 @@ test('validation: imported accounts keep their IBAN and currency; IBANs are chec
   assert.ok(isValidIban(SAVINGS));
 });
 
-test('nothing is imported into a manual account, and it takes no manual balance', async () => {
+test('nothing is imported into a manual account', async () => {
   const id = createManual({ name: 'Säästö', type: 'savings', iban: SAVINGS });
   await assert.rejects(() => importChecking([{ date: '2026-10-02', amount: 5, other: CHECKING, name: 'Korko' }], SAVINGS), (err: any) => err.code === 'account_manual');
   await assert.rejects(
@@ -336,8 +336,6 @@ test('nothing is imported into a manual account, and it takes no manual balance'
       }),
     (err: any) => err.code === 'account_manual'
   );
-  const res = await app.inject({ method: 'POST', url: '/balance-snapshots', payload: { accountId: id, date: '2026-10-01', balance: 10 } });
-  assert.equal(res.statusCode, 409);
 });
 
 test('routes: create, patch and archive record the actor; no response carries the IBAN', async () => {

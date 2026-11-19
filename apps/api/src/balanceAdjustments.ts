@@ -39,9 +39,12 @@ export function createBalanceAdjustment(input: {
   amount: number;
   reason?: string | null;
 }): BalanceAdjustment {
-  if (!db.prepare("SELECT 1 FROM accounts WHERE id = ?").get(input.accountId)) throw DomainError.notFound();
+  const account = db.prepare("SELECT tracking FROM accounts WHERE id = ?").get(input.accountId) as { tracking: string } | undefined;
+  if (!account) throw DomainError.notFound();
+  // A manual account's balance is only what its observations say: correct an observation instead.
+  if (account.tracking === "manual") throw DomainError.conflict("account_manual");
   // An adjustment corrects a balance; without one the Ledger would drop it silently.
-  // The account's first balance is a manual snapshot (balanceSnapshots.ts) instead.
+  // The account's first balance is a balance observation (balanceObservations.ts) instead.
   if (!db.prepare("SELECT 1 FROM balance_snapshots WHERE account_id = ?").get(input.accountId)) {
     throw DomainError.conflict("balance_snapshot_missing");
   }

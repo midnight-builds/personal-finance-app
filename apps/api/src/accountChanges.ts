@@ -3,6 +3,8 @@ import {
   ACCOUNT_CHANGE_MAX_LISTED_TRANSFERS,
   accountOpSchema,
   compactIban,
+  isLiabilityType,
+  isObservationOpKind,
   ownTransferKind,
   type AccountChangeSet,
   type AccountChangeSetList,
@@ -14,6 +16,7 @@ import {
   type AccountTracking,
   type AccountType,
   type AccountView,
+  type ObservationChange,
   type PublicAccountOp,
   type TransferEffect,
 } from '@finance-app/shared';
@@ -31,11 +34,20 @@ import {
   type ChangeSetRow,
 } from './changeSets.js';
 import { notVoid } from './sql/transactions.js';
+import {
+  draftObservationOp,
+  draftObservationUndo,
+  hasObservations,
+  writeObservation,
+  type ObservationDraft,
+  type ObservationOp,
+} from './balanceObservations.js';
 
 // Account change sets (GLOSSARY.md, "Account", "Transfer to a manual account";
 // docs/MCP.md): creating a manual account, changing an account's name, type,
-// share, currency, IBAN or update interval, archiving a manual account, and
-// undoing any of these. Planned first, applied with the plan's token, recorded
+// share, currency, IBAN or update interval, archiving a manual account, adding,
+// correcting or deleting a dated balance observation (balanceObservations.ts),
+// and undoing any of these. Planned first, applied with the plan's token, recorded
 // with the actor, undoable as a whole (changeSets.ts).
 //
 // The IBAN is write-only: it is stored (and kept in the set's payload for its
@@ -70,6 +82,8 @@ type Payload = {
   changes: AccountFieldChange[];
   transfers: StoredEffects;
   exceptions: AccountException[];
+  /** Observation sets only. */
+  observation?: ObservationChange;
 };
 
 type Draft = {
@@ -82,6 +96,8 @@ type Draft = {
   exceptions: AccountException[];
   undoOf?: string;
   deps: Record<string, unknown>;
+  /** Set for balance observation operations: the account itself is not changed. */
+  observation?: ObservationDraft;
 };
 
 /** Drafts mark an account to archive with `archivedAt: ARCHIVE_NOW`; the time is the apply's. */
@@ -253,6 +269,14 @@ function draftUpdate(op: Extract<AccountOp, { kind: 'update_account' }>): Draft 
     if (field) throw new DomainError('account_imported', 409, { field });
   }
   if (op.name !== undefined && nameTaken(op.name, op.accountId)) throw new DomainError('account_name_exists', 409, { name: op.name });
+  // Observations are stored signed in the account's currency: a type across the
+  // asset/liability line would turn debt into an asset (or back), a new currency
+  // would relabel every stored amount. Delete or correct the observations first.
+  if (hasObservations(op.accountId)) {
+    const flipsSign = op.type !== undefined && isLiabilityType(op.type) !== isLiabilityType(before.type);
+    const field = flipsSign ? 'type' : op.currency !== undefined && op.currency !== before.currency ? 'currency' : null;
+    if (field) throw new DomainError('account_has_observations', 409, { field });
+  }
   if (op.iban && ibanTaken(op.iban, op.accountId)) throw DomainError.conflict('iban_in_use');
   const after: AccountState = {
     ...before,
@@ -318,6 +342,10 @@ function draftUndo(op: Extract<AccountOp, { kind: 'undo' }>): Draft {
   const payload = JSON.parse(set.payload) as Payload;
   const id = payload.accountId;
   const current = requireAccount(id);
+  if (isObservationOpKind(set.kind)) {
+    const observation = draftObservationUndo(set.kind, payload.observation!);
+    return { ...observationDraft(op, current, observation), undoOf: set.id, deps: { set: [set.id, set.status], ...observation.deps, ...effectDeps(NO_EFFECTS) } };
+  }
   const after: AccountState = { ...current };
   const exceptions: AccountException[] = [];
 
@@ -385,7 +413,28 @@ function effectDeps(transfers: StoredEffects) {
   };
 }
 
+const NO_EFFECTS: StoredEffects = { recognized: [], released: [], reclassified: [] };
+
+/** An observation operation as an account draft: the account stays as it is. */
+function observationDraft(op: AccountOp, account: AccountState, observation: ObservationDraft): Draft {
+  return {
+    op,
+    accountId: observation.accountId,
+    before: account,
+    after: account,
+    changes: observation.changes,
+    transfers: NO_EFFECTS,
+    exceptions: observation.exceptions,
+    deps: { ...observation.deps, ...effectDeps(NO_EFFECTS) },
+    observation,
+  };
+}
+
 function draftFor(op: AccountOp): Draft {
+  if (isObservationOpKind(op.kind)) {
+    const observation = draftObservationOp(op as ObservationOp);
+    return observationDraft(op, requireAccount(observation.accountId), observation);
+  }
   switch (op.kind) {
     case 'create_account':
       return draftCreate(op);
@@ -397,6 +446,8 @@ function draftFor(op: AccountOp): Draft {
       return draftUnarchive(op);
     case 'undo':
       return draftUndo(op);
+    default:
+      throw new Error(`unhandled account op ${op.kind}`);
   }
 }
 
@@ -433,6 +484,7 @@ export function planAccountChange(input: unknown): AccountPlan {
     account: { ...view, id: draft.accountId },
     changes: draft.changes,
     transfers: publicTransfers(draft.transfers),
+    observation: draft.observation ? { before: draft.observation.before, after: draft.observation.after } : null,
     exceptions: draft.exceptions,
     planToken: tokenOf(draft),
   };
@@ -446,7 +498,12 @@ function execute(draft: Draft, token: string, actor: string): string {
   const now = new Date().toISOString();
   const after = withArchiveTime(draft.after, now);
   let accountId = draft.accountId;
-  if (accountId === null) {
+  let observation: ObservationChange | undefined;
+  if (draft.observation) {
+    const o = draft.observation;
+    const stored = draft.changes.length > 0 ? writeObservation(o, actor, now) : o.after;
+    observation = { before: o.before, after: stored };
+  } else if (accountId === null) {
     accountId = crypto.randomUUID();
     // `type` is the legacy kind column (imports write 'bank').
     db.prepare(
@@ -462,12 +519,13 @@ function execute(draft: Draft, token: string, actor: string): string {
   }
   const payload: Payload = {
     op: draft.op,
-    accountId,
+    accountId: accountId!,
     before: draft.before,
     after,
     changes: draft.changes,
     transfers: draft.transfers,
     exceptions: draft.exceptions,
+    ...(observation ? { observation } : {}),
   };
   insertChangeSet({
     id: setId,
@@ -479,7 +537,7 @@ function execute(draft: Draft, token: string, actor: string): string {
     planToken: token,
     payload,
     undoOf: draft.undoOf ?? null,
-    accountId,
+    accountId: accountId!,
   });
   return setId;
 }
@@ -540,6 +598,7 @@ export function getAccountChangeSet(id: string): AccountChangeSet {
     op: publicOp(payload.op),
     changes: payload.changes,
     transfers: publicTransfers(payload.transfers),
+    observation: payload.observation ?? null,
     exceptions: payload.exceptions,
   };
 }

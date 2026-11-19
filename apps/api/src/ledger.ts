@@ -12,8 +12,11 @@
 // - A transaction's category is its most recent categorization decision.
 // - Dates are calendar days (YYYY-MM-DD); "today" is today in Helsinki.
 // - An account's balance is its latest snapshot on or before the day, plus
-//   balance adjustments dated on or before that snapshot. Only imported
-//   accounts have balances here; manual accounts get none (yet).
+//   balance adjustments dated on or before that snapshot. A snapshot is the
+//   bank's balance (`import`) or a balance observation (`manual`); the latest
+//   one wins, they are never added. Nothing is estimated between two of them.
+//   Cash views (summary, briefing, import preview) read imported accounts only;
+//   net worth (balanceHistory.ts) reads manual accounts too (`includeManual`).
 import { ownTransferKind, type OwnTransferKind } from '@finance-app/shared';
 import { db } from './db.js';
 import { latestCategoryDecisionJoin, manualAccountByIban } from './sql/transactions.js';
@@ -74,6 +77,8 @@ export type AccountBalance = {
   currency: string | null;
   /** Day of the snapshot the balance is based on. */
   date: string | null;
+  /** `import`: the bank's balance; `manual`: a balance observation. */
+  source: 'import' | 'manual' | null;
   adjustmentSum: number;
 };
 
@@ -225,19 +230,23 @@ export function ledgerTotals(
     : totals.sort((a, b) => a.expense - b.expense || String(a.key).localeCompare(String(b.key)));
 }
 
-/** Every imported account's balance at the end of `asOf` (default: no limit, i.e. latest), in account creation order. */
-export function accountBalances(asOf?: string): AccountBalance[] {
+/**
+ * Every imported account's balance at the end of `asOf` (default: no limit, i.e.
+ * latest), in account creation order. `includeManual` adds manual accounts
+ * (archived ones too), whose balance is their latest observation.
+ */
+export function accountBalances(asOf?: string, options: { includeManual?: boolean } = {}): AccountBalance[] {
   assertDay('asOf', asOf);
   const rows = db
     .prepare(
-      `SELECT a.id, a.name, bs.balance, bs.currency, bs.date
+      `SELECT a.id, a.name, bs.balance, bs.currency, bs.date, bs.source
        FROM accounts a
        LEFT JOIN balance_snapshots bs ON bs.id = (
          SELECT s.id FROM balance_snapshots s
          WHERE s.account_id = a.id AND (? IS NULL OR substr(s.date, 1, 10) <= ?)
          ORDER BY s.date DESC, s.created_at DESC
          LIMIT 1)
-       WHERE a.tracking = 'imported'
+       ${options.includeManual ? '' : "WHERE a.tracking = 'imported'"}
        ORDER BY a.created_at ASC, a.id ASC`
     )
     .all(asOf ?? null, asOf ?? null) as Array<{
@@ -246,6 +255,7 @@ export function accountBalances(asOf?: string): AccountBalance[] {
       balance: number | null;
       currency: string | null;
       date: string | null;
+      source: 'import' | 'manual' | null;
     }>;
 
   const adjustmentSum = db.prepare(
@@ -255,7 +265,7 @@ export function accountBalances(asOf?: string): AccountBalance[] {
 
   return rows.map((r) => {
     if (r.date == null) {
-      return { accountId: r.id, accountName: r.name, balance: null, currency: null, date: null, adjustmentSum: 0 };
+      return { accountId: r.id, accountName: r.name, balance: null, currency: null, date: null, source: null, adjustmentSum: 0 };
     }
     const day = r.date.slice(0, 10);
     const adj = Number((adjustmentSum.get(r.id, day) as { s: number }).s);
@@ -265,6 +275,7 @@ export function accountBalances(asOf?: string): AccountBalance[] {
       balance: cents(Number(r.balance) + adj),
       currency: r.currency,
       date: day,
+      source: r.source,
       adjustmentSum: cents(adj),
     };
   });

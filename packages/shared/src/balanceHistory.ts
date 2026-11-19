@@ -1,9 +1,12 @@
 import { z } from 'zod';
 import { isoDate } from './schemas.js';
-import type { AccountType } from './accounts.js';
+import type { AccountTracking, AccountType } from './accounts.js';
 
-// Contract for GET /balances/history. The field shape is shared by the API
-// (validated after query-string coercion) and the MCP tool input schema.
+// Contracts for GET /balances/history and GET /net-worth. The field shape is
+// shared by the API (validated after query-string coercion) and the MCP tool
+// input schema. Net worth (GLOSSARY.md, "Net worth") weighs each account by its
+// ownership share; cash flow never does. Totals are in EUR: accounts in another
+// currency are never converted, they get totals of their own (`otherCurrencies`).
 
 export const BALANCE_HISTORY_INTERVALS = ['day', 'week', 'month'] as const;
 export type BalanceHistoryInterval = (typeof BALANCE_HISTORY_INTERVALS)[number];
@@ -27,26 +30,41 @@ export type BalanceHistoryAccount = {
   id: string;
   name: string;
   subtype: AccountType;
-  /** First day with a balance (the first balance snapshot), or null if none. */
+  tracking: AccountTracking;
+  /** Never converted: an account in another currency counts in `otherCurrencies`, not in the EUR totals. */
+  currency: string;
+  /** 0–100; net worth counts this share of the balance. */
+  ownershipShare: number;
+  /** First day with a balance (the first balance snapshot or observation), or null if none. */
   knownFrom: string | null;
-  /** Last day the imported data covers; later days are unknown. */
+  /**
+   * Imported: the last day its imported data covers; later days are unknown.
+   * Manual: null, its latest observation holds until the next one (check `stale`).
+   */
   knownUntil: string | null;
 };
 
-export type BalanceHistoryPoint = {
-  /** End of the period, YYYY-MM-DD. */
-  date: string;
-  /** Every account; balance null = unknown on that day (never zero). */
-  accounts: Array<{ accountId: string; balance: number | null; balanceDate: string | null }>;
-  /** Known balances of bank accounts (and credit cards in credit); null when no account is known. */
+/** Net worth over a group of accounts of one currency. */
+export type NetWorthTotals = {
+  currency: string;
+  /** Known asset balances times ownership share; null when no account is known. */
   assets: number | null;
-  /** Known credit card debt, positive; null when no account is known. */
+  /** Known debt (liability types with a negative balance) times ownership share, positive; null when no account is known. */
   liabilities: number | null;
   /** assets − liabilities over the included accounts only; null when no account is known. */
   netWorth: number | null;
-  /** True when there are accounts and every one's balance is known on this day. */
+  /** True when there are accounts and every one's balance is known. */
   isComplete: boolean;
   coverage: { includedAccountIds: string[]; missingAccountIds: string[] };
+};
+
+export type BalanceHistoryPoint = Omit<NetWorthTotals, 'currency'> & {
+  /** End of the period, YYYY-MM-DD. */
+  date: string;
+  /** Every account; balance null = unknown on that day (never zero). `ownedBalance` = balance × ownership share. */
+  accounts: Array<{ accountId: string; balance: number | null; ownedBalance: number | null; balanceDate: string | null }>;
+  /** Accounts in other currencies, one group per currency, never converted or added to the EUR totals. */
+  otherCurrencies: NetWorthTotals[];
 };
 
 export type BalanceHistory = {
@@ -54,7 +72,36 @@ export type BalanceHistory = {
   to: string;
   interval: BalanceHistoryInterval;
   accounts: BalanceHistoryAccount[];
-  /** Asset classes the app does not track at all, so net worth never includes them. */
-  untrackedAssetClasses: string[];
   points: BalanceHistoryPoint[];
+};
+
+/** One account in the current net worth (GET /net-worth). */
+export type NetWorthAccount = {
+  accountId: string;
+  name: string;
+  type: AccountType;
+  tracking: AccountTracking;
+  currency: string;
+  ownershipShare: number;
+  /** Latest known balance, signed; null = unknown (never zero). */
+  balance: number | null;
+  ownedBalance: number | null;
+  balanceDate: string | null;
+  /** `import`: the bank's balance; `manual`: a balance observation. */
+  source: 'import' | 'manual' | null;
+  ageDays: number | null;
+  /** It has an update interval and its balance is older than that; still counted. */
+  stale: boolean;
+  /** Why the balance is unknown: no balance yet, or (imported) bookings came after the balance it rests on. */
+  unknownReason: 'no_balance' | 'bookings_after_balance' | null;
+};
+
+/** Every account's latest balance and the net worth over them (each account at its own latest date). */
+export type NetWorth = NetWorthTotals & {
+  /** Today in Helsinki: ages are counted to it. */
+  asOf: string;
+  accounts: NetWorthAccount[];
+  /** Included accounts whose balance is stale. */
+  staleAccountIds: string[];
+  otherCurrencies: NetWorthTotals[];
 };
