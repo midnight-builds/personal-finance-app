@@ -40,10 +40,12 @@ The agent manages accounts as the user does in the web UI's settings
 plan/apply/undo change sets as categories (`POST /accounts/plan|apply`): create a
 manual account (`create_account`: name, type, ownership share, currency, IBAN,
 update interval), change an account (`update_account`), archive a manual account
-(`archive_account`) or undo a set (`undo`). Each set records the agent as actor
+(`archive_account`; it keeps its name and IBAN), bring one back
+(`unarchive_account`, also after undoing its creation) or undo a set (`undo`). Each set records the agent as actor
 and lists the transactions whose reporting it changes (`transfers.recognized`,
-`transfers.released`); a plan goes stale (`409 plan_stale`) when the account or
-those transactions change before it is applied. An imported account's IBAN and
+`transfers.released`, and `transfers.reclassified` when a type change moves them
+to another kind); a plan goes stale (`409 plan_stale`) when any account change
+set is applied, or those transactions change, before it is applied. An imported account's IBAN and
 currency come from its exports and cannot be changed, and it cannot be archived.
 
 **The IBAN is write-only for the agent.** The user decided that the agent is as
@@ -55,6 +57,8 @@ label and balance (whitelisted in the tool, and redacted again); plans, change
 sets and errors never echo the IBAN, only `recognizesTransfers` (`true` set,
 `false` removed, `replaced: true` when one IBAN replaced another); plan tokens
 are keyed hashes (HMAC), so a token cannot be used to test guesses of the IBAN.
+A plan can still confirm a *guessed* IBAN (no change, or `iban_in_use`): one
+request per guess, by an agent that may set IBANs anyway, which we accept.
 `search_transactions` names the manual account a transfer went to
 (`ownTransfer`: account id, name, type and `kind`), never its number. To keep an
 agent read-only here, hide `apply_account_change` with `MCP_DISABLED_TOOLS`.

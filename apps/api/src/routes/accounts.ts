@@ -79,6 +79,10 @@ export const accountRoutes: FastifyPluginAsync = async (app) => {
     applyAccountChangeNow({ kind: 'archive_account', accountId: request.params.id }, actorOf(request))
   );
 
+  app.post<{ Params: { id: string } }>('/accounts/:id/unarchive', async (request) =>
+    applyAccountChangeNow({ kind: 'unarchive_account', accountId: request.params.id }, actorOf(request))
+  );
+
   app.post('/accounts/plan', async (request) => {
     const { op } = accountPlanRequestSchema.parse(request.body ?? {});
     return planAccountChange(op);

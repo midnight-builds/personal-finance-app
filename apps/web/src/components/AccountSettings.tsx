@@ -5,6 +5,7 @@ import {
   archiveAccount,
   createManualAccount,
   patchAccount,
+  unarchiveAccount,
   type Account,
 } from '../api/client';
 import { ACCOUNT_TYPE_LABELS } from '../accountTypes';
@@ -60,7 +61,7 @@ export default function AccountSettings({
   const [draft, setDraft] = useState({ name: '', type: 'savings' as AccountType, share: '100', currency: 'EUR', iban: '', days: '' });
   const [saving, setSaving] = useState(false);
   const active = accounts.filter((a) => !a.archived_at);
-  const archivedCount = accounts.length - active.length;
+  const archived = accounts.filter((a) => a.archived_at);
 
   const save = async (id: string, patch: Parameters<typeof patchAccount>[1], done?: string) => {
     try {
@@ -237,7 +238,35 @@ export default function AccountSettings({
           </div>
         ))}
       </div>
-      {archivedCount > 0 && <p className="muted">Arkistoituja tilejä: {archivedCount}.</p>}
+      {archived.length > 0 && (
+        <div className="table mini">
+          <div className="row mini header">
+            <span>Arkistoidut tilit</span>
+          </div>
+          {archived.map((a) => (
+            <div className="row mini" key={a.id}>
+              <span>{a.name}</span>
+              <span>{ACCOUNT_TYPE_LABELS[a.account_subtype] ?? a.account_subtype}</span>
+              <span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await unarchiveAccount(a.id);
+                      showToast(setToast, 'Tili palautettu.');
+                    } catch (err) {
+                      showToast(setToast, message(err));
+                    }
+                    await reload();
+                  }}
+                >
+                  Palauta
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="card-head inner">
         <div>

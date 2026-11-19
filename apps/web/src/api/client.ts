@@ -402,6 +402,11 @@ export async function createManualAccount(account: NewManualAccount): Promise<{ 
   return (await accountRequest(`${API}/accounts`, { method: 'POST', body: JSON.stringify(account) })) as { id: string };
 }
 
+/** Brings an archived manual account back (with its name and IBAN). */
+export async function unarchiveAccount(id: string): Promise<void> {
+  await accountRequest(`${API}/accounts/${id}/unarchive`, { method: 'POST', body: '{}' });
+}
+
 /** Archives a manual account: hidden, and payments to its IBAN count as ordinary payments again. */
 export async function archiveAccount(id: string): Promise<void> {
   await accountRequest(`${API}/accounts/${id}/archive`, { method: 'POST', body: '{}' });

@@ -18,7 +18,8 @@ const ERROR_CODES =
   'Errors come back as "Finance API error <status>: {"error": <code>, "details": ...}": 400 invalid_request ' +
   '(e.g. op.iban: iban_invalid); 404 account_not_found, change_set_not_found; 409 plan_stale, account_name_exists, ' +
   'iban_in_use (another account has that IBAN), account_imported (an imported account\'s IBAN and currency come from ' +
-  'its exports; it cannot be archived), account_archived, nothing_to_change, already_undone, cannot_undo_undo.';
+  'its exports; it cannot be archived), account_archived, account_not_archived, nothing_to_change, already_undone, ' +
+  'cannot_undo_undo.';
 
 export const accountTools: ToolDefinition[] = [
   defineTool({
@@ -30,14 +31,15 @@ export const accountTools: ToolDefinition[] = [
       '(default 100), currency (default EUR), iban, updateIntervalDays); ' +
       'update_account (accountId from list_accounts and any of name, type, ownershipShare, updateIntervalDays (null ' +
       'removes), and for manual accounts currency and iban (null removes)); ' +
-      'archive_account (a manual account: hidden, its transfers count as ordinary payments again; nothing deleted); ' +
+      'archive_account (a manual account: hidden, its transfers count as ordinary payments again; nothing deleted; it ' +
+      'keeps its name and IBAN); unarchive_account (brings an archived account back, also one whose creation was undone); ' +
       'undo (changeSetId from list_account_changes; fields changed since are left alone and reported). ' +
       `type is one of ${ACCOUNT_TYPES.join(', ')}. ` +
       'A manual account\'s IBAN makes payments between it and imported accounts transfers to that account: ' +
       'savings/investment = saving, loan/other_liability = loan repayment (both still reduce cash in cash flow and ' +
       'net, but are never spending in insights); other types are reported like any payment. The IBAN is write-only: ' +
       'responses only say recognizesTransfers. Returns { kind, op, account, changes [{field, from, to}], transfers ' +
-      `{ recognized, recognizedTotal, released, releasedTotal } (transactions whose reporting changes; at most ` +
+      `{ recognized, released, reclassified (still transfers, other kind) with their totals } (transactions whose reporting changes; at most ` +
       `${ACCOUNT_CHANGE_MAX_LISTED_TRANSFERS} listed each), exceptions, planToken }. Review it, then call ` +
       'apply_account_change with the same op and the planToken. ' +
       ERROR_CODES,

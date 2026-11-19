@@ -29,7 +29,8 @@ imported into it (an import naming it is refused, `409 account_manual`), and it
 has no balance yet (dated balance observations come later). Every balance view
 and aggregate covers imported accounts only. Set when the account is created,
 not changed afterwards. Only a manual account can be archived: hidden, it stops
-recognising transfers, and its history is kept.
+recognising transfers, and keeps its name, IBAN and history; unarchiving brings it
+back (undoing its creation archives it).
 
 **Transfer to a manual account** — a payment between an imported account and a
 manual account, recognised by the manual account's IBAN as the payment's
@@ -46,8 +47,8 @@ them out (`consumptionOnly`) and the summary and monthly overview show them
 apart (`monthlySaving`, `monthlyLoanRepayment`; `saving`, `loanRepayment`).
 Other types (a manual checking account, card, property, other asset) are
 *other*: reported like any payment, since what the money bought there is not
-seen. A linked transfer between imported accounts stays a transfer, and import
-never pairs a payment to a manual account's IBAN with another account's row.
+seen. A linked transfer stays a transfer: import pairs rows as it always has, and
+a pair link wins over a manual account's IBAN.
 See `docs/adr/0002-transfers-to-manual-accounts.md`.
 _Avoid_: allocation, alias transfer
 
