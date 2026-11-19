@@ -174,8 +174,8 @@ export default function AccountSettings({
                   }}
                 />
               </span>
-              <span>
-                {a.balance != null ? formatAmount(a.balance, a.currency ?? 'EUR') : '—'}{' '}
+              <span className="account-balance">
+                <span className="amount">{a.balance != null ? formatAmount(a.balance, a.currency ?? 'EUR') : '—'}</span>
                 <StaleBadge stale={a.stale} ageDays={a.balance_age_days} />
                 <button type="button" className="ghost mini" onClick={() => setOpenBalances(openBalances === a.id ? null : a.id)}>
                   {openBalances === a.id ? 'Sulje' : 'Saldot'}
