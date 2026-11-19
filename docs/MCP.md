@@ -11,11 +11,14 @@ over the REST API and never opens the database.
 | `search_transactions` | Filtered, paginated transactions (`GET /transactions/search`) |
 | `get_summary`, `get_monthly_overview`, `get_insights`, `get_latest_briefing`, `get_forecast` | Read reports |
 | `get_balance_history` | Balances and net worth per day/week/month with coverage (`GET /balances/history`) |
-| `list_categories`, `list_accounts`, `list_recurring` | Read reference data (`list_categories` includes each category's `role`) |
+| `list_categories`, `list_accounts`, `list_recurring` | Read reference data (`list_categories` includes each category's `role`; `list_accounts` the account model without any IBAN) |
 | `list_category_rules` | Categorization rules in match order (`GET /categorization/rules`) |
 | `plan_categorization` | Works out a categorization change without writing (`POST /categorization/plan`) |
 | `apply_categorization` | Applies a planned change with its plan token (`POST /categorization/apply`) |
 | `list_category_changes`, `get_category_change` | Change log of categorization: who changed what, and undo state (`GET /categorization/change-sets[/:id]`) |
+| `plan_account_change` | Works out an account change without writing: create a manual account, update, archive, undo (`POST /accounts/plan`) |
+| `apply_account_change` | Applies a planned account change with its plan token (`POST /accounts/apply`) |
+| `list_account_changes`, `get_account_change` | Change log of accounts with actor and undo state (`GET /accounts/change-sets[/:id]`) |
 | `list_recurring_questions` | Open "is this recurring?" questions with evidence (`GET /patterns/questions`) |
 | `answer_recurring_question` | Records a pattern decision: recurring, subscription or not_recurring (`POST /patterns/:id/decision`) |
 | `create_recurring_pattern` | Creates a monthly or weekly pattern detection never proposed, from cited charges, confirmed at once (`POST /patterns`) |
@@ -24,10 +27,41 @@ over the REST API and never opens the database.
 | `list_feature_proposals` | Earlier proposals and bug reports with their status, notes, resolution and history; `changedSince` (largest `changedAt` seen) returns only what changed, so polling is cheap |
 | `propose_feature` | Adds a feature proposal or bug report (`kind`) to the local review queue |
 
-Four tools write: `propose_feature` adds to the review queue,
+Five tools write: `propose_feature` adds to the review queue,
 `apply_categorization` changes categorization, `answer_recurring_question`
-appends a pattern decision, and `create_recurring_pattern` adds a pattern with its
-decision. Every other tool is read-only, and no tool deletes anything.
+appends a pattern decision, `create_recurring_pattern` adds a pattern with its
+decision, and `apply_account_change` creates or changes an account. Every other
+tool is read-only, and no tool deletes anything.
+
+### Accounts
+
+The agent manages accounts as the user does in the web UI's settings
+(GLOSSARY.md, "Account", "Transfer to a manual account"), with the same
+plan/apply/undo change sets as categories (`POST /accounts/plan|apply`): create a
+manual account (`create_account`: name, type, ownership share, currency, IBAN,
+update interval), change an account (`update_account`), archive a manual account
+(`archive_account`; it keeps its name and IBAN), bring one back
+(`unarchive_account`, also after undoing its creation) or undo a set (`undo`). Each set records the agent as actor
+and lists the transactions whose reporting it changes (`transfers.recognized`,
+`transfers.released`, and `transfers.reclassified` when a type change moves them
+to another kind); a plan goes stale (`409 plan_stale`) when any account change
+set is applied, or those transactions change, before it is applied. An imported account's IBAN and
+currency come from its exports and cannot be changed, and it cannot be archived.
+
+**The IBAN is write-only for the agent.** The user decided that the agent is as
+trusted as the user in the web UI, so it may *set* a manual account's IBAN (when
+the user tells it which account a loan or a joint savings account is). It never
+*reads* one: `list_accounts` returns only id, name, type, tracking, ownership
+share, currency, update interval, `recognizesTransfers`, `archivedAt`, owner
+label and balance (whitelisted in the tool, and redacted again); plans, change
+sets and errors never echo the IBAN, only `recognizesTransfers` (`true` set,
+`false` removed, `replaced: true` when one IBAN replaced another); plan tokens
+are keyed hashes (HMAC), so a token cannot be used to test guesses of the IBAN.
+A plan can still confirm a *guessed* IBAN (no change, or `iban_in_use`): one
+request per guess, by an agent that may set IBANs anyway, which we accept.
+`search_transactions` names the manual account a transfer went to
+(`ownTransfer`: account id, name, type and `kind`), never its number. To keep an
+agent read-only here, hide `apply_account_change` with `MCP_DISABLED_TOOLS`.
 
 ### Recurring patterns
 
@@ -108,7 +142,7 @@ no separate undo tool, so an undo is also planned and reviewable first.
 ### Responses
 
 Tools backed by imported bank data (all except `list_categories`, the category
-management tools, `answer_recurring_question`, `create_recurring_pattern`, `list_pattern_decisions`,
+and account management tools, `answer_recurring_question`, `create_recurring_pattern`, `list_pattern_decisions`,
 `get_glossary` and the proposal tools) return a second content block `{ "meta": { generatedAt, lastImportAt, dataAsOf } }`
 from `GET /data-status`; `get_forecast` adds `forecastStartMonth`. The first block
 is the API response unchanged. If the status lookup fails, the timestamps are `null`

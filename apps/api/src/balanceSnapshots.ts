@@ -41,7 +41,10 @@ export function createManualBalanceSnapshot(input: { accountId: unknown; date: u
     throw new DomainError('date_invalid', 400);
   }
   if (!Number.isFinite(balance)) throw new DomainError('balance_invalid', 400);
-  if (!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(accountId)) throw DomainError.notFound();
+  const account = db.prepare('SELECT tracking FROM accounts WHERE id = ?').get(accountId) as { tracking: string } | undefined;
+  if (!account) throw DomainError.notFound();
+  // A manual account's balance is not a snapshot: it gets dated balance observations (not yet built).
+  if (account.tracking === 'manual') throw DomainError.conflict('account_manual');
   if (date > today()) throw new DomainError('date_in_future', 400);
   if (db.prepare('SELECT 1 FROM balance_snapshots WHERE account_id = ? AND substr(date, 1, 10) = ?').get(accountId, date)) {
     throw DomainError.conflict('snapshot_exists');

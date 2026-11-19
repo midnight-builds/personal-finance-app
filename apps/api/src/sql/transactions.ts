@@ -33,3 +33,19 @@ export function transferLinkJoin(tx = 'nt', as = 'tl') {
 export function notVoid(tx = 'nt') {
   return `NOT EXISTS (SELECT 1 FROM pending_transactions pv WHERE pv.transaction_id = ${tx}.id AND pv.status = 'void')`;
 }
+
+/**
+ * The id of the manual account (not archived) whose IBAN is the transaction's
+ * counterparty IBAN, or NULL: the other end of a transfer to a manual account.
+ * IBANs are compared without spaces or case. A transaction on the account
+ * itself never matches.
+ */
+export function manualAccountByIban(tx = 'nt') {
+  return `(SELECT ma.id FROM accounts ma
+    WHERE ma.tracking = 'manual' AND ma.archived_at IS NULL AND ma.iban IS NOT NULL
+      AND ${tx}.counterparty_iban IS NOT NULL
+      AND REPLACE(UPPER(ma.iban), ' ', '') = REPLACE(UPPER(${tx}.counterparty_iban), ' ', '')
+      AND ma.id != ${tx}.account_id
+    ORDER BY ma.created_at ASC, ma.id ASC
+    LIMIT 1)`;
+}

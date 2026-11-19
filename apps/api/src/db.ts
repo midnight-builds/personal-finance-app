@@ -308,6 +308,21 @@ export function initDb() {
   safeExec(`ALTER TABLE accounts ADD COLUMN owner_label TEXT`);
   safeExec(`ALTER TABLE accounts ADD COLUMN credit_limit REAL`);
   safeExec(`ALTER TABLE accounts ADD COLUMN savings_goal REAL`);
+  // The account model (GLOSSARY.md, "Account"): `account_subtype` is the type
+  // (ACCOUNT_TYPES in packages/shared/src/accounts.ts). `tracking`: `imported`
+  // (bank exports; every account before this) or `manual` (nothing imported; its
+  // IBAN, if any, makes payments to it transfers to a manual account). The share
+  // is for net worth only; currency is stored, never converted.
+  safeExec(
+    `ALTER TABLE accounts ADD COLUMN tracking TEXT NOT NULL DEFAULT 'imported' CHECK (tracking IN ('imported', 'manual'))`
+  );
+  safeExec(
+    `ALTER TABLE accounts ADD COLUMN ownership_share REAL NOT NULL DEFAULT 100 CHECK (ownership_share >= 0 AND ownership_share <= 100)`
+  );
+  safeExec(`ALTER TABLE accounts ADD COLUMN currency TEXT NOT NULL DEFAULT 'EUR'`);
+  safeExec(`ALTER TABLE accounts ADD COLUMN update_interval_days INTEGER`);
+  // Only manual accounts are archived (accountChanges.ts): hidden, and no longer recognising transfers.
+  safeExec(`ALTER TABLE accounts ADD COLUMN archived_at TEXT`);
   // `import` (the bank's Saldo) or `manual` (the user's first balance for an account without one).
   safeExec(`ALTER TABLE balance_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'import'`);
 
@@ -406,6 +421,10 @@ export function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_change_sets_undo_of ON change_sets(undo_of_id);
   `);
+  // What a change set changes: `categorization` (categorization.ts) or `accounts`
+  // (accountChanges.ts). Each domain lists, reads and undoes only its own sets.
+  safeExec(`ALTER TABLE change_sets ADD COLUMN domain TEXT NOT NULL DEFAULT 'categorization'`);
+  safeExec(`ALTER TABLE change_sets ADD COLUMN account_id TEXT`);
   safeExec(`ALTER TABLE categorization_decisions ADD COLUMN change_set_id TEXT`);
   safeExec(`ALTER TABLE category_rules ADD COLUMN change_set_id TEXT`);
   safeExec(`ALTER TABLE category_rules ADD COLUMN disabled_change_set_id TEXT`);

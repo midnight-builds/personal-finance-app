@@ -29,9 +29,18 @@ when it was first and last listed, the pending raw row) is kept beside it in
 
 ## TransferLink
 Links two transactions that are the two sides of an account-to-account transfer.
+A transfer to a manual account has one side only and is not a link: the Ledger
+derives it from the manual account's IBAN (GLOSSARY.md, "Transfer to a manual
+account"; `docs/adr/0002-transfers-to-manual-accounts.md`).
 
 ## Account
-Bank/checking/savings/credit. (No multi-user ownership model for now.)
+Type (`account_subtype`: checking, savings, credit_card, loan, investment,
+property, other_asset, other_liability), `tracking` (`imported` | `manual`),
+`ownership_share` (0–100, net worth only), `currency`, optional
+`update_interval_days`, `iban` (an imported account's own; a manual account's
+recognises transfers to it, never shown to agents), `archived_at` (manual
+accounts only). Changed through account change sets (`change_sets.domain =
+'accounts'`). No multi-user ownership model.
 
 ## Category / CategorizationDecision
 Decision history for category assignments.

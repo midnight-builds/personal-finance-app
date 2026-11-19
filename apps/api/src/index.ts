@@ -14,7 +14,7 @@ import { getMonthlyOverview } from './monthly.js';
 import { listRaw } from './raw.js';
 import { getSettings, updateSettings } from './settings.js';
 import { listLog } from './logger.js';
-import { listAccounts, updateAccount } from './accounts.js';
+
 import { listPendingConfirmations, confirmPatternConfirmation, rejectPatternConfirmation } from './patternConfirmations.js';
 import { redetectPatternsIfRulesChanged } from './patterns.js';
 import { relinkTransfersIfRulesChanged } from './importer.js';
@@ -74,7 +74,6 @@ server.get('/insights', async () => getInsights());
 server.get('/monthly', async () => getMonthlyOverview());
 server.get('/raw', async () => listRaw());
 server.get('/settings', async () => getSettings());
-server.get('/accounts', async () => listAccounts());
 server.post('/settings', async (request, reply) => {
   const body = request.body as any;
   const { payday, paydayFlexDays } = body ?? {};
@@ -148,27 +147,6 @@ server.post<{
   }
   const result = await aiCategorize({ counterparty, description, amount, currency });
   return reply.send(result);
-});
-
-server.patch('/accounts/:id', async (request, reply) => {
-  const { id } = request.params as { id: string };
-  const body = request.body as Record<string, unknown>;
-
-  const subtype = (body as any).account_subtype;
-  if (subtype !== undefined && !['checking', 'savings', 'credit_card'].includes(subtype as string)) {
-    return reply.code(400).send({ error: 'invalid_account_subtype' });
-  }
-
-  const allowed = ['account_subtype', 'owner_label', 'credit_limit', 'savings_goal', 'name'];
-  const patch: Record<string, unknown> = {};
-  for (const key of allowed) {
-    if (key in body) patch[key] = body[key];
-  }
-  const result = updateAccount(id, patch as any);
-  if (result !== undefined && result.changes === 0) {
-    return reply.code(404).send({ error: 'not_found' });
-  }
-  return { ok: true };
 });
 
 // Household summary

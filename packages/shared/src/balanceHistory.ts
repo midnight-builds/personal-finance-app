@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isoDate } from './schemas.js';
+import type { AccountType } from './accounts.js';
 
 // Contract for GET /balances/history. The field shape is shared by the API
 // (validated after query-string coercion) and the MCP tool input schema.
@@ -25,7 +26,7 @@ export type BalanceHistoryParams = z.output<typeof balanceHistorySchema>;
 export type BalanceHistoryAccount = {
   id: string;
   name: string;
-  subtype: 'checking' | 'savings' | 'credit_card';
+  subtype: AccountType;
   /** First day with a balance (the first balance snapshot), or null if none. */
   knownFrom: string | null;
   /** Last day the imported data covers; later days are unknown. */

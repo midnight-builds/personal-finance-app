@@ -1,3 +1,4 @@
+import { isLiabilityType } from "@finance-app/shared";
 import { db } from "./db.js";
 import { accountBalances, daysBefore, ledgerEntries, today, type LedgerScope } from "./ledger.js";
 import { annualSubscriptions, establishedSubscriptions } from "./patternDecisions.js";
@@ -30,7 +31,9 @@ export type HouseholdSummary = {
  * `balance: null` (unknown, not zero); `totalBalance` and `runwayMonths` then
  * cover known balances only and `isComplete` is false.
  *
- * "Monthly" net is the last 30 days up to and including `asOf`.
+ * "Monthly" net is the last 30 days up to and including `asOf`. Of it,
+ * `monthlySaving` and `monthlyLoanRepayment` went to (negative) or came from
+ * manual savings and loan accounts: cash that left, but not consumption.
  */
 export function getSummary(asOf: string = today()) {
   const balances = accountBalances(asOf);
@@ -38,7 +41,10 @@ export function getSummary(asOf: string = today()) {
   const totalBalance = cents(balances.reduce((sum, b) => sum + (b.balance ?? 0), 0));
 
   const last30Days = { from: daysBefore(asOf, 30), to: asOf };
-  const monthlyNet = net(last30Days);
+  const last30 = ledgerEntries(last30Days);
+  const monthlyNet = cents(last30.reduce((sum, e) => sum + e.amount, 0));
+  const ownTransfers = (kind: string) =>
+    cents(last30.filter((e) => e.ownTransfer?.kind === kind).reduce((sum, e) => sum + e.amount, 0));
 
   let runwayMonths: number | null = null;
   if (monthlyNet < 0) {
@@ -51,6 +57,8 @@ export function getSummary(asOf: string = today()) {
     missingBalanceAccountCount,
     monthlyNet,
     monthlyNetWithTransfers: net({ ...last30Days, includeTransfers: true }),
+    monthlySaving: ownTransfers('saving'),
+    monthlyLoanRepayment: ownTransfers('loan_repayment'),
     runwayMonths,
     accounts: balances.map((b) => ({
       id: b.accountId,
@@ -76,6 +84,7 @@ export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
     .prepare(
       `SELECT id, name, account_subtype, owner_label
        FROM accounts
+       WHERE tracking = 'imported'
        ORDER BY created_at ASC, id ASC`
     )
     .all() as Array<{ id: string; name: string; account_subtype: string; owner_label: string | null }>;
@@ -160,12 +169,12 @@ export function getHouseholdSummary(asOf: string = today()): HouseholdSummary {
     .reduce((sum, a) => sum + a.balance, 0));
 
   const totalSavings = cents(accounts
-    .filter((a) => a.subtype === 'savings')
+    .filter((a) => a.subtype === 'savings' || a.subtype === 'investment')
     .reduce((sum, a) => sum + a.balance, 0));
 
-  // Credit debt: sum of credit_card raw balances as positive
+  // Credit debt: sum of liability (credit card, loan, other) raw balances as positive
   const creditDebt = cents(accountRows
-    .filter((a) => a.account_subtype === 'credit_card')
+    .filter((a) => isLiabilityType(a.account_subtype))
     .reduce((sum, a) => {
       const rawBalance = rawBalanceOf(a.id);
       return sum + Math.abs(rawBalance < 0 ? rawBalance : 0);

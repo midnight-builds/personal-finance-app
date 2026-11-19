@@ -9,7 +9,8 @@ export type Insight = {
   recommendation?: string;
 };
 
-// Every detector reads countable transactions from the Ledger. Windows are
+// Every detector reads countable transactions from the Ledger, without saving
+// and loan repayments to manual accounts: those are not consumption. Windows are
 // calendar days up to and including `asOf`: "last 30 days" starts 30 days
 // before `asOf`.
 
@@ -38,7 +39,7 @@ function groupBy<T, K>(rows: T[], key: (e: T) => K): Map<K, T[]> {
 
 /** Named purchases (amount < 0, counterparty known) from `from` to `to`. */
 function namedExpenses(from: string, to: string): Array<LedgerEntry & { counterparty: string }> {
-  return ledgerEntries({ from, to }).filter(
+  return ledgerEntries({ from, to, consumptionOnly: true }).filter(
     (e): e is LedgerEntry & { counterparty: string } => e.amount < 0 && e.counterparty !== null
   );
 }
@@ -64,7 +65,7 @@ function repeatedSmallPurchases(asOf: string): Insight[] {
 
 function risingCategory(asOf: string): Insight[] {
   const categorized = (from: string, to: string) =>
-    ledgerEntries({ from, to }).filter(
+    ledgerEntries({ from, to, consumptionOnly: true }).filter(
       (e): e is LedgerEntry & { categoryName: string } => e.categoryName !== null
     );
   const last3 = categorized(daysBefore(asOf, 90), asOf);
@@ -222,7 +223,7 @@ function largeSingleExpense(asOf: string): Insight[] {
 }
 
 function uncategorizedSpending(asOf: string): Insight[] {
-  const rows = ledgerEntries({ from: daysBefore(asOf, 30), to: asOf }).filter(
+  const rows = ledgerEntries({ from: daysBefore(asOf, 30), to: asOf, consumptionOnly: true }).filter(
     (e) => e.amount < 0 && e.categoryId === null
   );
   const cnt = rows.length;

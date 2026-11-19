@@ -549,6 +549,10 @@ export function accountIdByIban(iban: string): string | null {
   return row?.id ?? null;
 }
 
+function isManualAccount(id: string): boolean {
+  return db.prepare("SELECT 1 FROM accounts WHERE id = ? AND tracking = 'manual'").get(id) !== undefined;
+}
+
 export function accountNameTaken(name: string): boolean {
   return db.prepare('SELECT 1 FROM accounts WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))').get(name) !== undefined;
 }
@@ -562,10 +566,11 @@ export function accountNameTaken(name: string): boolean {
 function planAccount(options: ImportOptions): AccountPlan {
   const { target } = options;
   if (target && 'accountId' in target) {
-    const row = db.prepare('SELECT id, iban FROM accounts WHERE id = ?').get(target.accountId) as
-      | { id: string; iban: string | null }
+    const row = db.prepare('SELECT id, iban, tracking FROM accounts WHERE id = ?').get(target.accountId) as
+      | { id: string; iban: string | null; tracking: string }
       | undefined;
     if (!row) throw new DomainError('account_not_found', 404);
+    if (row.tracking === 'manual') throw DomainError.conflict('account_manual');
     const own = inferAccount(options.records, options.filename).accountIban;
     // The file's own IBAN is someone else's: the account's IBAN differs, or
     // another account holds it (also when this account has none).
@@ -588,7 +593,13 @@ function planAccount(options: ImportOptions): AccountPlan {
   }
   const accountIban = options.accountIban ?? inferred.accountIban;
   if (!accountIban && options.accountName === undefined) throw new DomainError('account_required', 400);
-  return { kind: 'ensure', name: options.accountName ?? inferred.accountName, iban: accountIban };
+  const name = options.accountName ?? inferred.accountName;
+  // Nothing is imported into a manual account: its IBAN only recognises transfers to it.
+  const found = accountIban
+    ? accountIdByIban(accountIban)
+    : ((db.prepare('SELECT id FROM accounts WHERE name = ?').get(name) as { id: string } | undefined)?.id ?? null);
+  if (found && isManualAccount(found)) throw DomainError.conflict('account_manual');
+  return { kind: 'ensure', name, iban: accountIban };
 }
 
 function resolveAccount(plan: AccountPlan, now: string): { accountId: string; iban: string | null } {

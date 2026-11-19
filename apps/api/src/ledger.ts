@@ -4,12 +4,19 @@
 //
 // - Pending rows (no booking date) never count.
 // - Transfers between own accounts are left out (`includeTransfers`).
+// - A payment between an imported account and a manual account's IBAN is a
+//   transfer to a manual account (`ownTransfer`): it has one side only, counts in
+//   cash flow, and by the manual account's type is saving or loan repayment,
+//   never consumption (`consumptionOnly` leaves those out). A linked transfer
+//   stays a transfer. See docs/adr/0002-transfers-to-manual-accounts.md.
 // - A transaction's category is its most recent categorization decision.
 // - Dates are calendar days (YYYY-MM-DD); "today" is today in Helsinki.
 // - An account's balance is its latest snapshot on or before the day, plus
-//   balance adjustments dated on or before that snapshot.
+//   balance adjustments dated on or before that snapshot. Only imported
+//   accounts have balances here; manual accounts get none (yet).
+import { ownTransferKind, type OwnTransferKind } from '@finance-app/shared';
 import { db } from './db.js';
-import { latestCategoryDecisionJoin } from './sql/transactions.js';
+import { latestCategoryDecisionJoin, manualAccountByIban } from './sql/transactions.js';
 
 export type LedgerScope = {
   /** First day included, YYYY-MM-DD. */
@@ -19,7 +26,15 @@ export type LedgerScope = {
   /** Only these account ids. */
   accounts?: string[];
   includeTransfers?: boolean;
+  /**
+   * Leave out transfers to manual accounts reported as saving or loan repayment:
+   * for analyses of spending (insights, briefing), not of cash flow.
+   */
+  consumptionOnly?: boolean;
 };
+
+/** The manual account at the other end of a one-sided transfer, and how it is reported. */
+export type OwnTransfer = { accountId: string; kind: OwnTransferKind };
 
 export type LedgerEntry = {
   id: string;
@@ -37,6 +52,8 @@ export type LedgerEntry = {
   categoryId: string | null;
   categoryName: string | null;
   isTransfer: boolean;
+  /** Set on a transfer to (or from) a manual account; null otherwise, and on linked transfers. */
+  ownTransfer: OwnTransfer | null;
 };
 
 export type LedgerTotal = {
@@ -112,12 +129,13 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
       `WITH ${TRANSFER_SETS},
        scoped AS (
          SELECT t.*,
-                t.id IN (SELECT id FROM linked) AS is_transfer
+                t.id IN (SELECT id FROM linked) AS is_transfer,
+                ${manualAccountByIban('t')} AS own_account_id
          FROM normalized_transactions t
          WHERE ${where.join('\n           AND ')})
        SELECT nt.id, nt.account_id, substr(nt.booking_date, 1, 10) AS day, nt.booking_date, nt.amount, nt.currency,
               nt.counterparty_name, nt.counterparty_iban, nt.description,
-              cd.category_id, c.name AS category_name, nt.is_transfer
+              cd.category_id, c.name AS category_name, nt.is_transfer, nt.own_account_id
        FROM scoped nt
        ${latestCategoryDecisionJoin('nt', 'cd')}
        LEFT JOIN categories c ON c.id = cd.category_id
@@ -137,9 +155,11 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
       category_id: string | null;
       category_name: string | null;
       is_transfer: number;
+      own_account_id: string | null;
     }>;
 
-  return rows.map((r) => ({
+  const typeOf = manualAccountTypes();
+  const entries: LedgerEntry[] = rows.map((r) => ({
     id: r.id,
     accountId: r.account_id,
     date: r.day,
@@ -152,7 +172,22 @@ export function ledgerEntries(scope: LedgerScope = {}): LedgerEntry[] {
     categoryId: r.category_id,
     categoryName: r.category_name,
     isTransfer: Boolean(r.is_transfer),
+    ownTransfer:
+      !r.is_transfer && r.own_account_id !== null
+        ? { accountId: r.own_account_id, kind: ownTransferKind(typeOf.get(r.own_account_id) ?? 'other') }
+        : null,
   }));
+  return scope.consumptionOnly
+    ? entries.filter((e) => e.ownTransfer === null || e.ownTransfer.kind === 'other')
+    : entries;
+}
+
+function manualAccountTypes(): Map<string, string> {
+  const rows = db.prepare(`SELECT id, account_subtype FROM accounts WHERE tracking = 'manual'`).all() as Array<{
+    id: string;
+    account_subtype: string;
+  }>;
+  return new Map(rows.map((r) => [r.id, r.account_subtype]));
 }
 
 const cents = (n: number) => Math.round(n * 100) / 100;
@@ -190,7 +225,7 @@ export function ledgerTotals(
     : totals.sort((a, b) => a.expense - b.expense || String(a.key).localeCompare(String(b.key)));
 }
 
-/** Every account's balance at the end of `asOf` (default: no limit, i.e. latest), in account creation order. */
+/** Every imported account's balance at the end of `asOf` (default: no limit, i.e. latest), in account creation order. */
 export function accountBalances(asOf?: string): AccountBalance[] {
   assertDay('asOf', asOf);
   const rows = db
@@ -202,6 +237,7 @@ export function accountBalances(asOf?: string): AccountBalance[] {
          WHERE s.account_id = a.id AND (? IS NULL OR substr(s.date, 1, 10) <= ?)
          ORDER BY s.date DESC, s.created_at DESC
          LIMIT 1)
+       WHERE a.tracking = 'imported'
        ORDER BY a.created_at ASC, a.id ASC`
     )
     .all(asOf ?? null, asOf ?? null) as Array<{

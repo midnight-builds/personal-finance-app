@@ -11,6 +11,9 @@ const day = (year: number, month: number, date: number) =>
  * next month, so the salary that lands early still counts in its own month.
  * `from` and `to` are the period's inclusive booking-date range: searching
  * transactions over the same range (default scope) gives the same totals.
+ * `saving` and `loanRepayment` are the part of the net that went to (negative)
+ * or came from manual savings and loan accounts (GLOSSARY.md, "Transfer to a
+ * manual account"): included in income, expense and net, shown apart.
  */
 export function getMonthlyOverview(limit = 6, asOf: string = today()) {
   const { payday, paydayFlexDays } = getSettings();
@@ -25,9 +28,13 @@ export function getMonthlyOverview(limit = 6, asOf: string = today()) {
     const entries = ledgerEntries({ from, to });
     let income = 0;
     let expense = 0;
+    let saving = 0;
+    let loanRepayment = 0;
     for (const e of entries) {
       if (e.amount > 0) income += e.amount * 100;
       else expense += e.amount * 100;
+      if (e.ownTransfer?.kind === 'saving') saving += e.amount * 100;
+      if (e.ownTransfer?.kind === 'loan_repayment') loanRepayment += e.amount * 100;
     }
     income = Math.round(income) / 100;
     expense = Math.round(expense) / 100;
@@ -39,6 +46,8 @@ export function getMonthlyOverview(limit = 6, asOf: string = today()) {
       income,
       expense,
       net,
+      saving: Math.round(saving) / 100,
+      loanRepayment: Math.round(loanRepayment) / 100,
       direction: net > 0 ? 'up' : net < 0 ? 'down' : 'flat',
     });
   }

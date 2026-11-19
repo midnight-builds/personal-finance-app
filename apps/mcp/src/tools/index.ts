@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { redactDeep } from '@finance-app/shared';
 import { ApiError } from '../apiClient.js';
+import { accountTools } from './accounts.js';
 import { categorizationTools } from './categorization.js';
 import { financeTools } from './finance.js';
 import { patternTools } from './patterns.js';
@@ -14,6 +15,7 @@ import type { ToolContext, ToolDefinition } from './types.js';
 export const ALL_TOOLS: readonly ToolDefinition[] = [
   ...financeTools,
   ...categorizationTools,
+  ...accountTools,
   ...patternTools,
   ...proposalTools,
 ];

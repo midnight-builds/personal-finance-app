@@ -1,6 +1,9 @@
 // Typed API client for finance app
 import type {
   AccountSubtype,
+  AccountTracking,
+  AccountType,
+  OwnTransferKind,
   CreateFeatureProposalResponse,
   FeatureProposal,
   FeatureProposalAction,
@@ -19,13 +22,19 @@ export type Account = {
   name: string;
   iban: string | null;
   type: string;
-  account_subtype: 'checking' | 'savings' | 'credit_card';
+  account_subtype: AccountType;
   owner_label: string | null;
   credit_limit: number | null;
   savings_goal: number | null;
   balance: number;
   currency: string;
   balance_date: string | null;
+  tracking: AccountTracking;
+  ownership_share: number;
+  update_interval_days: number | null;
+  archived_at: string | null;
+  /** A manual account whose IBAN makes payments to it transfers to it. */
+  recognizes_transfers: boolean;
 };
 
 export type Transaction = {
@@ -40,6 +49,8 @@ export type Transaction = {
   categoryName?: string | null;
   transfer?: { direction: 'in' | 'out'; otherId: string | null } | null;
   isTransfer?: boolean;
+  /** A transfer to (or from) a manual account, recognised by its IBAN. */
+  ownTransfer?: { accountId: string; accountName: string; accountType: AccountType; kind: OwnTransferKind } | null;
 };
 
 /** `role`: the special job of the category (cannot be archived), null for ordinary ones. */
@@ -340,6 +351,25 @@ export async function getAccounts(): Promise<Account[]> {
   return res.json();
 }
 
+/** A refused account change: `code` is the API's error code (e.g. `iban_in_use`), `details` its details. */
+export class AccountRequestError extends Error {
+  readonly code: string;
+  readonly details?: unknown;
+
+  constructor(code: string, details?: unknown) {
+    super(code);
+    this.code = code;
+    this.details = details;
+  }
+}
+
+async function accountRequest(url: string, init: RequestInit): Promise<unknown> {
+  const res = await safeFetch(url, { ...init, headers: { 'Content-Type': 'application/json' } });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new AccountRequestError(body?.error ?? `http_${res.status}`, body?.details);
+  return body;
+}
+
 export async function patchAccount(
   id: string,
   patch: {
@@ -348,14 +378,38 @@ export async function patchAccount(
     credit_limit?: number | null;
     savings_goal?: number | null;
     name?: string;
+    ownership_share?: number;
+    currency?: string;
+    /** '' or null removes it (manual accounts only). */
+    iban?: string | null;
+    update_interval_days?: number | null;
   }
 ): Promise<void> {
-  const res = await safeFetch(`${API}/accounts/${id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  });
-  if (!res.ok) throw new Error(`patchAccount failed: ${res.statusText}`);
+  await accountRequest(`${API}/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+export type NewManualAccount = {
+  name: string;
+  type: AccountType;
+  ownershipShare?: number;
+  currency?: string;
+  iban?: string;
+  updateIntervalDays?: number;
+};
+
+/** Creates a manual account (nothing is imported into it). */
+export async function createManualAccount(account: NewManualAccount): Promise<{ id: string }> {
+  return (await accountRequest(`${API}/accounts`, { method: 'POST', body: JSON.stringify(account) })) as { id: string };
+}
+
+/** Brings an archived manual account back (with its name and IBAN). */
+export async function unarchiveAccount(id: string): Promise<void> {
+  await accountRequest(`${API}/accounts/${id}/unarchive`, { method: 'POST', body: '{}' });
+}
+
+/** Archives a manual account: hidden, and payments to its IBAN count as ordinary payments again. */
+export async function archiveAccount(id: string): Promise<void> {
+  await accountRequest(`${API}/accounts/${id}/archive`, { method: 'POST', body: '{}' });
 }
 
 // ============================================================================

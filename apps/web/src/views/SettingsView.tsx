@@ -6,31 +6,18 @@ import {
   getAccounts,
   getTransactions,
   getCategories,
-  patchAccount,
+  type Account,
   type Settings,
   type LogRow,
   type BalanceAdjustment,
   type Category,
 } from '../api/client';
 import { API, formatDate, formatAmount, showToast } from '../utils';
+import AccountSettings from '../components/AccountSettings';
 
 // Minimal Account shape used for props (compatible with both App.tsx local Account and api/client Account)
 type AccountProp = { id: string; name: string; balance: number; currency: string };
 
-// Full Account shape returned by getAccounts() (from api/client)
-type Account = {
-  id: string;
-  name: string;
-  iban: string | null;
-  type: string;
-  account_subtype: 'checking' | 'savings' | 'credit_card';
-  owner_label: string | null;
-  credit_limit: number | null;
-  savings_goal: number | null;
-  balance: number | null;
-  currency: string;
-  balance_date: string | null;
-};
 
 interface SettingsViewProps {
   accounts: AccountProp[];
@@ -69,10 +56,12 @@ export default function SettingsView({
     getAccounts().then(setAccounts).catch(() => {});
   }, []);
 
+  // Balances and adjustments are for imported accounts (manual ones get balance observations later).
+  const balanceAccounts = accounts.filter((a) => a.tracking !== 'manual');
   // Default adjAccountId to first account
   useEffect(() => {
-    if (!adjAccountId && accounts.length) setAdjAccountId(accounts[0].id);
-  }, [accounts, adjAccountId]);
+    if (!adjAccountId && balanceAccounts.length) setAdjAccountId(balanceAccounts[0].id);
+  }, [balanceAccounts, adjAccountId]);
 
   const loadLocalData = async () => {
     const [s, l, ba, ac, cat] = await Promise.all([
@@ -408,65 +397,7 @@ export default function SettingsView({
               </button>
             </div>
           </div>
-          <div className="account-editor">
-            <div className="card-head inner">
-              <div>
-                <p className="eyebrow">Tilit</p>
-                <h3>Nimeä tilit uudelleen</h3>
-              </div>
-            </div>
-            <div className="table mini">
-              <div className="row mini header">
-                <span>Tili</span>
-                <span>Tyyppi</span>
-                <span>Omistaja</span>
-                <span>Saldo</span>
-              </div>
-              {accounts.map((a) => (
-                <div className="row mini" key={a.id}>
-                  <span>
-                    <input
-                      type="text"
-                      defaultValue={a.name}
-                      onBlur={async (e) => {
-                        const name = e.target.value;
-                        if (name !== a.name) {
-                          await patchAccount(a.id, { name });
-                          await loadAccounts();
-                          await refreshAll();
-                        }
-                      }}
-                    />
-                  </span>
-                  <span>
-                    <select
-                      value={a.account_subtype}
-                      onChange={async (e) => {
-                        await patchAccount(a.id, { account_subtype: e.target.value }).catch(() => {});
-                        await loadAccounts();
-                      }}
-                    >
-                      <option value="checking">Käyttö</option>
-                      <option value="savings">Säästö</option>
-                      <option value="credit_card">Luotto</option>
-                    </select>
-                  </span>
-                  <span>
-                    <input
-                      type="text"
-                      defaultValue={a.owner_label ?? ''}
-                      onBlur={async (e) => {
-                        const val = e.target.value;
-                        await patchAccount(a.id, { owner_label: val || null }).catch(() => {});
-                        await loadAccounts();
-                      }}
-                    />
-                  </span>
-                  <span>{a.balance != null ? formatAmount(a.balance, a.currency ?? 'EUR') : '—'}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <AccountSettings accounts={accounts} reload={async () => { await loadAccounts(); await refreshAll(); }} setToast={setToast} />
 
           <div className="balance-adjustments">
             <div className="card-head inner">
@@ -492,7 +423,7 @@ export default function SettingsView({
                 Tili
                 <select value={adjAccountId} onChange={(e) => setAdjAccountId(e.target.value)}>
                   <option value="">–</option>
-                  {accounts.map((a) => (
+                  {balanceAccounts.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.name}
                     </option>
