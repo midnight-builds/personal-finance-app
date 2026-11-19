@@ -459,17 +459,32 @@ select {
   white-space: pre-wrap;
 }
 
+.logs {
+  margin-top: 18px;
+}
+
+.logs .table {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
 .logs .table .row {
-  grid-template-columns: 110px 150px 1fr 2fr;
+  grid-template-columns: 90px 160px minmax(0, 1fr) minmax(0, 1.5fr);
 }
 
 .logs .table .row span:last-child {
-  word-break: break-all;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.table.mini.adjustments .row {
+  grid-template-columns: 100px minmax(0, 1fr) 110px minmax(0, 2fr) 70px;
 }
 
 .settings-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 340px) 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
   gap: 16px;
 }
 
@@ -1000,4 +1015,8 @@ label {
   gap: 8px;
   color: inherit;
   font-weight: 600;
+}
+
+.table.mini.accounts .row {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) 70px minmax(0, 1fr) minmax(0, 1.2fr);
 }

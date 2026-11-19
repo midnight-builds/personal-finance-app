@@ -121,7 +121,7 @@ export default function AccountSettings({
         päivätyn saldon (velka positiivisena); manuaalisella tilillä se on ainoa saldo. Jos tilille on asetettu
         päivitysväli ja saldo on sitä vanhempi, se merkitään vanhentuneeksi.
       </p>
-      <div className="table mini">
+      <div className="table mini accounts">
         <div className="row mini header">
           <span>Tili</span>
           <span>Tyyppi</span>
