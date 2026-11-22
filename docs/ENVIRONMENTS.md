@@ -26,7 +26,10 @@ Deploy from the production checkout with `npm run deploy`
 database, fast-forwards to `origin/main`, runs `npm ci` only when the lockfile
 changed, builds, restarts the units whose code changed (`--restart-all` for
 every unit) and smoke-checks API, web and MCP end to end. A failed install or
-build puts the previous commit back before anything is restarted.
+build puts the previous commit back before anything is restarted. The last
+fully deployed commit is recorded in `.git/finance-deployed-commit`; when it
+does not match the checkout (an interrupted deploy, or the first run), the
+next deploy reinstalls, rebuilds and restarts everything.
 `npm run deploy -- --dry-run` prints the plan and changes nothing; paths, units
 and URLs are environment variables listed at the top of the script.
 

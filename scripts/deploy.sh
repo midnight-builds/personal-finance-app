@@ -202,7 +202,21 @@ new=$(git rev-parse origin/main)
 git merge-base --is-ancestor "$old" "$new" ||
 	refuse "HEAD ${old:0:7} is not an ancestor of origin/main ${new:0:7}; fast-forward impossible"
 
-if [ "$old" = "$new" ] && [ "$RESTART_ALL" = 0 ]; then
+# The commit whose build was last restarted. HEAD alone cannot tell: a deploy
+# interrupted after the fast-forward (Ctrl-C, lost SSH, failed restart) leaves
+# HEAD at the new commit with a half-built dist/ that only a crash restart
+# would load. Then the next run redoes everything instead of "nothing to deploy".
+MARKER="$(git rev-parse --path-format=absolute --git-common-dir)/finance-deployed-commit"
+deployed=$(cat "$MARKER" 2>/dev/null || true)
+incomplete=0
+if [ "$deployed" != "$old" ]; then
+	incomplete=1
+	last="${deployed:0:7}"
+	log "WARNING: last completed deploy: ${last:-none recorded}; checkout is at ${old:0:7}."
+	log "  An earlier deploy did not finish, or this is the first run: running npm ci and the build, restarting every unit."
+fi
+
+if [ "$old" = "$new" ] && [ "$RESTART_ALL" = 0 ] && [ "$incomplete" = 0 ]; then
 	log "already at origin/main ${new:0:7}; nothing to deploy"
 	smoke || fail "smoke checks failed on the running version"
 	log "smoke: $SMOKE_RESULT"
@@ -218,11 +232,12 @@ lock_changed=0
 if ! git diff --quiet "$old" "$new" -- package-lock.json; then lock_changed=1; fi
 needs_ci=$lock_changed
 [ -d node_modules ] || needs_ci=1
+[ "$incomplete" = 0 ] || needs_ci=1
 
 # Which units run code from the changed paths. Shared code, dependencies and
 # root config reach all of them.
 units=()
-if [ "$RESTART_ALL" = 1 ] || grep -qE '^(packages/|package(-lock)?\.json$|tsconfig[^/]*\.json$)' <<<"$changed"; then
+if [ "$RESTART_ALL" = 1 ] || [ "$incomplete" = 1 ] || grep -qE '^(packages/|package(-lock)?\.json$|tsconfig[^/]*\.json$)' <<<"$changed"; then
 	units=(api web mcp)
 else
 	grep -q '^apps/api/' <<<"$changed" && units+=(api)
@@ -256,7 +271,7 @@ fi
 rollback() {
 	echo "deploy: $1 at ${new:0:7}; rolling back to ${old:0:7}" >&2
 	git reset --quiet --hard "$old"
-	if [ "$lock_changed" = 1 ]; then npm ci || echo "deploy: npm ci of ${old:0:7} failed too" >&2; fi
+	if [ "$needs_ci" = 1 ]; then npm ci || echo "deploy: npm ci of ${old:0:7} failed too" >&2; fi
 	if npm run build; then
 		fail "$1; checkout back at ${old:0:7}, rebuilt, nothing restarted"
 	fi
@@ -265,7 +280,7 @@ rollback() {
 
 run git merge --quiet --ff-only "$new"
 if [ "$needs_ci" = 1 ]; then
-	log "npm ci ($([ "$lock_changed" = 1 ] && echo 'package-lock.json changed' || echo 'node_modules missing'))"
+	log "npm ci"
 	if [ "$DRY_RUN" = 1 ]; then run npm ci; else npm ci || rollback "npm ci failed"; fi
 else
 	log "package-lock.json unchanged; skipping npm ci"
@@ -287,6 +302,9 @@ if [ "${#units[@]}" -gt 0 ]; then
 else
 	log "no unit runs code that changed; nothing restarted"
 fi
+
+# The new build is live; record it (see MARKER above).
+if [ "$DRY_RUN" = 0 ]; then echo "$new" >"$MARKER"; fi
 
 # ------------------------------------------------------------------- summary
 
