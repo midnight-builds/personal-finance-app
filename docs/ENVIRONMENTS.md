@@ -21,6 +21,18 @@ service runs `vite preview`, which proxies `/api` to 3001. The MCP server reads
 The database lives outside the repository, so `git clean`, checkouts and
 worktrees can never reach it. Backups: `docs/BACKUP_RESTORE.md`.
 
+Deploy from the production checkout with `npm run deploy`
+(`scripts/deploy.sh`): it refuses a dirty or non-`main` checkout, backs up the
+database, fast-forwards to `origin/main`, runs `npm ci` only when the lockfile
+changed, builds, restarts the units whose code changed (`--restart-all` for
+every unit) and smoke-checks API, web and MCP end to end. A failed install or
+build puts the previous commit back before anything is restarted. The last
+fully deployed commit is recorded in `.git/finance-deployed-commit`; when it
+does not match the checkout (an interrupted deploy, or the first run), the
+next deploy reinstalls, rebuilds and restarts everything.
+`npm run deploy -- --dry-run` prints the plan and changes nothing; paths, units
+and URLs are environment variables listed at the top of the script.
+
 ## Development
 
 ```bash
